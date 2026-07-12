@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tik-Nick</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-view="table" data-density="normal">
+<div id="app">
+
+  <!-- ══ SIDEBAR ══ -->
+  <aside id="sidebar">
+    <div class="sidebar-logo">
+      <span class="logo-mark">
+        <svg viewBox="0 0 100 100" width="21" height="21" xmlns="http://www.w3.org/2000/svg">
+          <g transform="rotate(-7 50 50)">
+            <rect x="22" y="30" width="56" height="40" rx="7" fill="#fff"/>
+            <circle cx="34" cy="47" r="8.5" fill="#d97706"/>
+            <circle cx="34" cy="44.5" r="3" fill="#fff"/>
+            <path d="M 28.5 52 A 5.5 5.5 0 0 1 39.5 52 Z" fill="#fff"/>
+            <rect x="46" y="43" width="26" height="4.5" rx="2" fill="#d97706"/>
+            <rect x="46" y="54" width="18" height="4" rx="2" fill="#f0c078"/>
+          </g>
+        </svg>
+      </span>
+      <span class="logo-text">Tik-Nick</span>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-group">
+        <div class="nav-label">ניקים</div>
+        <button class="nav-btn" onclick="openNickDialog()">
+          <span class="icon">➕</span> ניק חדש
+        </button>
+        <button class="nav-btn" id="btn-edit" onclick="editSelected()" disabled>
+          <span class="icon">✏️</span> ערוך ניק
+        </button>
+        <button class="nav-btn danger" id="btn-delete" onclick="deleteSelected()" disabled>
+          <span class="icon">🗑️</span> מחק ניק
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">קובץ</div>
+        <button class="nav-btn" onclick="exportData()">
+          <span class="icon">📤</span> ייצוא
+        </button>
+        <button class="nav-btn" onclick="importData()">
+          <span class="icon">📥</span> ייבוא
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">הגדרות</div>
+        <button class="nav-btn" onclick="openForumMgr()">
+          <span class="icon">🏛️</span> ניהול פורומים
+        </button>
+        <button class="nav-btn" onclick="openSyncMgr()">
+          <span class="icon">⚙️</span> הגדרות סנכרון
+        </button>
+        <button class="nav-btn" onclick="openDisplaySettings()">
+          <span class="icon">🎨</span> הגדרות תצוגה
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">כלים</div>
+        <button class="nav-btn" onclick="openChazonishnik()">
+          <span class="icon">📖</span> Chazonishnik
+        </button>
+        <button class="nav-btn" onclick="openStinknik()">
+          <span class="icon">🦨</span> Stinknik
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">מתקדם</div>
+        <button class="nav-btn danger" onclick="confirmReset()">
+          <span class="icon">🔴</span> איפוס נתונים
+        </button>
+      </div>
+    </nav>
+    <div class="sidebar-footer">v0.1 | Tik-Nick</div>
+  </aside>
+
+  <!-- ══ MAIN ══ -->
+  <main id="main">
+
+    <!-- topbar -->
+    <div id="topbar">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="search-input" placeholder="חיפוש בכל השדות..."
+               oninput="onSearch(this.value)">
+      </div>
+      <button id="theme-toggle" class="theme-toggle-btn" onclick="quickToggleTheme()"
+              title="החלף מצב כהה/בהיר">
+        <span class="tt-icon">🌙</span>
+      </button>
+      <div class="view-toggle">
+        <button id="vt-table" onclick="setView('table')" title="תצוגת טבלה">▤</button>
+        <button id="vt-cards" onclick="setView('cards')" title="תצוגת כרטיסים">▦</button>
+      </div>
+      <div class="topbar-stats" id="stats-bar">
+        <span class="stat-pill">📊 <b id="stat-total">0</b> ניקים</span>
+        <span class="stat-pill">✓ <b id="stat-info">0</b> עם מידע</span>
+      </div>
+    </div>
+
+    <!-- table -->
+    <div id="table-wrap">
+      <table id="nick-table">
+        <thead>
+          <tr id="thead-row"></tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div id="empty-state" class="empty-state" style="display:none">
+        <div class="empty-icon">📭</div>
+        <h3>אין ניקים להצגה</h3>
+        <p>לחץ "ניק חדש" כדי להתחיל</p>
+      </div>
+    </div>
+
+    <!-- cards view -->
+    <div id="cards-wrap">
+      <div class="cards-grid" id="cards-grid"></div>
+      <div id="cards-empty" class="empty-state" style="display:none">
+        <div class="empty-icon">📭</div>
+        <h3>אין ניקים להצגה</h3>
+      </div>
+    </div>
+
+    <!-- statusbar -->
+    <div id="statusbar">
+      <span id="status-msg">מוכן</span>
+      <span id="status-time"></span>
+    </div>
+  </main>
+</div>
+
+<!-- ══ TOAST CONTAINER ══ -->
+<div id="toast-container"></div>
+
+<!-- ══ TOOLTIP ══ -->
+<div id="tooltip" class="tooltip" style="display:none"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
