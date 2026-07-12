@@ -250,6 +250,13 @@ async function openAbout() {
             </svg>
           </a>
         </div>
+        <button class="ad-contact-btn" onclick="api('open_url','https://mail.google.com/mail/?view=cm&fs=1&to=b0554003794@gmail.com&su=Tik-Nick%20-%20\u05e6\u05d5\u05e8%20\u05e7\u05e9\u05e8')" title="שלח מייל למפתח">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="5" width="18" height="14" rx="2"/>
+            <path d="m3 7 9 6 9-6"/>
+          </svg>
+          צור קשר
+        </button>
       </div>
     </div>`;
 

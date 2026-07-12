@@ -1111,3 +1111,21 @@ tbody tr:hover td:last-child::after {
   transition: color .18s;
 }
 .ad-name-link:hover { color: var(--accent); }
+
+/* ══ ABOUT — contact button ══ */
+.ad-contact-btn {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 9px 15px; flex-shrink: 0;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dk));
+  color: #fff; border: none; border-radius: 999px;
+  font-family: var(--font); font-size: 13px; font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 3px 12px var(--accent-glow);
+  transition: all .2s var(--snap);
+}
+.ad-contact-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 18px var(--accent-glow);
+}
+.ad-contact-btn:active { transform: translateY(0) scale(.97); }
+.ad-contact-btn svg { flex-shrink: 0; }

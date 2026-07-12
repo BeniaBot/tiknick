@@ -1,17 +1,30 @@
 """
-main.py - Tik-Nick v0.1 — PyWebView backend
+main.py - Tik-Nick — PyWebView backend
 """
-import webview
-import json
 import os
 import sys
+
+# חייב לקרות לפני אתחול ה-GUI — מגדיר מודעות ל-DPI כדי שמיקום החלון יהיה מדויק
+if os.name == "nt":
+    try:
+        import ctypes
+        # PROCESS_PER_MONITOR_DPI_AWARE = 2
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+import webview
+import json
 import logging
 import webbrowser
 import database as db
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.2.5"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -152,6 +165,7 @@ class API:
             webbrowser.open(url)
             return {"ok": True}
         except Exception as e:
+            logging.exception("open_url failed for %s", url)
             return {"ok": False, "error": str(e)}
 
     # ── בדיקת עדכונים מ-GitHub ──────────────────────────────────────
@@ -388,31 +402,51 @@ if __name__ == "__main__":
             background_color="#0d1117",
         )
 
-        # מירכוז אמין: אחרי שהחלון נוצר, הזז אותו למרכז.
-        # עובד נכון גם עם DPI scaling.
+        # מירכוז אמין שמתחשב ב-DPI scaling ובשורת המשימות.
         def center_window():
             try:
-                sw = sh = None
-                if os.name == "nt":
-                    import ctypes
-                    # SM_CXSCREEN=0, SM_CYSCREEN=1 — לפי DPI של התהליך
-                    try:
-                        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-                    except Exception:
-                        try:
-                            ctypes.windll.user32.SetProcessDPIAware()
-                        except Exception:
-                            pass
-                    user32 = ctypes.windll.user32
-                    sw = user32.GetSystemMetrics(0)
-                    sh = user32.GetSystemMetrics(1)
-                if sw and sh:
-                    x = max(0, (sw - win_w) // 2)
-                    y = max(0, (sh - win_h) // 2)
+                if os.name != "nt":
+                    return
+                import ctypes
+                from ctypes import wintypes
+                import time
+
+                user32 = ctypes.windll.user32
+
+                # נסה למצוא את החלון (עד ~1 שנייה, כי לפעמים עוד לא מוכן)
+                hwnd = 0
+                for _ in range(20):
+                    hwnd = user32.FindWindowW(None, "Tik-Nick")
+                    if hwnd:
+                        break
+                    time.sleep(0.05)
+
+                rect = wintypes.RECT()
+                user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0)
+                work_w = rect.right - rect.left
+                work_h = rect.bottom - rect.top
+
+                if hwnd:
+                    wr = wintypes.RECT()
+                    user32.GetWindowRect(hwnd, ctypes.byref(wr))
+                    actual_w = wr.right - wr.left
+                    actual_h = wr.bottom - wr.top
+                    # אם הגודל נראה סביר השתמש בו, אחרת בגודל המבוקש
+                    if actual_w < 200 or actual_w > work_w + 400:
+                        actual_w, actual_h = win_w, win_h
+                    x = rect.left + max(0, (work_w - actual_w) // 2)
+                    y = rect.top  + max(0, (work_h - actual_h) // 2)
+                    user32.SetWindowPos(hwnd, 0, int(x), int(y), 0, 0, 0x0001 | 0x0004)
+                    logging.info("Centered hwnd at %s,%s (work %sx%s, win %sx%s)",
+                                 x, y, work_w, work_h, actual_w, actual_h)
+                else:
+                    # fallback: מירכוז דרך move של pywebview
+                    x = rect.left + max(0, (work_w - win_w) // 2)
+                    y = rect.top  + max(0, (work_h - win_h) // 2)
                     window.move(x, y)
-                    logging.info("Centered at %s,%s (screen %sx%s)", x, y, sw, sh)
+                    logging.info("Centered via move at %s,%s (no hwnd)", x, y)
             except Exception:
-                logging.exception("Centering failed; using default position")
+                logging.exception("Centering failed")
 
         window.events.shown += center_window
         webview.start(debug=False)   # ללא כלי מפתחים למשתמש הסופי
