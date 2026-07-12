@@ -171,14 +171,15 @@ async function openAbout() {
           <svg viewBox="0 0 100 100" width="72" height="72" xmlns="http://www.w3.org/2000/svg">
             <rect width="100" height="100" rx="23" fill="url(#aboutgrad)"/>
             <defs><linearGradient id="aboutgrad" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#fb4c6a"/><stop offset="1" stop-color="#c4113c"/>
+              <stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#d97706"/>
             </linearGradient></defs>
-            <g fill="none" stroke="#fff" stroke-width="4.5" stroke-linecap="round">
-              <path d="M 62 30 A 26 26 0 0 0 24 50 A 26 26 0 0 0 27 62"/>
-              <path d="M 74 44 A 26 26 0 0 1 76 58"/>
-              <path d="M 55 33 A 18 18 0 0 0 33 52 A 18 18 0 0 0 38 68"/>
-              <path d="M 67 58 A 18 18 0 0 1 60 71"/>
-              <path d="M 50 42 A 10 10 0 0 0 41 56 A 10 10 0 0 0 50 64"/>
+            <g transform="rotate(-7 50 50)">
+              <rect x="22" y="30" width="56" height="40" rx="7" fill="#fff"/>
+              <circle cx="34" cy="47" r="8.5" fill="#d97706"/>
+              <circle cx="34" cy="44.5" r="3" fill="#fff"/>
+              <path d="M 28.5 52 A 5.5 5.5 0 0 1 39.5 52 Z" fill="#fff"/>
+              <rect x="46" y="43" width="26" height="4.5" rx="2" fill="#d97706"/>
+              <rect x="46" y="54" width="18" height="4" rx="2" fill="#f0c078"/>
             </g>
           </svg>
         </div>

@@ -209,7 +209,7 @@ body::before{
 }
 .sidebar-logo .logo-mark{
   width:32px;height:32px;border-radius:9px;
-  background:linear-gradient(135deg,#fb4c6a,#c4113c);
+  background:linear-gradient(135deg,#fbbf24,#d97706);
   display:grid;place-items:center;
   box-shadow:0 4px 14px rgba(245,158,11,.35);
   transform:rotate(-6deg);
