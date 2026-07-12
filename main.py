@@ -379,23 +379,7 @@ if __name__ == "__main__":
 
         win_w, win_h = 1400, 820
 
-        # מירכוז החלון במסך (PyWebView לא תמיד ממרכז לבד)
-        pos_x = pos_y = None
-        try:
-            if os.name == "nt":
-                import ctypes
-                user32 = ctypes.windll.user32
-                user32.SetProcessDPIAware()
-                screen_w = user32.GetSystemMetrics(0)
-                screen_h = user32.GetSystemMetrics(1)
-                pos_x = max(0, (screen_w - win_w) // 2)
-                pos_y = max(0, (screen_h - win_h) // 2)
-                logging.info("Centering window at %s,%s (screen %sx%s)",
-                             pos_x, pos_y, screen_w, screen_h)
-        except Exception:
-            logging.exception("Could not compute center position")
-
-        win_kwargs = dict(
+        window = webview.create_window(
             title="Tik-Nick",
             url=index_url,
             js_api=api,
@@ -403,11 +387,34 @@ if __name__ == "__main__":
             min_size=(1000, 600),
             background_color="#0d1117",
         )
-        if pos_x is not None and pos_y is not None:
-            win_kwargs["x"] = pos_x
-            win_kwargs["y"] = pos_y
 
-        window = webview.create_window(**win_kwargs)
+        # מירכוז אמין: אחרי שהחלון נוצר, הזז אותו למרכז.
+        # עובד נכון גם עם DPI scaling.
+        def center_window():
+            try:
+                sw = sh = None
+                if os.name == "nt":
+                    import ctypes
+                    # SM_CXSCREEN=0, SM_CYSCREEN=1 — לפי DPI של התהליך
+                    try:
+                        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+                    except Exception:
+                        try:
+                            ctypes.windll.user32.SetProcessDPIAware()
+                        except Exception:
+                            pass
+                    user32 = ctypes.windll.user32
+                    sw = user32.GetSystemMetrics(0)
+                    sh = user32.GetSystemMetrics(1)
+                if sw and sh:
+                    x = max(0, (sw - win_w) // 2)
+                    y = max(0, (sh - win_h) // 2)
+                    window.move(x, y)
+                    logging.info("Centered at %s,%s (screen %sx%s)", x, y, sw, sh)
+            except Exception:
+                logging.exception("Centering failed; using default position")
+
+        window.events.shown += center_window
         webview.start(debug=False)   # ללא כלי מפתחים למשתמש הסופי
         logging.info("Tik-Nick closed normally")
     except Exception:

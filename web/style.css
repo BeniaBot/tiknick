@@ -1090,3 +1090,24 @@ tbody tr:hover td:last-child::after {
   font-size: 11.5px; color: var(--subtext); line-height: 1.6;
   padding-top: 12px; border-top: 1px solid var(--border-soft);
 }
+
+/* ══ ABOUT — developer footer (always visible) ══ */
+.about-developer {
+  display: flex; align-items: center; gap: 13px;
+  margin-top: 20px; padding-top: 18px;
+  border-top: 1px solid var(--border-soft);
+}
+.ad-avatar {
+  width: 44px; height: 44px; border-radius: 13px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-dk));
+  display: grid; place-items: center; font-size: 23px;
+  box-shadow: 0 3px 12px var(--accent-glow); flex-shrink: 0;
+}
+.ad-info { flex: 1; }
+.ad-role { font-size: 11px; color: var(--subtext); font-weight: 600; margin-bottom: 2px; }
+.ad-name-link {
+  font-size: 15px; font-weight: 700; color: var(--text);
+  cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  transition: color .18s;
+}
+.ad-name-link:hover { color: var(--accent); }
