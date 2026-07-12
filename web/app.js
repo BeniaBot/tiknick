@@ -154,6 +154,7 @@ async function openAbout() {
   const ver = await api('get_app_version');
   const version = ver?.version || '0.1.0';
   const repo    = ver?.repo || 'BeniaBot/tiknick';
+  const ghUser  = repo.split('/')[0];
 
   const html = `
     <div class="about-wrap">
@@ -193,18 +194,58 @@ async function openAbout() {
         </a>
       </div>
 
-      <!-- קרדיטים -->
-      <div class="about-section">
-        <div class="about-section-title">קרדיטים</div>
-        <div class="about-credit">
-          <span class="ac-role">פיתוח</span>
-          <span class="ac-name">BeniaBot</span>
-        </div>
-        <!-- מקום להוספת קרדיטים נוספים בעתיד -->
+      <!-- כפתורי ניווט -->
+      <div class="about-tabs">
+        <button class="about-tab active" onclick="switchAboutTab('about',this)">אודות</button>
+        <button class="about-tab" onclick="switchAboutTab('credits',this)">קרדיטים</button>
+        <button class="about-tab" onclick="switchAboutTab('license',this)">רישיון</button>
       </div>
 
-      <div class="about-footer-note">
-        תוכנה חופשית לשימוש אישי · נתונים נשמרים מקומית במחשב שלך
+      <!-- תוכן הלשוניות -->
+      <div class="about-pane" id="about-pane-about">
+        <p class="about-text">
+          <b>Tik-Nick</b> היא תוכנה לניהול ומעקב אחר ניקים (שמות משתמש) בפורומים.
+          מאפשרת לתעד פרטים, לקשר זהויות, לנהל פורומים ולסנכרן מידע — הכל מקומית במחשב שלך.
+        </p>
+        <div class="about-meta-grid">
+          <div class="about-meta"><span class="am-k">גרסה</span><span class="am-v">${esc(version)}</span></div>
+          <div class="about-meta"><span class="am-k">פלטפורמה</span><span class="am-v">Windows 10/11</span></div>
+          <div class="about-meta"><span class="am-k">מנוע</span><span class="am-v">PyWebView</span></div>
+          <div class="about-meta"><span class="am-k">אחסון</span><span class="am-v">מקומי (SQLite)</span></div>
+        </div>
+      </div>
+
+      <div class="about-pane" id="about-pane-credits" style="display:none">
+        <div class="about-credit-row">
+          <div class="acr-avatar">🤖</div>
+          <div class="acr-info">
+            <div class="acr-role">פותח על ידי</div>
+            <a class="acr-name-link" onclick="api('open_url','https://github.com/${esc(ghUser)}')">
+              בני הבוט (${esc(ghUser)})
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="vertical-align:-1px;opacity:.7">
+                <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/>
+              </svg>
+            </a>
+          </div>
+        </div>
+        <p class="about-credits-note">
+          תודה לכל מי שסייע, בדק, והציע רעיונות לאורך הפיתוח. 🙏
+        </p>
+      </div>
+
+      <div class="about-pane" id="about-pane-license" style="display:none">
+        <p class="about-text">
+          תוכנה זו ניתנת <b>לשימוש אישי בלבד</b>.
+        </p>
+        <ul class="about-license-list">
+          <li>✓ מותר להשתמש, להעתיק ולגבות לצורך אישי</li>
+          <li>✓ הנתונים שלך שייכים לך ונשמרים מקומית בלבד</li>
+          <li>✗ אין להפיץ מחדש למטרות מסחריות ללא רשות</li>
+        </ul>
+        <p class="about-license-fine">
+          התוכנה מסופקת "כמות שהיא" (AS IS) ללא אחריות מכל סוג.
+          השימוש הוא באחריות המשתמש בלבד.
+        </p>
       </div>
     </div>`;
 
@@ -212,8 +253,16 @@ async function openAbout() {
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-sm');
 
-  // בדוק עדכונים בתוך הכרטיסייה
   refreshAboutUpdate();
+}
+
+function switchAboutTab(tab, btn) {
+  document.querySelectorAll('.about-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  ['about','credits','license'].forEach(t => {
+    const pane = document.getElementById('about-pane-' + t);
+    if (pane) pane.style.display = t === tab ? 'block' : 'none';
+  });
 }
 
 async function refreshAboutUpdate() {

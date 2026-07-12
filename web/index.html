@@ -74,9 +74,11 @@
         <button class="nav-btn danger" onclick="confirmReset()">
           <span class="icon">🔴</span> איפוס נתונים
         </button>
-        <button class="nav-btn" onclick="openAbout()">
-          <span class="icon">
-            <svg width="16" height="16" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round" xmlns="http://www.w3.org/2000/svg">
+      </div>
+      <div class="nav-group">
+        <button class="about-card" onclick="openAbout()">
+          <span class="about-card-icon">
+            <svg width="22" height="22" viewBox="0 0 100 100" fill="none" stroke="currentColor" stroke-width="6.5" stroke-linecap="round" xmlns="http://www.w3.org/2000/svg">
               <path d="M 62 30 A 26 26 0 0 0 24 50 A 26 26 0 0 0 27 62"/>
               <path d="M 74 44 A 26 26 0 0 1 76 58"/>
               <path d="M 55 33 A 18 18 0 0 0 33 52 A 18 18 0 0 0 38 68"/>
@@ -84,13 +86,13 @@
               <path d="M 50 42 A 10 10 0 0 0 41 56 A 10 10 0 0 0 50 64"/>
             </svg>
           </span>
-          <span>אודות</span>
-          <span id="about-update-dot" class="update-dot" style="display:none;margin-right:auto"></span>
+          <span class="about-card-title">אודות</span>
+          <span id="about-update-dot" class="update-dot" style="display:none"></span>
         </button>
       </div>
     </nav>
     <div class="sidebar-footer" id="app-footer" onclick="openAbout()" title="אודות Tik-Nick">
-      <span id="footer-version">v0.1 | Tik-Nick</span>
+      <span id="footer-version">v0.2 | Tik-Nick</span>
       <span id="update-dot" class="update-dot" style="display:none"></span>
     </div>
   </aside>

@@ -4,7 +4,7 @@
 
 **תוכנת דסקטופ לניהול ומעקב אחר ניקים (שמות משתמש) בפורומים חרדיים.**
 
-[![Version](https://img.shields.io/badge/גרסה-0.1-f59e0b?style=flat-square)](https://github.com)
+[![Version](https://img.shields.io/badge/גרסה-0.2-f59e0b?style=flat-square)](https://github.com)
 [![Platform](https://img.shields.io/badge/פלטפורמה-Windows%2010%2F11-blue?style=flat-square)](https://github.com)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 

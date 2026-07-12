@@ -11,7 +11,7 @@ import database as db
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.2.0"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -377,14 +377,37 @@ if __name__ == "__main__":
             index_url = "file://" + index_path
         logging.info("Loading UI from %s", index_url)
 
-        window = webview.create_window(
+        win_w, win_h = 1400, 820
+
+        # מירכוז החלון במסך (PyWebView לא תמיד ממרכז לבד)
+        pos_x = pos_y = None
+        try:
+            if os.name == "nt":
+                import ctypes
+                user32 = ctypes.windll.user32
+                user32.SetProcessDPIAware()
+                screen_w = user32.GetSystemMetrics(0)
+                screen_h = user32.GetSystemMetrics(1)
+                pos_x = max(0, (screen_w - win_w) // 2)
+                pos_y = max(0, (screen_h - win_h) // 2)
+                logging.info("Centering window at %s,%s (screen %sx%s)",
+                             pos_x, pos_y, screen_w, screen_h)
+        except Exception:
+            logging.exception("Could not compute center position")
+
+        win_kwargs = dict(
             title="Tik-Nick",
             url=index_url,
             js_api=api,
-            width=1400, height=820,
+            width=win_w, height=win_h,
             min_size=(1000, 600),
             background_color="#0d1117",
         )
+        if pos_x is not None and pos_y is not None:
+            win_kwargs["x"] = pos_x
+            win_kwargs["y"] = pos_y
+
+        window = webview.create_window(**win_kwargs)
         webview.start(debug=False)   # ללא כלי מפתחים למשתמש הסופי
         logging.info("Tik-Nick closed normally")
     except Exception:
