@@ -1376,10 +1376,16 @@ async function openForumMgr() {
 
 // ══ SYNC MANAGER ══════════════════════════════════════════════════════
 async function openSyncMgr() {
-  const fields = await api('get_all_nick_fields');
-  const sync   = await api('get_sync_settings');
+  const fields   = await api('get_all_nick_fields');
+  const sync     = await api('get_sync_settings');
+  const forumIo  = await api('get_forum_io_flags') || {};
+  const policy   = await api('get_conflict_policy') || 'ask';
 
-  const html = `
+  // ── סעיף 1: עמודות לייבוא/ייצוא בקובץ ──
+  const sec1 = `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
+      אילו עמודות ייכללו כשמייצאים או מייבאים קובץ נתונים.
+    </p>
     <div class="sync-list" id="sync-list">
       ${fields.map(f => `
         <div class="sync-item">
@@ -1397,6 +1403,57 @@ async function openSyncMgr() {
         </div>`).join('')}
     </div>`;
 
+  // ── סעיף 2: אילו פורומים לייבא/לייצא ──
+  const forumNames = Object.keys(forumIo);
+  const sec2 = `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
+      אילו פורומים ייכללו בייבוא/ייצוא קובץ. פורום שכבוי — הניקים שלו יידלגו.
+    </p>
+    <div class="sync-list" id="forumio-list">
+      ${forumNames.length ? forumNames.map(name => `
+        <div class="sync-item">
+          <span class="sync-label">${esc(name)}</span>
+          <label class="toggle">
+            <input type="checkbox" id="fio-${esc(name)}" ${forumIo[name]?'checked':''}>
+            <span class="toggle-slider"></span>
+          </label>
+        </div>`).join('') : '<div style="color:var(--subtext);padding:14px">אין פורומים מוגדרים</div>'}
+    </div>`;
+
+  // ── סעיף 3: מדיניות התנגשות בסנכרון מהאינטרנט ──
+  const opt = (val, label, desc) => `
+    <label class="policy-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--border-soft);border-radius:10px;margin-bottom:10px;cursor:pointer">
+      <input type="radio" name="cpolicy" value="${val}" ${policy===val?'checked':''} style="margin-top:3px">
+      <div>
+        <div style="font-weight:700;font-size:13.5px">${label}</div>
+        <div style="font-size:12px;color:var(--subtext);margin-top:2px">${desc}</div>
+      </div>
+    </label>`;
+  const sec3 = `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
+      כשסריקה מהאינטרנט מוצאת ערך שונה בשדה שכבר קיים, מה לעשות?
+    </p>
+    ${opt('ask', '🙋 לשאול אותי', 'ייפתח חלון פתרון התנגשויות בסיום הסריקה (ברירת מחדל)')}
+    ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
+    ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}`;
+
+  const html = `
+    <div class="tab-bar" style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--border-soft)">
+      <button class="tab-btn active" data-tab="s1" onclick="switchSyncTab('s1')">📄 עמודות בקובץ</button>
+      <button class="tab-btn" data-tab="s2" onclick="switchSyncTab('s2')">🏛️ פורומים</button>
+      <button class="tab-btn" data-tab="s3" onclick="switchSyncTab('s3')">⚠️ התנגשויות</button>
+    </div>
+    <div id="tab-s1" class="sync-tab">${sec1}</div>
+    <div id="tab-s2" class="sync-tab" style="display:none">${sec2}</div>
+    <div id="tab-s3" class="sync-tab" style="display:none">${sec3}</div>`;
+
+  window.switchSyncTab = (tab) => {
+    ['s1','s2','s3'].forEach(t => {
+      document.getElementById('tab-'+t).style.display = (t===tab)?'':'none';
+    });
+    document.querySelectorAll('.tab-btn').forEach(b =>
+      b.classList.toggle('active', b.dataset.tab===tab));
+  };
   window.updateSyncBadge = (key, checked) => {
     const badge = document.getElementById(`sb-${key}`);
     if (!badge) return;
@@ -1406,15 +1463,24 @@ async function openSyncMgr() {
 
   openModal('⚙️ הגדרות סנכרון', html, [
     { label: '💾 שמור', cls: 'btn-primary', action: async () => {
+      // סעיף 1
       for (const f of fields) {
         const el = document.getElementById(`st-${f.key}`);
         if (el) await api('set_sync_setting', f.key, el.checked);
       }
+      // סעיף 2
+      for (const name of forumNames) {
+        const el = document.getElementById(`fio-${CSS.escape(name)}`);
+        if (el) await api('set_forum_io_flag', name, el.checked);
+      }
+      // סעיף 3
+      const chosen = document.querySelector('input[name="cpolicy"]:checked');
+      if (chosen) await api('set_conflict_policy', chosen.value);
       toast('הגדרות סנכרון נשמרו ✓', 'success');
       closeModal();
     }},
     { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
-  ]);
+  ], 'modal-lg');
 }
 
 // ══ EXPORT / IMPORT ════════════════════════════════════════════════════
@@ -2017,8 +2083,10 @@ async function doStartScrape() {
         toast('שגיאת סריקה: ' + p.error, 'error');
       } else {
         const msg = p.cancelled ? 'הסריקה בוטלה' : 'הסריקה הושלמה';
-        toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}` +
-              (p.conflicts ? `, ${p.conflicts} התנגשויות` : ''), 'success');
+        let extra = '';
+        if (p.auto_resolved) extra = `, ${p.auto_resolved} התנגשויות נפתרו אוטומטית`;
+        else if (p.conflicts) extra = `, ${p.conflicts} התנגשויות`;
+        toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`, 'success');
       }
       await loadNicks(document.getElementById('search-input').value);
       if (p.conflicts > 0) {

@@ -30,13 +30,13 @@ _scrape_state = {
     "running": False, "done": False, "error": None,
     "page": 0, "total_pages": 0,
     "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
-    "forum": None, "cancelled": False,
+    "forum": None, "cancelled": False, "auto_resolved": 0,
 }
 _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -198,6 +198,12 @@ class API:
                     max_pages=mp,
                 )
                 _scrape_state["cancelled"] = _scrape_cancel.is_set()
+                # החלת מדיניות התנגשות אוטומטית (אם הוגדרה)
+                policy = db.get_setting("conflict_policy", "ask")
+                if policy in ("new", "existing") and _scrape_state["conflicts"] > 0:
+                    resolved = db.resolve_all_conflicts(policy)
+                    _scrape_state["auto_resolved"] = resolved
+                    _scrape_state["conflicts"] = 0
             except Exception as e:
                 _scrape_state["error"] = str(e)
             finally:
@@ -384,13 +390,31 @@ class API:
     # ── הגדרות סנכרון ──────────────────────────────────────────────
     def get_sync_settings(self):
         return db.get_sync_settings()
-
     def get_all_nick_fields(self):
         return [{"key": k, "label": l, "default": d}
                 for k, l, d in db.ALL_NICK_FIELDS]
 
     def set_sync_setting(self, field_key, synced):
         db.set_sync_setting(field_key, bool(synced))
+        return {"ok": True}
+
+    # section 2: אילו פורומים ייכללו בייבוא/ייצוא
+    def get_forum_io_flags(self):
+        return db.get_forum_io_flags()
+
+    def set_forum_io_flag(self, forum_name, included):
+        db.set_forum_io_flag(forum_name, bool(included))
+        return {"ok": True}
+
+    # section 3: מדיניות התנגשות בסנכרון מהאינטרנט
+    # 'ask' = תמיד לשאול (ברירת מחדל), 'new' = תמיד להעדיף חדש, 'existing' = תמיד לשמור קיים
+    def get_conflict_policy(self):
+        return db.get_setting("conflict_policy", "ask")
+
+    def set_conflict_policy(self, policy):
+        if policy not in ("ask", "new", "existing"):
+            policy = "ask"
+        db.set_setting("conflict_policy", policy)
         return {"ok": True}
 
     # ── ייצוא / ייבוא ──────────────────────────────────────────────

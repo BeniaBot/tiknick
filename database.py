@@ -716,14 +716,45 @@ def reset_display_settings():
     with get_connection() as conn:
         conn.execute("DELETE FROM settings WHERE key LIKE 'display_%'")
 
+# ── הגדרה כללית (מפתח→ערך) ────────────────────────────────────────
+def get_setting(key, default=""):
+    with get_connection() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return row[0] if row else default
+
+def set_setting(key, value):
+    with get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
+                     (key, str(value)))
+
+# ── אילו פורומים ייכללו בייבוא/ייצוא בקובץ ─────────────────────────
+# ברירת מחדל: כל הפורומים כלולים. נשמר רק מי שהוחרג (עם ערך '0').
+def get_forum_io_flags():
+    """מחזיר dict: forum_name -> bool (האם כלול בייבוא/ייצוא)"""
+    forums = get_forums()
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key LIKE 'forumio_%'").fetchall()
+    excluded = {k.replace("forumio_", ""): (v == "0") for k, v in rows}
+    return {f["name"]: (not excluded.get(f["name"], False)) for f in forums}
+
+def set_forum_io_flag(forum_name, included: bool):
+    with get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
+                     (f"forumio_{forum_name}", "1" if included else "0"))
+
 # ── ייצוא / ייבוא ────────────────────────────────────────────────────
 def export_data():
     exportable = get_exportable_fields()
+    io_flags = get_forum_io_flags()   # forum_name -> included?
     with get_connection() as conn:
         rows = conn.execute("SELECT * FROM nicks").fetchall()
     records = []
     for r in rows:
         d = dict(r)
+        # דלג על פורומים שהוחרגו בהגדרות (סעיף 2)
+        if io_flags.get(d.get("forum", ""), True) is False:
+            continue
         records.append({f: d.get(f, '') for f in exportable})
     return {
         "version": 2,
@@ -759,12 +790,16 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None)
                              (forum, "#8b90a0"))
                 existing_forums.add(forum)
 
+        io_flags = get_forum_io_flags()
         for nick in data.get("nicks", []):
             username  = nick.get("username","").strip()
             forum_raw = nick.get("forum","").strip()
             mapped    = mapping.get(forum_raw, "")
             forum     = mapped if mapped else forum_raw
             if not username: continue
+            # דלג על פורומים שהוחרגו בהגדרות (סעיף 2)
+            if io_flags.get(forum, True) is False:
+                continue
             existing = conn.execute(
                 "SELECT * FROM nicks WHERE username=? AND forum=?",
                 (username, forum)).fetchone()
