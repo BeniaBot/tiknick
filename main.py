@@ -24,7 +24,7 @@ import database as db
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.2.7"
+APP_VERSION = "0.2.8"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -96,12 +96,13 @@ class API:
     """כל method כאן זמינה ב-JS כ: window.pywebview.api.method_name()"""
 
     # ── ניקים ──────────────────────────────────────────────────────
-    def get_nicks(self, search="", offset=0, limit=500):
+    def get_nicks(self, search="", offset=0, limit=None):
         """
-        מחזיר {"rows":[...], "total": N}. עמוד ברירת מחדל של 500 שורות —
-        מונע קריסת ממשק כשיש עשרות אלפי ניקים. limit=0/None מחזיר הכל.
+        מחזיר {"rows":[...], "total": N}. ברירת מחדל: טוען את כל הניקים
+        התואמים בבת אחת (ללא הגבלת עמוד) — לפי בקשת המשתמש. אם בעתיד
+        המאגר יגדל משמעותית ותהיה שוב תקיעות, אפשר להעביר limit ממשי.
         """
-        lim = None if not limit else int(limit)
+        lim = int(limit) if limit else None
         return db.get_all_nicks(search or "", limit=lim, offset=int(offset or 0))
 
     def get_nick(self, nick_id):

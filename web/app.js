@@ -10,15 +10,18 @@ const S = {
   searchTimer: null,
   sortCol:     'has_info',
   sortDir:     -1,
-  // עימוד
-  offset:      0,
   total:       0,
-  pageSize:    500,
   currentSearch: '',
   // הגנה מפני תשובות חיפוש שמגיעות מאוחר מדי (race condition)
   loadToken:   0,
   // בחירה מרובה למחיקה בפועל
   multiSelected: new Set(),
+  // Virtual scrolling — טבלה: רק השורות שבתצוגה נבנות ב-DOM, לא הכל.
+  rowHeight:   36,
+  vRange:      { start: 0, end: 0 },
+  // כרטיסים: גדילה הדרגתית תוך גלילה (ללא כפתור), ללא הסרה כדי לשמור על פשטות
+  cardsRendered: 0,
+  cardsChunk:  120,
 };
 
 // ══ COLUMNS ══════════════════════════════════════════════════════════
@@ -82,6 +85,10 @@ async function _origInit() {
   buildTableHeader();
   await loadForums();
   await loadNicks();
+  const tableWrap = document.getElementById('table-wrap');
+  if (tableWrap) tableWrap.addEventListener('scroll', onTableScroll);
+  const cardsWrap = document.getElementById('cards-wrap');
+  if (cardsWrap) cardsWrap.addEventListener('scroll', onCardsScroll);
   setInterval(() => {
     const el = document.getElementById('status-time');
     if (el) el.textContent = new Date().toLocaleTimeString('he-IL');
@@ -347,52 +354,40 @@ function buildTableHeader() {
   });
 }
 
-async function loadNicks(search = '', { reset = true } = {}) {
+async function loadNicks(search = '') {
   // טוקן ייחודי לבקשה הזו — אם עד שהיא חוזרת כבר יצאה בקשה חדשה יותר
   // (חיפוש נוסף, מחיקה, וכו'), מתעלמים מהתוצאה המיושנת. זה מונע מצב
   // שבו ניק שכבר נמחק "קופץ בחזרה" רגע לפני שנעלם, בעיקר בתצוגת כרטיסים.
   const myToken = ++S.loadToken;
+  S.currentSearch = search;
+  S.multiSelected.clear();
 
-  if (reset) {
-    S.offset = 0;
-    S.currentSearch = search;
-    S.multiSelected.clear();
-  }
-
-  const res = await api('get_nicks', search, S.offset, S.pageSize);
+  const res = await api('get_nicks', search);
 
   if (myToken !== S.loadToken) return; // תשובה מיושנת — מתעלמים
 
   const rows  = res && Array.isArray(res.rows) ? res.rows : (Array.isArray(res) ? res : []);
   const total = res && typeof res.total === 'number' ? res.total : rows.length;
 
-  S.nicks = reset ? rows : S.nicks.concat(rows);
+  S.nicks = rows;
   S.total = total;
-  S.offset = S.nicks.length;
+  S.cardsRendered = Math.min(S.cardsChunk, S.nicks.length);
 
   sortNicks();
   renderTable();
   updateBulkBar();
-  updateLoadMoreControl();
-}
-
-async function loadMoreNicks() {
-  await loadNicks(S.currentSearch, { reset: false });
-}
-
-function updateLoadMoreControl() {
-  const wrap = document.getElementById('load-more-wrap');
-  if (!wrap) return;
-  const remaining = Math.max(0, S.total - S.nicks.length);
-  wrap.style.display = remaining > 0 ? '' : 'none';
-  const span = document.getElementById('load-more-remaining');
-  if (span) span.textContent = remaining;
 }
 
 function sortBy(col) {
   if (S.sortCol === col) S.sortDir *= -1;
   else { S.sortCol = col; S.sortDir = 1; }
   sortNicks();
+  // גלילה חזרה למעלה — אחרת החלון הווירטואלי מציג את השורות של מיקום הגלילה הישן
+  const tw = document.getElementById('table-wrap');
+  if (tw) tw.scrollTop = 0;
+  const cw = document.getElementById('cards-wrap');
+  if (cw) cw.scrollTop = 0;
+  S.cardsRendered = Math.min(S.cardsChunk, S.nicks.length);
   renderTable();
   // update header icons
   document.querySelectorAll('thead th').forEach(th => {
@@ -414,56 +409,119 @@ function sortNicks() {
   });
 }
 
+function buildNickRow(n) {
+  const tr = document.createElement('tr');
+  tr.dataset.id = n.id;
+  if (n.id === S.selectedId) tr.classList.add('selected');
+
+  const tdSel = document.createElement('td');
+  tdSel.innerHTML = `<input type="checkbox" class="row-select-cb">`;
+  const cb = tdSel.querySelector('input');
+  cb.checked = S.multiSelected.has(n.id);
+  cb.onclick = e => {
+    e.stopPropagation();
+    toggleRowSelected(n.id, e.target.checked);
+  };
+  tr.appendChild(tdSel);
+
+  const hiddenCols = hiddenColsSet();
+  COLS.forEach(col => {
+    if (hiddenCols.has(col.key)) return;
+    const td = document.createElement('td');
+    td.title = String(n[col.key] ?? '');
+    if (col.render) {
+      col.render(td, n);
+    } else {
+      const val = n[col.key] ?? '';
+      td.textContent = String(val).slice(0, 80);
+    }
+    tr.appendChild(td);
+  });
+
+  tr.onclick    = e => selectRow(n.id, e);
+  tr.ondblclick = () => openNickDialog(n.id);
+  return tr;
+}
+
+function visibleColCount() {
+  const hidden = hiddenColsSet();
+  return 1 + COLS.filter(c => !hidden.has(c.key)).length; // +1 = checkbox column
+}
+
 function renderTable() {
-  const tbody = document.getElementById('tbody');
   const empty = document.getElementById('empty-state');
 
   if (!S.nicks.length) {
-    tbody.innerHTML = '';
+    document.getElementById('tbody').innerHTML = '';
     empty.style.display = '';
     updateStats();
+    renderCards();
     return;
   }
   empty.style.display = 'none';
 
-  tbody.innerHTML = '';
-  S.nicks.forEach(n => {
-    const tr = document.createElement('tr');
-    tr.dataset.id = n.id;
-    if (n.id === S.selectedId) tr.classList.add('selected');
-
-    const tdSel = document.createElement('td');
-    tdSel.innerHTML = `<input type="checkbox" class="row-select-cb">`;
-    const cb = tdSel.querySelector('input');
-    cb.checked = S.multiSelected.has(n.id);
-    cb.onclick = e => {
-      e.stopPropagation();
-      toggleRowSelected(n.id, e.target.checked);
-    };
-    tr.appendChild(tdSel);
-
-    const hiddenCols = hiddenColsSet();
-    COLS.forEach(col => {
-      if (hiddenCols.has(col.key)) return;
-      const td = document.createElement('td');
-      td.title = String(n[col.key] ?? '');
-      if (col.render) {
-        col.render(td, n);
-      } else {
-        const val = n[col.key] ?? '';
-        td.textContent = String(val).slice(0, 80);
-      }
-      tr.appendChild(td);
-    });
-
-    tr.onclick      = e => selectRow(n.id, e);
-    tr.ondblclick   = ()  => openNickDialog(n.id);
-    tbody.appendChild(tr);
-  });
+  renderTableWindow();  // בונה רק את השורות שבתצוגה (virtual scrolling)
 
   updateStats();
   setStatus(`עודכן ${new Date().toLocaleTimeString('he-IL')}`);
   renderCards();  // תמיד מרנדר גם כרטיסים (מוסתר אם במצב טבלה)
+}
+
+// ── Virtual scrolling: בונה רק את השורות בטווח הנראה + מרווח בטחון ──────
+function renderTableWindow() {
+  const wrap  = document.getElementById('table-wrap');
+  const tbody = document.getElementById('tbody');
+  if (!wrap || !tbody) return;
+  const total = S.nicks.length;
+  if (!total) { tbody.innerHTML = ''; return; }
+
+  const buffer = 8;
+  const viewportH = wrap.clientHeight || 600;
+  const scrollTop = wrap.scrollTop || 0;
+  const rh = S.rowHeight || 36;
+
+  let start = Math.max(0, Math.floor(scrollTop / rh) - buffer);
+  let end   = Math.min(total, Math.ceil((scrollTop + viewportH) / rh) + buffer);
+  if (end <= start) end = Math.min(total, start + 30);
+
+  S.vRange = { start, end };
+  const cols = visibleColCount();
+
+  tbody.innerHTML = '';
+
+  if (start > 0) {
+    const spTop = document.createElement('tr');
+    spTop.className = 'v-spacer';
+    spTop.innerHTML = `<td colspan="${cols}" style="padding:0;border:none;height:${start * rh}px"></td>`;
+    tbody.appendChild(spTop);
+  }
+
+  for (let i = start; i < end; i++) {
+    tbody.appendChild(buildNickRow(S.nicks[i]));
+  }
+
+  if (end < total) {
+    const spBot = document.createElement('tr');
+    spBot.className = 'v-spacer';
+    spBot.innerHTML = `<td colspan="${cols}" style="padding:0;border:none;height:${(total - end) * rh}px"></td>`;
+    tbody.appendChild(spBot);
+  }
+
+  // מדידת גובה שורה אמיתית פעם אחת (לפי הצפיפות הנוכחית), לחישוב מדויק יותר בהמשך
+  const sample = tbody.querySelector('tr:not(.v-spacer)');
+  if (sample) {
+    const h = sample.getBoundingClientRect().height;
+    if (h && Math.abs(h - S.rowHeight) > 1) S.rowHeight = h;
+  }
+}
+
+let _tableScrollRaf = null;
+function onTableScroll() {
+  if (_tableScrollRaf) return;
+  _tableScrollRaf = requestAnimationFrame(() => {
+    _tableScrollRaf = null;
+    renderTableWindow();
+  });
 }
 
 // ── cell renderers ──────────────────────────────────────────────────
@@ -1911,7 +1969,36 @@ function renderCards() {
   if (empty) empty.style.display = 'none';
 
   grid.innerHTML = '';
-  S.nicks.forEach(n => {
+  const upTo = Math.min(S.cardsRendered || S.cardsChunk, S.nicks.length);
+  for (let i = 0; i < upTo; i++) {
+    grid.appendChild(buildCardElement(S.nicks[i]));
+  }
+}
+
+function appendMoreCards() {
+  const grid = document.getElementById('cards-grid');
+  if (!grid) return;
+  const from = S.cardsRendered;
+  const to = Math.min(from + S.cardsChunk, S.nicks.length);
+  for (let i = from; i < to; i++) {
+    grid.appendChild(buildCardElement(S.nicks[i]));
+  }
+  S.cardsRendered = to;
+}
+
+let _cardsScrollRaf = null;
+function onCardsScroll() {
+  if (_cardsScrollRaf) return;
+  _cardsScrollRaf = requestAnimationFrame(() => {
+    _cardsScrollRaf = null;
+    const wrap = document.getElementById('cards-wrap');
+    if (!wrap) return;
+    const nearBottom = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 600;
+    if (nearBottom && S.cardsRendered < S.nicks.length) appendMoreCards();
+  });
+}
+
+function buildCardElement(n) {
     const color = S.forumColors[n.forum] || '#6b7280';
     const card = document.createElement('div');
     card.className = 'nick-card' + (n.id === S.selectedId ? ' selected' : '');
@@ -1928,13 +2015,13 @@ function renderCards() {
 
     // rows — only fields that exist
     const rows = [];
-    if (n.real_name)  rows.push(row('👤', n.real_name));
-    if (n.phone)      rows.push(row('📞', n.phone + (n.extra_contacts ? ' ❕' : '')));
-    if (n.email)      rows.push(row('📧', n.email));
-    if (n.groups)     rows.push(row('🏷️', n.groups));
-    if (n.reputation) rows.push(row('⭐', String(n.reputation)));
-    if (n.extra_info) rows.push(row('ℹ️', n.extra_info));
-    if (n.private_notes) rows.push(row('🔒', n.private_notes, true));
+    if (n.real_name)  rows.push(cardRow('👤', n.real_name));
+    if (n.phone)      rows.push(cardRow('📞', n.phone + (n.extra_contacts ? ' ❕' : '')));
+    if (n.email)      rows.push(cardRow('📧', n.email));
+    if (n.groups)     rows.push(cardRow('🏷️', n.groups));
+    if (n.reputation) rows.push(cardRow('⭐', String(n.reputation)));
+    if (n.extra_info) rows.push(cardRow('ℹ️', n.extra_info));
+    if (n.private_notes) rows.push(cardRow('🔒', n.private_notes, true));
 
     const bodyHtml = rows.length
       ? `<div class="card-body">${rows.join('')}</div>`
@@ -1975,15 +2062,14 @@ function renderCards() {
     };
     card.onclick    = e => selectRow(n.id, e);
     card.ondblclick = () => openNickDialog(n.id);
-    grid.appendChild(card);
-  });
+    return card;
+}
 
-  function row(icon, val, isPrivate) {
-    return `<div class="card-row${isPrivate ? ' private' : ''}">
-      <span class="ci">${icon}</span>
-      <span class="cv">${esc(val)}</span>
-    </div>`;
-  }
+function cardRow(icon, val, isPrivate) {
+  return `<div class="card-row${isPrivate ? ' private' : ''}">
+    <span class="ci">${icon}</span>
+    <span class="cv">${esc(val)}</span>
+  </div>`;
 }
 
 // darken/lighten a hex color

@@ -315,6 +315,8 @@ thead th.sorted .sort-icon{opacity:1}
 tbody tr{transition:background .13s var(--ease);cursor:pointer;position:relative}
 tbody tr:nth-child(even){background:var(--row-b)}
 tbody tr:hover{background:var(--row-hover)}
+tbody tr.v-spacer,tbody tr.v-spacer:hover{background:transparent!important;cursor:default}
+tbody tr.v-spacer td{border:none!important;padding:0!important}
 tbody tr.selected{background:var(--row-sel)!important}
 tbody tr.selected td:first-child{box-shadow:inset -3px 0 0 var(--accent)}
 tbody td{
