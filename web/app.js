@@ -30,6 +30,7 @@ const COLS = [
   { key: 'username',      label: 'שם משתמש',       width: 145, render: renderUsername },
   { key: '_open',         label: 'פרופיל',         width: 60,  render: renderOpenBtn },
   { key: 'real_name',     label: 'שם אמיתי',       width: 130 },
+  { key: 'full_name',     label: 'שם מלא',         width: 130 },
   { key: 'groups',        label: 'קבוצות',          width: 105 },
   { key: 'reputation',    label: 'מוניטין',         width: 65,  render: renderRep },
   { key: 'phone',         label: 'טלפון',           width: 115, render: renderPhone },
@@ -798,6 +799,7 @@ async function openNickDialog(nickId = null) {
   const identitiesHtml = nick ? renderIdentitiesSection(nick) : '';
   // conflicts HTML
   const conflictsHtml = nick?.conflicts?.length ? renderConflictsSection(nick.conflicts) : '';
+  const shelvedHtml = nick?.shelved?.length ? renderShelvedSection(nick.shelved) : '';
 
   const html = `
     <div class="form-grid">
@@ -825,6 +827,10 @@ async function openNickDialog(nickId = null) {
       <div class="form-group">
         <label class="form-label">שם אמיתי</label>
         <input class="form-input" id="f-real_name" value="${esc(nick?.real_name||'')}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">שם מלא <span style="font-size:10px;opacity:.6">(מהפורום)</span></label>
+        <input class="form-input" id="f-full_name" value="${esc(nick?.full_name||'')}">
       </div>
       <div class="form-group">
         <label class="form-label">טלפון ראשי</label>
@@ -932,6 +938,7 @@ async function openNickDialog(nickId = null) {
     </div>
 
     ${conflictsHtml}
+    ${shelvedHtml}
   `;
 
   openModal(title, html, [
@@ -1141,6 +1148,35 @@ async function resolveConflict(conflictId) {
   await loadNicks(document.getElementById('search-input').value);
 }
 
+function renderShelvedSection(shelved) {
+  const fieldLabel = k => (COLS.find(c => c.key===k)?.label) || k;
+  return `
+    <div class="section-hdr" style="color:var(--subtext)">⚠️ מידע סותר מייבוא אחר (נשמר בצד)</div>
+    <p style="font-size:11.5px;color:var(--subtext);margin-bottom:8px">
+      ערכים אלו הוכרעו לרעתם לפי דירוג אמינות, אך נשמרו. אפשר לקדם ערך שמור לערך הפעיל.
+    </p>
+    ${shelved.map(s => `
+      <div class="conflict-item" style="display:flex;gap:8px;align-items:center;justify-content:space-between">
+        <div>
+          <div><span class="conflict-field">${esc(fieldLabel(s.field_name))}: </span>
+               <span class="conflict-val">${esc(s.value)}</span>
+               <span title="ממקור: ${esc(s.source_name)} (אמינות ${s.source_trust}/10)" style="cursor:help">⚠️</span>
+          </div>
+          <div class="conflict-src">מקור: ${esc(s.source_name)} · אמינות ${s.source_trust}/10</div>
+        </div>
+        <button class="btn btn-sm btn-ghost" onclick="promoteShelved(${s.id})">↑ קדם לפעיל</button>
+      </div>`).join('')}`;
+}
+
+async function promoteShelved(shelvedId) {
+  await api('promote_shelved', shelvedId);
+  const nickId = S.selectedId;
+  closeModal();
+  await loadNicks(document.getElementById('search-input').value);
+  if (nickId) openNickDialog(nickId);
+  toast('הערך קודם לפעיל ✓', 'success');
+}
+
 async function saveNick(nickId) {
   // update profile link button live
   const profileInput = document.getElementById('f-avatar_url');
@@ -1151,7 +1187,7 @@ async function saveNick(nickId) {
     profileBtn.style.display= url ? 'flex' : 'none';
   }
 
-  const fields = ['forum','username','real_name','phone','email','groups',
+  const fields = ['forum','username','real_name','full_name','phone','email','groups',
                   'reputation','address','status','join_date','post_count','trust_level',
                   'extra_info','notes','private_notes','avatar_url','nick_color','avatar_image'];
   const data = {};
@@ -1380,6 +1416,8 @@ async function openSyncMgr() {
   const sync     = await api('get_sync_settings');
   const forumIo  = await api('get_forum_io_flags') || {};
   const policy   = await api('get_conflict_policy') || 'ask';
+  const myTrust  = await api('get_my_trust') ?? 10;
+  const impLog   = await api('get_import_sources') || [];
 
   // ── סעיף 1: עמודות לייבוא/ייצוא בקובץ ──
   const sec1 = `
@@ -1437,18 +1475,54 @@ async function openSyncMgr() {
     ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
     ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}`;
 
+  // ── סעיף 4: אמינות ולוג ייבואים ──
+  const logRows = impLog.length ? impLog.map(s => `
+    <tr>
+      <td style="padding:6px 8px">${esc(s.name)}</td>
+      <td style="padding:6px 8px;text-align:center">${s.trust}/10</td>
+      <td style="padding:6px 8px;text-align:center">${s.nick_count}</td>
+      <td style="padding:6px 8px;text-align:center">${s.conflict_count}</td>
+      <td style="padding:6px 8px;font-size:11px;color:var(--subtext)">${esc((s.created_at||'').slice(0,16))}</td>
+    </tr>${s.notes ? `<tr><td colspan="5" style="padding:2px 8px 8px;font-size:11px;color:var(--subtext)">📝 ${esc(s.notes)}</td></tr>`:''}`).join('')
+    : `<tr><td colspan="5" style="padding:14px;text-align:center;color:var(--subtext)">עדיין לא בוצעו ייבואים</td></tr>`;
+  const sec4 = `
+    <div class="section-hdr">דרגת האמינות שלי</div>
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
+      האמינות של המידע שאתה מזין ידנית ושנסרק על ידך. בהתנגשות בייבוא — מקור עם אמינות
+      גבוהה יותר משלך ידרוס; אחרת שלך נשמר.
+    </p>
+    <label class="form-label">האמינות שלי: <b id="mytrust-val">${myTrust}</b> / 10</label>
+    <input type="range" min="1" max="10" value="${myTrust}" id="mytrust" style="width:100%"
+           oninput="document.getElementById('mytrust-val').textContent=this.value">
+
+    <div class="section-hdr" style="margin-top:22px">לוג ייבואים</div>
+    <div style="max-height:240px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:8px">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+        <thead><tr style="background:var(--card2)">
+          <th style="padding:7px 8px;text-align:right">מקור</th>
+          <th style="padding:7px 8px">אמינות</th>
+          <th style="padding:7px 8px">ניקים</th>
+          <th style="padding:7px 8px">התנגשויות</th>
+          <th style="padding:7px 8px;text-align:right">תאריך</th>
+        </tr></thead>
+        <tbody>${logRows}</tbody>
+      </table>
+    </div>`;
+
   const html = `
-    <div class="tab-bar" style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--border-soft)">
+    <div class="tab-bar" style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--border-soft);flex-wrap:wrap">
       <button class="tab-btn active" data-tab="s1" onclick="switchSyncTab('s1')">📄 עמודות בקובץ</button>
       <button class="tab-btn" data-tab="s2" onclick="switchSyncTab('s2')">🏛️ פורומים</button>
-      <button class="tab-btn" data-tab="s3" onclick="switchSyncTab('s3')">⚠️ התנגשויות</button>
+      <button class="tab-btn" data-tab="s3" onclick="switchSyncTab('s3')">⚠️ התנגשויות אינטרנט</button>
+      <button class="tab-btn" data-tab="s4" onclick="switchSyncTab('s4')">🎖️ אמינות ולוג</button>
     </div>
     <div id="tab-s1" class="sync-tab">${sec1}</div>
     <div id="tab-s2" class="sync-tab" style="display:none">${sec2}</div>
-    <div id="tab-s3" class="sync-tab" style="display:none">${sec3}</div>`;
+    <div id="tab-s3" class="sync-tab" style="display:none">${sec3}</div>
+    <div id="tab-s4" class="sync-tab" style="display:none">${sec4}</div>`;
 
   window.switchSyncTab = (tab) => {
-    ['s1','s2','s3'].forEach(t => {
+    ['s1','s2','s3','s4'].forEach(t => {
       document.getElementById('tab-'+t).style.display = (t===tab)?'':'none';
     });
     document.querySelectorAll('.tab-btn').forEach(b =>
@@ -1476,6 +1550,9 @@ async function openSyncMgr() {
       // סעיף 3
       const chosen = document.querySelector('input[name="cpolicy"]:checked');
       if (chosen) await api('set_conflict_policy', chosen.value);
+      // סעיף 4
+      const mt = document.getElementById('mytrust');
+      if (mt) await api('set_my_trust', parseInt(mt.value) || 10);
       toast('הגדרות סנכרון נשמרו ✓', 'success');
       closeModal();
     }},
@@ -1490,6 +1567,8 @@ async function exportData() {
   else if (res?.error !== 'בוטל') toast('שגיאה בייצוא', 'error');
 }
 
+let _pendingImportMeta = { name: '', notes: '', trust: 10 };
+
 async function importData() {
   // שלב 1: טען קובץ ובדוק פורומים
   const res = await api('load_import_file');
@@ -1498,12 +1577,52 @@ async function importData() {
     if (res.error !== 'בוטל') toast('שגיאה בייבוא: ' + res.error, 'error');
     return;
   }
+  // שלב 1.5: פרטי הייבוא (שם, הערות, דרגת אמינות)
+  showImportDetailsDialog(res);
+}
 
+async function showImportDetailsDialog(res) {
+  const myTrust = await api('get_my_trust') ?? 10;
+  openModal('📥 פרטי הייבוא', `
+    <p style="color:var(--subtext);font-size:13px;margin-bottom:14px">
+      תן שם למקור הייבוא ודרגת אמינות. בהתנגשות עם מידע קיים — הערך מהמקור בעל
+      האמינות הגבוהה יותר ינצח, והאחר יישמר בצד (יסומן ב-⚠️).
+    </p>
+    <div class="form-group">
+      <label class="form-label">שם המקור</label>
+      <input class="form-input" id="imp-name" placeholder="למשל: קובץ מיוסי">
+    </div>
+    <div class="form-group">
+      <label class="form-label">הערות (אופציונלי)</label>
+      <input class="form-input" id="imp-notes" placeholder="למשל: נתונים מ-2024">
+    </div>
+    <div class="form-group">
+      <label class="form-label">דרגת אמינות: <b id="imp-trust-val">7</b> / 10</label>
+      <input type="range" min="1" max="10" value="7" id="imp-trust" style="width:100%"
+             oninput="document.getElementById('imp-trust-val').textContent=this.value">
+      <div style="font-size:11px;color:var(--subtext);margin-top:4px">
+        לשם השוואה — האמינות שלך מוגדרת כ-${myTrust}/10 (ניתן לשינוי בהגדרות סנכרון)
+      </div>
+    </div>
+  `, [
+    { label: 'המשך', cls: 'btn-primary', action: () => {
+      _pendingImportMeta = {
+        name: document.getElementById('imp-name').value.trim() || 'ייבוא',
+        notes: document.getElementById('imp-notes').value.trim(),
+        trust: parseInt(document.getElementById('imp-trust').value) || 7,
+      };
+      closeModal();
+      proceedImport(res);
+    }},
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
+}
+
+async function proceedImport(res) {
   const unknown = res.unknown_forums || [];
-
   if (unknown.length === 0) {
-    // אין פורומים לא מוכרים — ייבא ישירות
-    const r2 = await api('confirm_import', {});
+    const r2 = await api('confirm_import', {}, _pendingImportMeta.name,
+                         _pendingImportMeta.notes, _pendingImportMeta.trust);
     if (r2?.ok) {
       await loadNicks(document.getElementById('search-input').value);
       toast(`יובאו ${r2.imported} ניקים, ${r2.conflicts} התנגשויות ✓`, 'success');
@@ -1512,8 +1631,6 @@ async function importData() {
     }
     return;
   }
-
-  // שלב 2: הצג dialog למיפוי פורומים לא מוכרים
   showForumMappingDialog(unknown, res.nick_count);
 }
 
@@ -1594,7 +1711,8 @@ async function showForumMappingDialog(unknownForums, totalNicks) {
         // ערך ריק = הוסף כפורום חדש — Python יטפל
       });
       closeModal();
-      const r2 = await api('confirm_import', mapping);
+      const r2 = await api('confirm_import', mapping, _pendingImportMeta.name,
+                           _pendingImportMeta.notes, _pendingImportMeta.trust);
       if (r2?.ok) {
         await loadForums();
         await loadNicks(document.getElementById('search-input').value);

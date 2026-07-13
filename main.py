@@ -36,7 +36,7 @@ _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -124,6 +124,7 @@ class API:
         nick["contacts"]   = db.get_contacts(int(nick_id))
         nick["conflicts"]  = db.get_conflicts(int(nick_id))
         nick["identities"] = db.get_identities(int(nick_id))
+        nick["shelved"]    = db.get_shelved_values(int(nick_id))
         return nick
 
     def create_nick(self, data):
@@ -481,8 +482,9 @@ class API:
         """לא בשימוש ישיר — השתמש ב-load_import_file + confirm_import"""
         pass
 
-    def confirm_import(self, forum_mapping=None):
-        """שלב 2: בצע ייבוא עם מיפוי פורומים"""
+    def confirm_import(self, forum_mapping=None, import_name=None,
+                       import_notes="", import_trust=None):
+        """שלב 2: בצע ייבוא עם מיפוי פורומים ודרגת אמינות"""
         pending = getattr(self, '_pending_import', None)
         if not pending:
             return {"ok": False, "error": "אין קובץ ממתין"}
@@ -490,11 +492,30 @@ class API:
             data     = pending["data"]
             path     = pending["path"]
             mapping  = forum_mapping or {}
-            imp, conf = db.import_data(data, os.path.basename(path), mapping)
+            name     = import_name or os.path.basename(path)
+            imp, conf = db.import_data(
+                data, os.path.basename(path), mapping,
+                import_name=name, import_notes=import_notes, import_trust=import_trust)
             self._pending_import = None
             return {"ok": True, "imported": imp, "conflicts": conf}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    # ── אמינות ולוג ייבואים ────────────────────────────────────────
+    def get_my_trust(self):
+        return db.get_my_trust()
+
+    def set_my_trust(self, val):
+        return {"ok": True, "value": db.set_my_trust(val)}
+
+    def get_import_sources(self):
+        return db.get_import_sources()
+
+    def get_shelved_values(self, nick_id):
+        return db.get_shelved_values(int(nick_id))
+
+    def promote_shelved(self, shelved_id):
+        return {"ok": db.promote_shelved(int(shelved_id))}
 
 
 if __name__ == "__main__":

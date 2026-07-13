@@ -135,7 +135,7 @@ def _map_user(u):
         avatar = pic
 
     return {
-        "real_name":    g("fullname"),
+        "full_name":    g("fullname"),
         "reputation":   g("reputation") or "",
         "post_count":   g("postcount") or "",
         "groups":       groups,
