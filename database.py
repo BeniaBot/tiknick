@@ -90,6 +90,8 @@ def init_db():
                 nick_color TEXT DEFAULT '',
                 avatar_image TEXT DEFAULT '',
                 source TEXT DEFAULT 'manual',
+                scraped_real_name TEXT DEFAULT '',
+                scraped_email TEXT DEFAULT '',
                 trust_level INTEGER DEFAULT 5,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
@@ -229,7 +231,8 @@ def _migrate():
     """הוסף עמודות חסרות ל-DB ישן"""
     with get_connection() as conn:
         existing = {row[1] for row in conn.execute("PRAGMA table_info(nicks)")}
-        for col in ["extra_info", "private_notes", "nick_color", "avatar_image", "address"]:
+        for col in ["extra_info", "private_notes", "nick_color", "avatar_image", "address",
+                    "scraped_real_name", "scraped_email"]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE nicks ADD COLUMN {col} TEXT DEFAULT ''")
         ctcols = {row[1] for row in conn.execute("PRAGMA table_info(nick_contacts)")}
@@ -355,8 +358,14 @@ def get_all_nicks(search="", limit=None, offset=0):
         base_select = """
             SELECT n.*,
                 (SELECT COUNT(*) FROM nick_conflicts c WHERE c.nick_id = n.id) as conflict_count,
-                CASE WHEN (n.real_name != '' OR n.phone != '' OR n.email != ''
-                           OR n.notes != '' OR n.extra_info != '') THEN 1 ELSE 0 END as has_info,
+                CASE WHEN (
+                       n.phone != '' OR n.notes != '' OR n.private_notes != ''
+                       OR (n.real_name != '' AND n.real_name != n.scraped_real_name)
+                       OR (n.email != '' AND n.email != n.scraped_email)
+                       OR EXISTS (SELECT 1 FROM nick_contacts ct WHERE ct.nick_id = n.id)
+                       OR EXISTS (SELECT 1 FROM nick_identities i
+                                  WHERE i.nick_id_a = n.id OR i.nick_id_b = n.id)
+                     ) THEN 1 ELSE 0 END as has_info,
                 (SELECT COUNT(*) FROM nick_identities i
                  WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id) as has_identity,
                 (SELECT COUNT(*) FROM nick_contacts ct WHERE ct.nick_id=n.id) as extra_contacts
@@ -437,6 +446,9 @@ def merge_scraped_nick(forum, username, scraped, source_label="סריקה"):
         for f in _SCRAPE_MERGE_FIELDS:
             if f in scraped and scraped[f] not in (None, ""):
                 data[f] = scraped[f]
+        # טביעת אצבע של הערכים הסרוקים — כדי לזהות בהמשך אם שונו ידנית
+        data["scraped_real_name"] = scraped.get("real_name", "") or ""
+        data["scraped_email"]     = scraped.get("email", "") or ""
         nid = create_nick(data)
         return ("created", nid, 0)
 
@@ -467,6 +479,13 @@ def merge_scraped_nick(forum, username, scraped, source_label="סריקה"):
                     )
                     conflicts += 1
         if fill:
+            # אם מולאו שם/מייל מהסריקה, עדכן גם את טביעת האצבע הסרוקה
+            snap = {}
+            if "real_name" in fill:
+                snap["scraped_real_name"] = fill["real_name"]
+            if "email" in fill:
+                snap["scraped_email"] = fill["email"]
+            fill.update(snap)
             set_clause = ", ".join([f"{f}=?" for f in fill]) + ", updated_at=datetime('now')"
             conn.execute(f"UPDATE nicks SET {set_clause} WHERE id=?",
                          list(fill.values()) + [nid])
@@ -477,7 +496,8 @@ def merge_scraped_nick(forum, username, scraped, source_label="סריקה"):
 
 _NICK_FIELDS = ["forum","username","groups","reputation","real_name","phone","email",
                 "notes","private_notes","extra_info","address","status","join_date","post_count",
-                "avatar_url","nick_color","avatar_image","source","trust_level"]
+                "avatar_url","nick_color","avatar_image","source","scraped_real_name",
+                "scraped_email","trust_level"]
 
 def create_nick(data):
     vals = [data.get(f, '') for f in _NICK_FIELDS]
