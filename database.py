@@ -408,6 +408,73 @@ def get_nick(nick_id):
         row = conn.execute("SELECT * FROM nicks WHERE id=?", (nick_id,)).fetchone()
         return dict(row) if row else None
 
+def find_nick(forum, username):
+    """מאתר ניק קיים לפי פורום+שם משתמש (למניעת כפילויות בסריקה חוזרת)"""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM nicks WHERE forum=? AND username=? LIMIT 1",
+            (forum, username)
+        ).fetchone()
+        return dict(row) if row else None
+
+# שדות שממוזגים מסריקה (לא נוגעים ב-private_notes של המשתמש, ולא ב-trust_level)
+_SCRAPE_MERGE_FIELDS = ["groups", "reputation", "real_name", "email", "address",
+                        "status", "join_date", "post_count", "avatar_url",
+                        "nick_color", "avatar_image", "extra_info"]
+
+def merge_scraped_nick(forum, username, scraped, source_label="סריקה"):
+    """
+    ממזג ניק שנסרק לתוך המאגר לפי המדיניות:
+      • ניק חדש → נוצר.
+      • שדה ריק בקיים + יש ערך בסריקה → מתמלא בשקט.
+      • שדה קיים עם ערך שונה → נרשם כ-nick_conflict לפתרון בממשק (לא דורס).
+    מחזיר: ('created'|'updated'|'unchanged', nick_id, conflicts_found:int)
+    """
+    existing = find_nick(forum, username)
+    if not existing:
+        data = {"forum": forum, "username": username, "source": source_label,
+                "trust_level": 4}
+        for f in _SCRAPE_MERGE_FIELDS:
+            if f in scraped and scraped[f] not in (None, ""):
+                data[f] = scraped[f]
+        nid = create_nick(data)
+        return ("created", nid, 0)
+
+    nid = existing["id"]
+    fill = {}
+    conflicts = 0
+    with get_connection() as conn:
+        for f in _SCRAPE_MERGE_FIELDS:
+            new_val = scraped.get(f, "")
+            if new_val in (None, ""):
+                continue
+            old_val = existing.get(f, "")
+            if old_val in (None, ""):
+                fill[f] = new_val                      # מילוי שקט
+            elif str(old_val).strip() != str(new_val).strip():
+                # התנגשות — לא דורסים, רושמים לפתרון בממשק
+                exists_c = conn.execute(
+                    """SELECT 1 FROM nick_conflicts
+                       WHERE nick_id=? AND field_name=? AND conflicting_value=? LIMIT 1""",
+                    (nid, f, str(new_val))
+                ).fetchone()
+                if not exists_c:
+                    conn.execute(
+                        """INSERT INTO nick_conflicts
+                           (nick_id, field_name, conflicting_value, source_info, created_at)
+                           VALUES (?,?,?,?,datetime('now'))""",
+                        (nid, f, str(new_val), source_label)
+                    )
+                    conflicts += 1
+        if fill:
+            set_clause = ", ".join([f"{f}=?" for f in fill]) + ", updated_at=datetime('now')"
+            conn.execute(f"UPDATE nicks SET {set_clause} WHERE id=?",
+                         list(fill.values()) + [nid])
+
+    if fill or conflicts:
+        return ("updated", nid, conflicts)
+    return ("unchanged", nid, 0)
+
 _NICK_FIELDS = ["forum","username","groups","reputation","real_name","phone","email",
                 "notes","private_notes","extra_info","address","status","join_date","post_count",
                 "avatar_url","nick_color","avatar_image","source","trust_level"]
@@ -517,6 +584,59 @@ def get_conflicts(nick_id):
 def delete_conflict(conflict_id):
     with get_connection() as conn:
         conn.execute("DELETE FROM nick_conflicts WHERE id=?", (conflict_id,))
+
+def get_all_conflicts():
+    """כל ההתנגשויות במאגר, עם שם הניק והערך הנוכחי בשדה — לפותר ההתנגשויות הגלובלי"""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT c.*, n.username, n.forum
+            FROM nick_conflicts c JOIN nicks n ON n.id = c.nick_id
+            ORDER BY c.created_at DESC
+        """).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            # הערך הנוכחי בשדה (הצד ה"קיים" של ההתנגשות)
+            cur = conn.execute(
+                f"SELECT {d['field_name']} AS v FROM nicks WHERE id=?", (d['nick_id'],)
+            ).fetchone()
+            d['current_value'] = cur['v'] if cur else ''
+            out.append(d)
+        return out
+
+def apply_conflict(conflict_id):
+    """מחיל את הערך החדש (conflicting_value) על הניק, ומוחק את ההתנגשות."""
+    with get_connection() as conn:
+        c = conn.execute("SELECT * FROM nick_conflicts WHERE id=?", (conflict_id,)).fetchone()
+        if not c:
+            return False
+        c = dict(c)
+        field = c['field_name']
+        if field in _NICK_FIELDS and field not in ('id', 'forum', 'username'):
+            conn.execute(
+                f"UPDATE nicks SET {field}=?, updated_at=datetime('now') WHERE id=?",
+                (c['conflicting_value'], c['nick_id'])
+            )
+        conn.execute("DELETE FROM nick_conflicts WHERE id=?", (conflict_id,))
+        return True
+
+def resolve_all_conflicts(prefer):
+    """
+    פותר את כל ההתנגשויות בבת אחת.
+    prefer='new'      → מחיל את כל הערכים החדשים.
+    prefer='existing' → שומר על הקיים (רק מוחק את ההתנגשויות).
+    מחזיר כמה נפתרו.
+    """
+    with get_connection() as conn:
+        ids = [r['id'] for r in conn.execute("SELECT id FROM nick_conflicts").fetchall()]
+    n = 0
+    for cid in ids:
+        if prefer == 'new':
+            apply_conflict(cid)
+        else:
+            delete_conflict(cid)
+        n += 1
+    return n
 
 # ── זהויות כפולות ─────────────────────────────────────────────────
 def get_identities(nick_id):

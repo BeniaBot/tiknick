@@ -20,11 +20,23 @@ import webview
 import json
 import logging
 import webbrowser
+import threading
 import database as db
+import scraper
+
+
+# ── מצב סריקה פעילה (למעקב התקדמות מהממשק) ─────────────────────────
+_scrape_state = {
+    "running": False, "done": False, "error": None,
+    "page": 0, "total_pages": 0,
+    "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
+    "forum": None, "cancelled": False,
+}
+_scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.2.8"
+APP_VERSION = "0.2.9"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -138,6 +150,69 @@ class API:
         """מחיקה מרובה בפועל — מוחקת את הניקים הנבחרים (לא מרוקנת עמודות בלבד)"""
         n = db.delete_nicks(nick_ids or [])
         return {"ok": True, "count": n}
+
+    # ── סנכרון לאינטרנט (סריקת פורומי NodeBB) ──────────────────────
+    def get_scrapable_forums(self):
+        """מחזיר את הפורומים המובנים עם כתובת, לבחירה בממשק הסנכרון"""
+        forums = db.get_forums()
+        return [f for f in forums if (f.get("url") or "").strip()]
+
+    def check_forum(self, forum_url, cookie=""):
+        """בדיקה מקדימה שהכתובת היא פורום NodeBB עם API פעיל"""
+        try:
+            return scraper.check_forum(forum_url, cookie=cookie or None)
+        except Exception as e:
+            return {"ok": False, "user_count": None, "title": None, "error": str(e)}
+
+    def start_scrape(self, forum_name, forum_url, cookie="", max_pages=None):
+        """מתחיל סריקה ברקע. הממשק יסקור התקדמות דרך get_scrape_progress."""
+        if _scrape_state["running"]:
+            return {"ok": False, "error": "סריקה כבר רצה"}
+
+        _scrape_cancel.clear()
+        _scrape_state.update({
+            "running": True, "done": False, "error": None,
+            "page": 0, "total_pages": 0,
+            "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
+            "forum": forum_name, "cancelled": False,
+        })
+
+        def _progress(p):
+            _scrape_state.update({
+                "page": p.get("page", 0),
+                "total_pages": p.get("total_pages", 0),
+                "added": p.get("added", 0),
+                "updated": p.get("updated", 0),
+                "unchanged": p.get("unchanged", 0),
+                "conflicts": p.get("conflicts", 0),
+            })
+
+        def _run():
+            try:
+                mp = int(max_pages) if max_pages else None
+                scraper.scrape_forum(
+                    forum_name, forum_url, db,
+                    cookie=cookie or None,
+                    progress_cb=_progress,
+                    cancel_flag=_scrape_cancel,
+                    max_pages=mp,
+                )
+                _scrape_state["cancelled"] = _scrape_cancel.is_set()
+            except Exception as e:
+                _scrape_state["error"] = str(e)
+            finally:
+                _scrape_state["running"] = False
+                _scrape_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True}
+
+    def get_scrape_progress(self):
+        return dict(_scrape_state)
+
+    def cancel_scrape(self):
+        _scrape_cancel.set()
+        return {"ok": True}
 
     def reset_all(self):
         db.reset_all()
@@ -292,6 +367,19 @@ class API:
     def delete_conflict(self, conflict_id):
         db.delete_conflict(int(conflict_id))
         return {"ok": True}
+
+    def get_all_conflicts(self):
+        return db.get_all_conflicts()
+
+    def apply_conflict(self, conflict_id):
+        """מקבל את הערך החדש מההתנגשות ומחיל אותו על הניק"""
+        ok = db.apply_conflict(int(conflict_id))
+        return {"ok": ok}
+
+    def resolve_all_conflicts(self, prefer):
+        """prefer='new' מחיל את כל החדשים; prefer='existing' שומר קיים"""
+        n = db.resolve_all_conflicts(prefer)
+        return {"ok": True, "count": n}
 
     # ── הגדרות סנכרון ──────────────────────────────────────────────
     def get_sync_settings(self):

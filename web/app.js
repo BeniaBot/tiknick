@@ -1929,6 +1929,171 @@ function updateThemeToggleIcon() {
 }
 
 // ══ FEATURE BUTTONS (placeholders) ════════════════════════════════════
+// ══ סנכרון לאינטרנט (סריקת פורומי NodeBB) ═══════════════════════════════
+let _scrapePoll = null;
+
+async function openInternetSync() {
+  const forums = await api('get_scrapable_forums') || [];
+  const opts = forums.map(f =>
+    `<option value="${esc(f.name)}" data-url="${esc(f.url || '')}">${esc(f.name)}</option>`
+  ).join('');
+
+  openModal('🌐 סנכרון לאינטרנט', `
+    <p style="color:var(--subtext);font-size:13px;line-height:1.6;margin-bottom:16px">
+      סורק את רשימת המשתמשים של פורום NodeBB דרך ה-API הרשמי, ומוסיף/מעדכן ניקים
+      אוטומטית. שדות ריקים מתמלאים בשקט; ערך שונה בשדה קיים נרשם כהתנגשות לפתרון.
+    </p>
+
+    <div class="section-hdr">בחירת פורום</div>
+    <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">פורום לסריקה</label>
+    <select id="sync-forum" class="form-select" style="width:100%;margin-bottom:12px">${opts}</select>
+
+    <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">
+      עוגיית התחברות (express.sid) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה)
+    </label>
+    <input id="sync-cookie" class="form-input" style="width:100%;margin-bottom:12px" dir="ltr"
+           placeholder="express.sid=s%3A...  (השאר ריק אם הפורום ציבורי)">
+
+    <div id="sync-check-result" style="font-size:13px;margin-bottom:12px;min-height:20px"></div>
+
+    <div id="sync-progress-wrap" style="display:none;margin-top:8px">
+      <div style="height:12px;background:var(--card2);border-radius:99px;overflow:hidden;margin-bottom:8px">
+        <div id="sync-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s"></div>
+      </div>
+      <div id="sync-progress-text" style="font-size:12px;color:var(--subtext);text-align:center"></div>
+    </div>
+  `, [
+    { label: 'בדוק פורום', cls: 'btn-ghost',   action: doForumCheck },
+    { label: 'התחל סריקה', cls: 'btn-primary', action: doStartScrape },
+    { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
+  ], 'modal-lg');
+}
+
+function closeSyncModal() {
+  if (_scrapePoll) { clearInterval(_scrapePoll); _scrapePoll = null; }
+  closeModal();
+}
+
+async function doForumCheck() {
+  const sel = document.getElementById('sync-forum');
+  const url = sel.selectedOptions[0]?.dataset.url || '';
+  const cookie = document.getElementById('sync-cookie').value.trim();
+  const box = document.getElementById('sync-check-result');
+  if (!url) { box.innerHTML = '<span style="color:var(--danger)">לפורום זה אין כתובת URL</span>'; return; }
+  box.innerHTML = '<span style="color:var(--subtext)">בודק…</span>';
+  const r = await api('check_forum', url, cookie);
+  if (r && r.ok) {
+    const cnt = r.user_count != null ? `~${r.user_count} משתמשים` : 'זמין';
+    box.innerHTML = `<span style="color:var(--success)">✓ פורום NodeBB תקין (${esc(String(cnt))})</span>`;
+  } else {
+    box.innerHTML = `<span style="color:var(--danger)">✕ ${esc(r?.error || 'בדיקה נכשלה')}</span>`;
+  }
+}
+
+async function doStartScrape() {
+  const sel = document.getElementById('sync-forum');
+  const name = sel.value;
+  const url  = sel.selectedOptions[0]?.dataset.url || '';
+  const cookie = document.getElementById('sync-cookie').value.trim();
+  if (!url) { toast('לפורום זה אין כתובת URL', 'error'); return; }
+
+  const start = await api('start_scrape', name, url, cookie, null);
+  if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל סריקה', 'error'); return; }
+
+  document.getElementById('sync-progress-wrap').style.display = '';
+  document.getElementById('sync-check-result').innerHTML = '';
+
+  _scrapePoll = setInterval(async () => {
+    const p = await api('get_scrape_progress');
+    if (!p) return;
+    const pct = p.total_pages ? Math.round((p.page / p.total_pages) * 100) : 0;
+    document.getElementById('sync-bar').style.width = pct + '%';
+    document.getElementById('sync-progress-text').textContent =
+      `עמוד ${p.page}/${p.total_pages || '?'} · נוספו ${p.added} · עודכנו ${p.updated} · התנגשויות ${p.conflicts}`;
+
+    if (p.done || !p.running) {
+      clearInterval(_scrapePoll); _scrapePoll = null;
+      if (p.error) {
+        toast('שגיאת סריקה: ' + p.error, 'error');
+      } else {
+        const msg = p.cancelled ? 'הסריקה בוטלה' : 'הסריקה הושלמה';
+        toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}` +
+              (p.conflicts ? `, ${p.conflicts} התנגשויות` : ''), 'success');
+      }
+      await loadNicks(document.getElementById('search-input').value);
+      if (p.conflicts > 0) {
+        setTimeout(() => {
+          if (confirm(`נמצאו ${p.conflicts} התנגשויות. לפתור אותן עכשיו?`)) {
+            closeSyncModal();
+            if (typeof openConflictsResolver === 'function') openConflictsResolver();
+          }
+        }, 300);
+      }
+    }
+  }, 700);
+}
+
+// ══ פותר התנגשויות גלובלי ═══════════════════════════════════════════════
+async function openConflictsResolver() {
+  const conflicts = await api('get_all_conflicts') || [];
+  openModal('⚠️ פתרון התנגשויות', renderResolverBody(conflicts), [
+    { label: 'העדף הכל: החדש',  cls: 'btn-warning', action: () => resolveAllConflicts('new') },
+    { label: 'העדף הכל: הקיים', cls: 'btn-ghost',   action: () => resolveAllConflicts('existing') },
+    { label: 'סגור',            cls: 'btn-ghost',   action: closeModal },
+  ], 'modal-lg');
+}
+
+function renderResolverBody(conflicts) {
+  if (!conflicts.length) {
+    return `<div style="text-align:center;padding:30px;color:var(--subtext)">
+      <div style="font-size:44px;margin-bottom:10px">✓</div>אין התנגשויות פתוחות</div>`;
+  }
+  return `
+    <p style="color:var(--subtext);font-size:13px;margin-bottom:14px">
+      לכל שדה: הערך הקיים מול הערך שנסרק. בחר איזה לשמור, או השתמש בכפתורים למטה לפתרון גורף.
+    </p>
+    <div id="resolver-list">
+      ${conflicts.map(c => `
+        <div class="conflict-item" data-cid="${c.id}" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px;border-bottom:1px solid var(--border-soft)">
+          <div style="flex:1;min-width:220px">
+            <div style="font-weight:700;font-size:12px;margin-bottom:4px">
+              ${esc(c.username)} · <span style="color:var(--accent-2)">${esc(c.field_name)}</span>
+            </div>
+            <div style="font-size:12.5px">
+              <span style="color:var(--subtext)">קיים:</span> ${esc(String(c.current_value ?? '') || '(ריק)')}
+              &nbsp;→&nbsp;
+              <span style="color:var(--subtext)">חדש:</span> <b>${esc(c.conflicting_value)}</b>
+            </div>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-sm btn-primary" onclick="resolveOne(${c.id}, true)">קבל חדש</button>
+            <button class="btn btn-sm btn-ghost"   onclick="resolveOne(${c.id}, false)">שמור קיים</button>
+          </div>
+        </div>`).join('')}
+    </div>`;
+}
+
+async function resolveOne(conflictId, acceptNew) {
+  if (acceptNew) await api('apply_conflict', conflictId);
+  else           await api('delete_conflict', conflictId);
+  const el = document.querySelector(`.conflict-item[data-cid="${conflictId}"]`);
+  if (el) el.remove();
+  await loadNicks(document.getElementById('search-input').value);
+  const list = document.getElementById('resolver-list');
+  if (list && !list.querySelector('.conflict-item')) {
+    list.innerHTML = `<div style="text-align:center;padding:24px;color:var(--subtext)">✓ כל ההתנגשויות נפתרו</div>`;
+  }
+}
+
+async function resolveAllConflicts(prefer) {
+  const label = prefer === 'new' ? 'להחיל את כל הערכים החדשים' : 'לשמור על כל הערכים הקיימים';
+  if (!confirm(`${label}?`)) return;
+  const r = await api('resolve_all_conflicts', prefer);
+  await loadNicks(document.getElementById('search-input').value);
+  toast(`${r?.count ?? 0} התנגשויות נפתרו`, 'success');
+  closeModal();
+}
+
 function openChazonishnik() {
   openModal('📖 Chazonishnik', `
     <div style="text-align:center;padding:30px 20px">
