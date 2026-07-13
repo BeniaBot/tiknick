@@ -477,6 +477,8 @@ body[data-view="cards"] #cards-wrap{display:block}
 .btn-primary:hover{transform:translateY(-2px);box-shadow:0 12px 28px var(--accent-glow)}
 .btn-danger{background:var(--danger);color:#fff}
 .btn-danger:hover{transform:translateY(-2px);filter:brightness(1.08)}
+.btn-warning{background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff}
+.btn-warning:hover{transform:translateY(-2px);filter:brightness(1.08)}
 .btn-ghost{background:var(--card);color:var(--text-dim);border:1px solid var(--border)}
 .btn-ghost:hover{background:var(--card2);color:var(--text)}
 .btn-sm{padding:6px 12px;font-size:12px}

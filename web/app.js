@@ -1511,14 +1511,14 @@ async function confirmReset() {
       <p style="font-size:12px;color:var(--subtext);margin-bottom:10px">
         רוקן ערכים בעמודות נבחרות בכל הניקים, בלי למחוק את השורות עצמן
       </p>
-      <div class="reset-col-actions" style="margin-bottom:10px;display:flex;gap:8px">
+      <div class="reset-col-actions" style="margin-bottom:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-ghost btn-sm" onclick="toggleAllResetCols(true)">בחר הכל</button>
         <button class="btn btn-ghost btn-sm" onclick="toggleAllResetCols(false)">נקה בחירה</button>
+        <button class="btn btn-warning btn-sm" style="margin-right:auto" onclick="doResetColumns()">
+          🧹 אפס עמודות נבחרות
+        </button>
       </div>
-      <div class="col-picker" style="max-height:240px;overflow-y:auto">${colChecks}</div>
-      <button class="btn btn-danger" style="width:100%;margin-top:14px" onclick="doResetColumns()">
-        🧹 אפס עמודות נבחרות
-      </button>
+      <div class="col-picker" style="max-height:220px;overflow-y:auto">${colChecks}</div>
     </div>
 
     <div id="reset-settings" class="reset-pane" style="display:none">
