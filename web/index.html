@@ -118,6 +118,11 @@
         <span class="stat-pill">📊 <b id="stat-total">0</b> ניקים</span>
         <span class="stat-pill">✓ <b id="stat-info">0</b> עם מידע</span>
       </div>
+      <div class="topbar-stats" id="bulk-actions-bar" style="display:none">
+        <span class="stat-pill">✅ <b id="bulk-count">0</b> נבחרו</span>
+        <button class="btn btn-danger btn-sm" onclick="deleteBulkSelected()">🗑️ מחק נבחרים</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearBulkSelection()">בטל בחירה</button>
+      </div>
     </div>
 
     <!-- table -->
@@ -142,6 +147,13 @@
         <div class="empty-icon">📭</div>
         <h3>אין ניקים להצגה</h3>
       </div>
+    </div>
+
+    <!-- load more -->
+    <div id="load-more-wrap" style="display:none;text-align:center;padding:14px">
+      <button class="btn btn-ghost" onclick="loadMoreNicks()">
+        ⬇️ טען עוד (<span id="load-more-remaining">0</span> נותרו)
+      </button>
     </div>
 
     <!-- statusbar -->

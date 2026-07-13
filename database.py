@@ -134,6 +134,16 @@ def init_db():
                 field_key TEXT PRIMARY KEY,
                 synced INTEGER DEFAULT 1
             );
+
+            -- אינדקסים לביצועים (חיוני כשיש עשרות אלפי ניקים)
+            CREATE INDEX IF NOT EXISTS idx_nicks_username    ON nicks(username);
+            CREATE INDEX IF NOT EXISTS idx_nicks_forum       ON nicks(forum);
+            CREATE INDEX IF NOT EXISTS idx_nicks_updated_at  ON nicks(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_nicks_trust_level ON nicks(trust_level);
+            CREATE INDEX IF NOT EXISTS idx_conflicts_nick_id ON nick_conflicts(nick_id);
+            CREATE INDEX IF NOT EXISTS idx_contacts_nick_id  ON nick_contacts(nick_id);
+            CREATE INDEX IF NOT EXISTS idx_identities_a      ON nick_identities(nick_id_a);
+            CREATE INDEX IF NOT EXISTS idx_identities_b      ON nick_identities(nick_id_b);
         """)
         # "כללי" תמיד קיים — פורום ברירת המחדל לניקים לא משויכים
         conn.execute(
@@ -152,6 +162,68 @@ def init_db():
 
     # Migrations for existing DBs
     _migrate()
+    _init_fts()
+
+FTS_AVAILABLE = False
+
+def _init_fts():
+    """
+    מגדיר טבלת FTS5 (Full-Text Search) לחיפוש מהיר על עשרות אלפי ניקים.
+    LIKE '%...%' על 9 עמודות דורש סריקה מלאה של הטבלה בכל חיפוש; FTS5 משתמש
+    באינדקס מילים וממשיך להיות מהיר גם עם הרבה נתונים.
+    אם הגרסה המקומית של SQLite לא כוללת FTS5 (נדיר), נופלים בחזרה לחיפוש LIKE הישן.
+    """
+    global FTS_AVAILABLE
+    with get_connection() as conn:
+        exists = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='nicks_fts'"
+        ).fetchone()
+        if exists:
+            FTS_AVAILABLE = True
+            return
+        fts_cols = "username, real_name, phone, email, notes, groups, forum, extra_info, private_notes"
+        try:
+            conn.executescript(f"""
+                CREATE VIRTUAL TABLE nicks_fts USING fts5(
+                    {fts_cols},
+                    content='nicks', content_rowid='id',
+                    tokenize='unicode61 remove_diacritics 2'
+                );
+                CREATE TRIGGER nicks_fts_ai AFTER INSERT ON nicks BEGIN
+                  INSERT INTO nicks_fts(rowid, {fts_cols})
+                  VALUES (new.id, new.username, new.real_name, new.phone, new.email,
+                          new.notes, new.groups, new.forum, new.extra_info, new.private_notes);
+                END;
+                CREATE TRIGGER nicks_fts_ad AFTER DELETE ON nicks BEGIN
+                  INSERT INTO nicks_fts(nicks_fts, rowid, {fts_cols})
+                  VALUES ('delete', old.id, old.username, old.real_name, old.phone, old.email,
+                          old.notes, old.groups, old.forum, old.extra_info, old.private_notes);
+                END;
+                CREATE TRIGGER nicks_fts_au AFTER UPDATE ON nicks BEGIN
+                  INSERT INTO nicks_fts(nicks_fts, rowid, {fts_cols})
+                  VALUES ('delete', old.id, old.username, old.real_name, old.phone, old.email,
+                          old.notes, old.groups, old.forum, old.extra_info, old.private_notes);
+                  INSERT INTO nicks_fts(rowid, {fts_cols})
+                  VALUES (new.id, new.username, new.real_name, new.phone, new.email,
+                          new.notes, new.groups, new.forum, new.extra_info, new.private_notes);
+                END;
+            """)
+            # מילוי חד-פעמי מהנתונים הקיימים בטבלה
+            conn.execute("INSERT INTO nicks_fts(nicks_fts) VALUES('rebuild')")
+            FTS_AVAILABLE = True
+        except sqlite3.OperationalError:
+            FTS_AVAILABLE = False
+
+def _fts_match_query(search):
+    """הופך מחרוזת חיפוש חופשית לביטוי MATCH בטוח (כל מילה כ-prefix, AND בין מילים)"""
+    tokens = [t for t in search.strip().split() if t]
+    if not tokens:
+        return None
+    parts = []
+    for t in tokens:
+        safe = t.replace('"', '""')
+        parts.append(f'"{safe}"*')
+    return " ".join(parts)
 
 def _migrate():
     """הוסף עמודות חסרות ל-DB ישן"""
@@ -274,7 +346,11 @@ def delete_forum(forum_id, move_to_general=True):
         conn.execute("DELETE FROM forums WHERE id=?", (forum_id,))
 
 # ── ניקים ────────────────────────────────────────────────────────────
-def get_all_nicks(search=""):
+def get_all_nicks(search="", limit=None, offset=0):
+    """
+    מחזיר dict: {"rows": [...], "total": N}.
+    limit=None (ברירת מחדל) מחזיר הכל, לתאימות אחורה עם קריאות ישנות.
+    """
     with get_connection() as conn:
         base_select = """
             SELECT n.*,
@@ -286,19 +362,46 @@ def get_all_nicks(search=""):
                 (SELECT COUNT(*) FROM nick_contacts ct WHERE ct.nick_id=n.id) as extra_contacts
             FROM nicks n
         """
-        if search:
+        order_clause = "ORDER BY has_info DESC, n.trust_level DESC, n.updated_at DESC"
+        limit_clause = ""
+        params_extra = []
+        if limit is not None:
+            limit_clause = "LIMIT ? OFFSET ?"
+            params_extra = [limit, offset]
+
+        match_expr = _fts_match_query(search) if search else None
+
+        if match_expr and FTS_AVAILABLE:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM nicks_fts WHERE nicks_fts MATCH ?", (match_expr,)
+            ).fetchone()[0]
+            rows = conn.execute(
+                base_select + f"""
+                WHERE n.id IN (SELECT rowid FROM nicks_fts WHERE nicks_fts MATCH ?)
+                {order_clause} {limit_clause}
+            """, [match_expr] + params_extra).fetchall()
+        elif search:
+            # נפילה חזרה לחיפוש LIKE (למקרה שאין תמיכת FTS5 בסביבה)
             s = f"%{search}%"
-            rows = conn.execute(base_select + """
+            where = """
                 WHERE n.username LIKE ? OR n.real_name LIKE ? OR n.phone LIKE ?
                    OR n.email LIKE ? OR n.notes LIKE ? OR n.groups LIKE ?
                    OR n.forum LIKE ? OR n.extra_info LIKE ? OR n.private_notes LIKE ?
-                ORDER BY has_info DESC, n.trust_level DESC, n.updated_at DESC
-            """, (s,)*9).fetchall()
-        else:
-            rows = conn.execute(base_select +
-                "ORDER BY has_info DESC, n.trust_level DESC, n.updated_at DESC"
+            """
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM nicks n {where}", (s,) * 9
+            ).fetchone()[0]
+            rows = conn.execute(
+                base_select + where + f" {order_clause} {limit_clause}",
+                (s,) * 9 + tuple(params_extra)
             ).fetchall()
-        return [dict(r) for r in rows]
+        else:
+            total = conn.execute("SELECT COUNT(*) FROM nicks").fetchone()[0]
+            rows = conn.execute(
+                base_select + f"{order_clause} {limit_clause}", params_extra
+            ).fetchall()
+
+        return {"rows": [dict(r) for r in rows], "total": total}
 
 def get_nick(nick_id):
     with get_connection() as conn:
@@ -327,6 +430,16 @@ def update_nick(nick_id, data):
 def delete_nick(nick_id):
     with get_connection() as conn:
         conn.execute("DELETE FROM nicks WHERE id=?", (nick_id,))
+
+def delete_nicks(nick_ids):
+    """מחיקה מרובה — מוחק בפועל את הניקים שנבחרו (לא רק מרוקן עמודות)"""
+    ids = [int(i) for i in (nick_ids or [])]
+    if not ids:
+        return 0
+    with get_connection() as conn:
+        ph = ",".join(["?"] * len(ids))
+        cur = conn.execute(f"DELETE FROM nicks WHERE id IN ({ph})", ids)
+        return cur.rowcount
 
 def reset_all():
     with get_connection() as conn:

@@ -24,7 +24,7 @@ import database as db
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.2.5"
+APP_VERSION = "0.2.6"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -96,8 +96,13 @@ class API:
     """כל method כאן זמינה ב-JS כ: window.pywebview.api.method_name()"""
 
     # ── ניקים ──────────────────────────────────────────────────────
-    def get_nicks(self, search=""):
-        return db.get_all_nicks(search)
+    def get_nicks(self, search="", offset=0, limit=500):
+        """
+        מחזיר {"rows":[...], "total": N}. עמוד ברירת מחדל של 500 שורות —
+        מונע קריסת ממשק כשיש עשרות אלפי ניקים. limit=0/None מחזיר הכל.
+        """
+        lim = None if not limit else int(limit)
+        return db.get_all_nicks(search or "", limit=lim, offset=int(offset or 0))
 
     def get_nick(self, nick_id):
         nick = db.get_nick(int(nick_id))
@@ -127,6 +132,11 @@ class API:
     def delete_nick(self, nick_id):
         db.delete_nick(int(nick_id))
         return {"ok": True}
+
+    def delete_nicks(self, nick_ids):
+        """מחיקה מרובה בפועל — מוחקת את הניקים הנבחרים (לא מרוקנת עמודות בלבד)"""
+        n = db.delete_nicks(nick_ids or [])
+        return {"ok": True, "count": n}
 
     def reset_all(self):
         db.reset_all()

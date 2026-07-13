@@ -10,6 +10,15 @@ const S = {
   searchTimer: null,
   sortCol:     'has_info',
   sortDir:     -1,
+  // עימוד
+  offset:      0,
+  total:       0,
+  pageSize:    500,
+  currentSearch: '',
+  // הגנה מפני תשובות חיפוש שמגיעות מאוחר מדי (race condition)
+  loadToken:   0,
+  // בחירה מרובה למחיקה בפועל
+  multiSelected: new Set(),
 };
 
 // ══ COLUMNS ══════════════════════════════════════════════════════════
@@ -316,6 +325,16 @@ async function loadForums() {
 function buildTableHeader() {
   const tr = document.getElementById('thead-row');
   tr.innerHTML = '';
+
+  const thSel = document.createElement('th');
+  thSel.style.width = '34px';
+  thSel.innerHTML = `<input type="checkbox" id="select-all-cb" title="בחר הכל">`;
+  tr.appendChild(thSel);
+  thSel.querySelector('input').onclick = e => {
+    e.stopPropagation();
+    toggleSelectAll(e.target.checked);
+  };
+
   const hidden = hiddenColsSet();
   COLS.forEach(col => {
     if (hidden.has(col.key)) return;
@@ -328,11 +347,46 @@ function buildTableHeader() {
   });
 }
 
-async function loadNicks(search = '') {
-  const res = await api('get_nicks', search);
-  S.nicks = Array.isArray(res) ? res : [];
+async function loadNicks(search = '', { reset = true } = {}) {
+  // טוקן ייחודי לבקשה הזו — אם עד שהיא חוזרת כבר יצאה בקשה חדשה יותר
+  // (חיפוש נוסף, מחיקה, וכו'), מתעלמים מהתוצאה המיושנת. זה מונע מצב
+  // שבו ניק שכבר נמחק "קופץ בחזרה" רגע לפני שנעלם, בעיקר בתצוגת כרטיסים.
+  const myToken = ++S.loadToken;
+
+  if (reset) {
+    S.offset = 0;
+    S.currentSearch = search;
+    S.multiSelected.clear();
+  }
+
+  const res = await api('get_nicks', search, S.offset, S.pageSize);
+
+  if (myToken !== S.loadToken) return; // תשובה מיושנת — מתעלמים
+
+  const rows  = res && Array.isArray(res.rows) ? res.rows : (Array.isArray(res) ? res : []);
+  const total = res && typeof res.total === 'number' ? res.total : rows.length;
+
+  S.nicks = reset ? rows : S.nicks.concat(rows);
+  S.total = total;
+  S.offset = S.nicks.length;
+
   sortNicks();
   renderTable();
+  updateBulkBar();
+  updateLoadMoreControl();
+}
+
+async function loadMoreNicks() {
+  await loadNicks(S.currentSearch, { reset: false });
+}
+
+function updateLoadMoreControl() {
+  const wrap = document.getElementById('load-more-wrap');
+  if (!wrap) return;
+  const remaining = Math.max(0, S.total - S.nicks.length);
+  wrap.style.display = remaining > 0 ? '' : 'none';
+  const span = document.getElementById('load-more-remaining');
+  if (span) span.textContent = remaining;
 }
 
 function sortBy(col) {
@@ -377,6 +431,16 @@ function renderTable() {
     const tr = document.createElement('tr');
     tr.dataset.id = n.id;
     if (n.id === S.selectedId) tr.classList.add('selected');
+
+    const tdSel = document.createElement('td');
+    tdSel.innerHTML = `<input type="checkbox" class="row-select-cb">`;
+    const cb = tdSel.querySelector('input');
+    cb.checked = S.multiSelected.has(n.id);
+    cb.onclick = e => {
+      e.stopPropagation();
+      toggleRowSelected(n.id, e.target.checked);
+    };
+    tr.appendChild(tdSel);
 
     const hiddenCols = hiddenColsSet();
     COLS.forEach(col => {
@@ -599,6 +663,53 @@ async function deleteSelected() {
   toast('ניק נמחק', 'success');
 }
 
+// ══ בחירה מרובה + מחיקה בפועל ═══════════════════════════════════════════
+function toggleRowSelected(id, checked) {
+  if (checked) S.multiSelected.add(id);
+  else S.multiSelected.delete(id);
+  updateBulkBar();
+  // עדכן גם את הכרטיס המתאים אם קיים
+  const card = document.querySelector(`.nick-card[data-id="${id}"] .card-select-cb`);
+  if (card) card.checked = checked;
+  const row = document.querySelector(`tr[data-id="${id}"] .row-select-cb`);
+  if (row) row.checked = checked;
+}
+
+function toggleSelectAll(checked) {
+  if (checked) S.nicks.forEach(n => S.multiSelected.add(n.id));
+  else S.multiSelected.clear();
+  renderTable();
+  updateBulkBar();
+}
+
+function clearBulkSelection() {
+  S.multiSelected.clear();
+  renderTable();
+  updateBulkBar();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-actions-bar');
+  const cnt = document.getElementById('bulk-count');
+  if (!bar) return;
+  const n = S.multiSelected.size;
+  bar.style.display = n > 0 ? '' : 'none';
+  if (cnt) cnt.textContent = n;
+  const selAllCb = document.getElementById('select-all-cb');
+  if (selAllCb) selAllCb.checked = S.nicks.length > 0 && S.nicks.every(n2 => S.multiSelected.has(n2.id));
+}
+
+async function deleteBulkSelected() {
+  const ids = [...S.multiSelected];
+  if (!ids.length) return;
+  if (!confirm(`למחוק ${ids.length} ניקים שנבחרו? פעולה בלתי הפיכה!`)) return;
+  const res = await api('delete_nicks', ids);
+  S.multiSelected.clear();
+  S.selectedId = null;
+  await loadNicks(document.getElementById('search-input').value);
+  toast(`${res?.count ?? ids.length} ניקים נמחקו`, 'success');
+}
+
 // ══ SEARCH ════════════════════════════════════════════════════════════
 function onSearch(val) {
   clearTimeout(S.searchTimer);
@@ -607,7 +718,7 @@ function onSearch(val) {
 
 // ══ STATS ═════════════════════════════════════════════════════════════
 function updateStats() {
-  document.getElementById('stat-total').textContent = S.nicks.length;
+  document.getElementById('stat-total').textContent = S.total || S.nicks.length;
   document.getElementById('stat-info').textContent  =
     S.nicks.filter(n => n.has_info).length;
 }
@@ -1831,6 +1942,8 @@ function renderCards() {
 
     card.innerHTML = `
       <div class="card-head">
+        <input type="checkbox" class="card-select-cb" style="margin-left:4px"
+               ${S.multiSelected.has(n.id) ? 'checked' : ''}>
         ${avatarHtml}
         <div class="card-titles">
           <div class="card-username">${esc(n.username)}${n.conflict_count ? ' ⚠️' : ''}</div>
@@ -1855,6 +1968,10 @@ function renderCards() {
     };
     card.querySelector('[data-act="edit"]').onclick = e => {
       e.stopPropagation(); openNickDialog(n.id);
+    };
+    card.querySelector('.card-select-cb').onclick = e => {
+      e.stopPropagation();
+      toggleRowSelected(n.id, e.target.checked);
     };
     card.onclick    = e => selectRow(n.id, e);
     card.ondblclick = () => openNickDialog(n.id);
