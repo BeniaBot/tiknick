@@ -1180,7 +1180,9 @@ function pickTag(e, username) {
   const ta = _tagField;
   if (!ta) return;
   const pos = ta.selectionStart;
-  const before = ta.value.slice(0, pos).replace(/@[^\s@]*$/, '@' + username + ' ');
+  // רווחים → קו תחתון, כדי שהתיוג יישאר מילה אחת ולא יישבר על רווח
+  const tagText = '@' + username.replace(/\s+/g, '_') + ' ';
+  const before = ta.value.slice(0, pos).replace(/@[^\s@]*$/, tagText);
   const after = ta.value.slice(pos);
   ta.value = before + after;
   ta.focus();
@@ -1199,15 +1201,17 @@ document.addEventListener('click', (e) => {
 function renderTaggedText(text) {
   if (!text) return '';
   // מפצל טקסט ל-@תיוגים לחיצים ושאר טקסט (בטוח מפני HTML)
-  const parts = String(text).split(/(@[^\s@]{1,30})/g);
+  const parts = String(text).split(/(@[^\s@]{1,40})/g);
   return parts.map(p => {
-    const m = p.match(/^@([^\s@]{1,30})$/);
+    const m = p.match(/^@([^\s@]{1,40})$/);
     if (m) {
-      const uname = m[1];
+      const raw = m[1];                      // עם קווים תחתונים
+      const display = raw.replace(/_/g, ' '); // תצוגה עם רווחים
+      const safeRaw = esc(raw).replace(/'/g,"\\'");
       return `<span class="nick-tag" style="color:var(--accent);cursor:pointer;font-weight:600"
-                onclick="goToTag(event,'${esc(uname).replace(/'/g,"\\'")}')"
-                onmouseenter="tagHover(event,'${esc(uname).replace(/'/g,"\\'")}')"
-                onmouseleave="hideTooltip()">@${esc(uname)}</span>`;
+                onclick="goToTag(event,'${safeRaw}')"
+                onmouseenter="tagHover(event,'${safeRaw}')"
+                onmouseleave="hideTooltip()">@${esc(display)}</span>`;
     }
     return esc(p);
   }).join('');
@@ -1215,26 +1219,28 @@ function renderTaggedText(text) {
 
 async function goToTag(e, username) {
   e.stopPropagation();
-  const n = await api('resolve_tag', username);
+  const real = username.replace(/_/g, ' ');
+  const n = await api('resolve_tag', real);
   if (n && n.id) {
     closeModal();
     openNickDialog(n.id);
   } else {
-    toast(`לא נמצא ניק בשם @${username}`, 'error');
+    toast(`לא נמצא ניק בשם @${real}`, 'error');
   }
 }
 
 async function tagHover(e, username) {
-  const n = await api('resolve_tag', username);
+  const real = username.replace(/_/g, ' ');
+  const n = await api('resolve_tag', real);
   if (n && n.id) {
     const full = await api('get_nick', n.id);
     const bits = [];
     if (full.real_name) bits.push('שם: ' + esc(full.real_name));
     if (full.phone)     bits.push('טלפון: ' + esc(full.phone));
-    showTooltip(e, `<b>@${esc(username)}</b> <span style="opacity:.6">[${esc(n.forum)}]</span>` +
+    showTooltip(e, `<b>@${esc(real)}</b> <span style="opacity:.6">[${esc(n.forum)}]</span>` +
       (bits.length ? '<br>' + bits.join('<br>') : ''));
   } else {
-    showTooltip(e, `<span style="opacity:.7">@${esc(username)} — לא נמצא</span>`);
+    showTooltip(e, `<span style="opacity:.7">@${esc(real)} — לא נמצא</span>`);
   }
 }
 
@@ -2579,19 +2585,19 @@ function buildCardElement(n) {
     const cf = n.conflict_fields ? String(n.conflict_fields).split(',') : [];
     const has = k => cf.includes(k);
     const rows = [];
-    if (n.real_name)  rows.push(cardRow('👤', n.real_name, false, has('real_name')));
-    if (n.full_name)  rows.push(cardRow('📛', n.full_name, false, has('full_name')));
-    if (n.phone)      rows.push(cardRow('📞', n.phone + (n.extra_contacts ? ' ❕' : ''), false, has('phone')));
-    if (n.email)      rows.push(cardRow('📧', n.email, false, has('email')));
-    if (n.address)    rows.push(cardRow('📍', n.address, false, has('address')));
-    if (n.groups)     rows.push(cardRow('🏷️', n.groups, false, has('groups')));
+    if (n.real_name)  rows.push(cardRow('👤', n.real_name, false, has('real_name'), 'real_name'));
+    if (n.full_name)  rows.push(cardRow('📛', n.full_name, false, has('full_name'), 'full_name'));
+    if (n.phone)      rows.push(cardRow('📞', n.phone + (n.extra_contacts ? ' ❕' : ''), false, has('phone'), 'phone'));
+    if (n.email)      rows.push(cardRow('📧', n.email, false, has('email'), 'email'));
+    if (n.address)    rows.push(cardRow('📍', n.address, false, has('address'), 'address'));
+    if (n.groups)     rows.push(cardRow('🏷️', n.groups, false, has('groups'), 'groups'));
     if (n.reputation) rows.push(cardRow('⭐', String(n.reputation)));
-    if (n.status)     rows.push(cardRow('🔵', n.status, false, has('status')));
-    if (n.join_date)  rows.push(cardRow('📅', n.join_date, false, has('join_date')));
+    if (n.status)     rows.push(cardRow('🔵', n.status, false, has('status'), 'status'));
+    if (n.join_date)  rows.push(cardRow('📅', n.join_date, false, has('join_date'), 'join_date'));
     if (n.post_count) rows.push(cardRow('✍️', String(n.post_count)));
-    if (n.notes)      rows.push(cardRow('📝', n.notes, false, has('notes')));
-    if (n.extra_info) rows.push(cardRow('ℹ️', n.extra_info, false, has('extra_info')));
-    if (n.private_notes) rows.push(cardRow('🔒', n.private_notes, true));
+    if (n.notes)      rows.push(cardRow('📝', n.notes, false, has('notes'), 'notes'));
+    if (n.extra_info) rows.push(cardRow('ℹ️', n.extra_info, false, has('extra_info'), 'extra_info'));
+    if (n.private_notes) rows.push(cardRow('🔒', n.private_notes, true, false, 'private_notes'));
 
     const bodyHtml = rows.length
       ? `<div class="card-body">${rows.join('')}</div>`
@@ -2608,10 +2614,9 @@ function buildCardElement(n) {
         </div>
       </div>
       ${bodyHtml}
-      ${n.notes ? `<div class="card-notes">${esc(n.notes)}</div>` : ''}
       <div class="card-footer">
         <span class="card-badge ${stCls}">● ${esc(st)}</span>
-        ${n.has_identity ? '<span class="card-badge" style="background:var(--accent-soft);color:var(--accent-2)">👤 זהות</span>' : ''}
+        ${n.has_identity ? '<span class="card-badge card-identity-badge" style="background:var(--accent-soft);color:var(--accent-2);cursor:help">👤 זהות</span>' : ''}
         <span style="flex:1"></span>
         <button class="card-action-btn" title="פתח פרופיל בפורום"
                 data-act="profile" data-id="${n.id}">🔗</button>
@@ -2630,16 +2635,32 @@ function buildCardElement(n) {
       e.stopPropagation();
       toggleRowSelected(n.id, e.target.checked);
     };
+    // wire identity badge hover
+    const idBadge = card.querySelector('.card-identity-badge');
+    if (idBadge) {
+      idBadge.onmouseenter = e => showIdentityTooltip(e, n.id);
+      idBadge.onmouseleave = hideTooltip;
+      idBadge.onclick = e => { e.stopPropagation(); openNickDialog(n.id); };
+    }
+    // wire conflict marks (per field)
+    card.querySelectorAll('.card-conflict-mark').forEach(mk => {
+      const fld = mk.dataset.field;
+      mk.onmouseenter = e => showFieldSourcesTooltip(e, n.id, fld);
+      mk.onmouseleave = hideTooltip;
+    });
     card.onclick    = e => selectRow(n.id, e);
     card.ondblclick = () => openNickDialog(n.id);
     return card;
 }
 
-function cardRow(icon, val, isPrivate, conflictMark) {
+function cardRow(icon, val, isPrivate, conflictMark, fieldKey) {
   const valHtml = String(val).includes('@') ? renderTaggedText(val) : esc(val);
+  const markHtml = conflictMark
+    ? ` <span class="card-conflict-mark" data-field="${esc(fieldKey||'')}" style="cursor:help">❗</span>`
+    : '';
   return `<div class="card-row${isPrivate ? ' private' : ''}">
     <span class="ci">${icon}</span>
-    <span class="cv">${valHtml}${conflictMark ? ' <span style="cursor:help" title="מידע סותר ממקורות שונים">❗</span>' : ''}</span>
+    <span class="cv">${valHtml}${markHtml}</span>
   </div>`;
 }
 
