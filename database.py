@@ -921,7 +921,9 @@ def update_source(source_id, name=None, notes=None, trust=None, absolute=None):
     if name is not None:     sets.append("name=?");     vals.append(name)
     if notes is not None:    sets.append("notes=?");    vals.append(notes)
     if trust is not None:    sets.append("trust=?");    vals.append(max(1, min(10, int(trust))))
-    if absolute is not None: sets.append("absolute=?"); vals.append(1 if absolute else 0)
+    # אבסולוטי מותר רק על מקור "אני" (id=1)
+    if absolute is not None and int(source_id) == 1:
+        sets.append("absolute=?"); vals.append(1 if absolute else 0)
     if not sets:
         return
     vals.append(source_id)
@@ -1082,7 +1084,7 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
     mapping = forum_mapping or {}
     trust = get_my_trust() if import_trust is None else max(1, min(10, int(import_trust)))
     src_name = import_name or source_info
-    import_sid = create_import_source(src_name, import_notes, trust, import_absolute)
+    import_sid = create_import_source(src_name, import_notes, trust, 0)
 
     with get_connection() as conn:
         existing_forums = {row[0] for row in conn.execute("SELECT name FROM forums")}

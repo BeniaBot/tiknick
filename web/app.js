@@ -322,6 +322,15 @@ async function refreshAboutUpdate() {
 }
 
 // ══ FORUMS ════════════════════════════════════════════════════════════
+async function refreshFromLogo() {
+  const logo = document.querySelector('.sidebar-logo .logo-mark');
+  if (logo) { logo.style.transition = 'transform .5s'; logo.style.transform = 'rotate(360deg)'; }
+  await loadForums();
+  await loadNicks(document.getElementById('search-input').value);
+  toast('רוענן ✓', 'success');
+  setTimeout(() => { if (logo) { logo.style.transition=''; logo.style.transform=''; } }, 500);
+}
+
 async function loadForums() {
   const res = await api('get_forums');
   S.forums = Array.isArray(res) ? res : [];
@@ -1442,8 +1451,13 @@ async function onSrcTrust(sid, val) {
 }
 async function onSrcAbsolute(sid, checked) {
   await api('update_source', sid, null, null, null, checked);
-  const wrap = document.querySelector(`.sync-item[data-sid="${sid}"] .src-trust`);
-  if (wrap) { wrap.disabled = checked; wrap.parentElement.style.opacity = checked ? '.4' : '1'; }
+  const row = document.querySelector(`.sync-item[data-sid="${sid}"]`);
+  if (row) {
+    const slider = row.querySelector('.src-trust');
+    const wrap = row.querySelector('.src-trust-wrap');
+    if (slider) slider.disabled = checked;
+    if (wrap) wrap.style.opacity = checked ? '.4' : '1';
+  }
   await loadNicks(document.getElementById('search-input').value);
 }
 async function onSrcDelete(sid) {
@@ -1528,15 +1542,18 @@ async function openSyncMgr() {
         ${kindLabel(s.kind)} ${s.kind==='import'||s.kind==='scrape'?`— ${esc(s.name)}`:''}
         ${s.notes?`<span style="font-size:10px;opacity:.6">(${esc(s.notes)})</span>`:''}
       </span>
-      <label style="font-size:12px;display:flex;align-items:center;gap:5px">
-        <input type="checkbox" class="src-abs" ${s.absolute?'checked':''}
-               onchange="onSrcAbsolute(${s.id}, this.checked)">
-        אבסולוטי
-      </label>
-      <span style="display:flex;align-items:center;gap:6px" class="src-trust-wrap" style="${s.absolute?'opacity:.4':''}">
+      ${s.kind==='me' ? `
+        <label class="toggle" title="תמיד מנצח, ללא תלות באמינות">
+          <input type="checkbox" class="src-abs" ${s.absolute?'checked':''}
+                 onchange="onSrcAbsolute(${s.id}, this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+        <span style="font-size:12px">אבסולוטי</span>` : ''}
+      <span style="display:flex;align-items:center;gap:6px" class="src-trust-wrap"
+            style="${s.kind==='me' && s.absolute?'opacity:.4':''}">
         אמינות <b class="src-tval" id="stv-${s.id}">${s.trust}</b>
         <input type="range" min="1" max="10" value="${s.trust}" class="src-trust" style="width:90px"
-               ${s.absolute?'disabled':''}
+               ${s.kind==='me' && s.absolute?'disabled':''}
                oninput="document.getElementById('stv-${s.id}').textContent=this.value"
                onchange="onSrcTrust(${s.id}, this.value)">
       </span>
@@ -1545,7 +1562,8 @@ async function openSyncMgr() {
   const sec4 = `
     <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
       כל מידע משויך למקור ("אב"). בכל שדה — הערך מהמקור בעל האמינות הגבוהה מוצג.
-      שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד. "אבסולוטי" = תמיד מנצח.
+      שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד.
+      "אבסולוטי" (רק ל"אני") = תמיד מנצח. את התנהגות הסריקה מנהלים בלשונית "התנגשויות אינטרנט".
     </p>
     <div class="sync-list">${srcRows}</div>`;
 
@@ -1591,9 +1609,9 @@ async function openSyncMgr() {
       const chosen = document.querySelector('input[name="cpolicy"]:checked');
       if (chosen) await api('set_conflict_policy', chosen.value);
       toast('הגדרות סנכרון נשמרו ✓', 'success');
-      closeModal();
+      // לא סוגר — סגירה דרך כפתור "סגור"
     }},
-    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
 }
 
