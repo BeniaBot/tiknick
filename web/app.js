@@ -799,7 +799,8 @@ async function openNickDialog(nickId = null) {
   const identitiesHtml = nick ? renderIdentitiesSection(nick) : '';
   // conflicts HTML
   const conflictsHtml = nick?.conflicts?.length ? renderConflictsSection(nick.conflicts) : '';
-  const shelvedHtml = nick?.shelved?.length ? renderShelvedSection(nick.shelved) : '';
+  const shelvedHtml = (nick?.field_sources && Object.keys(nick.field_sources).length)
+    ? renderFieldSourcesSection(nick.field_sources) : '';
 
   const html = `
     <div class="form-grid">
@@ -1148,33 +1149,35 @@ async function resolveConflict(conflictId) {
   await loadNicks(document.getElementById('search-input').value);
 }
 
-function renderShelvedSection(shelved) {
+function renderFieldSourcesSection(fieldSources) {
   const fieldLabel = k => (COLS.find(c => c.key===k)?.label) || k;
-  return `
-    <div class="section-hdr" style="color:var(--subtext)">⚠️ מידע סותר מייבוא אחר (נשמר בצד)</div>
-    <p style="font-size:11.5px;color:var(--subtext);margin-bottom:8px">
-      ערכים אלו הוכרעו לרעתם לפי דירוג אמינות, אך נשמרו. אפשר לקדם ערך שמור לערך הפעיל.
-    </p>
-    ${shelved.map(s => `
-      <div class="conflict-item" style="display:flex;gap:8px;align-items:center;justify-content:space-between">
-        <div>
-          <div><span class="conflict-field">${esc(fieldLabel(s.field_name))}: </span>
-               <span class="conflict-val">${esc(s.value)}</span>
-               <span title="ממקור: ${esc(s.source_name)} (אמינות ${s.source_trust}/10)" style="cursor:help">⚠️</span>
-          </div>
-          <div class="conflict-src">מקור: ${esc(s.source_name)} · אמינות ${s.source_trust}/10</div>
+  const srcKind = s => s.kind==='me' ? '👤 אני' : s.kind==='scrape' ? '🌐 סריקה' : `📥 ${esc(s.name)}`;
+  const blocks = Object.entries(fieldSources).map(([field, srcs]) => {
+    // srcs כבר ממוין: absolute תחילה, ואז trust יורד → הראשון הוא המנצח
+    const winner = srcs[0];
+    const others = srcs.slice(1);
+    return `
+      <div class="conflict-item" style="display:block">
+        <div style="font-weight:700;font-size:12.5px;margin-bottom:4px">
+          ${esc(fieldLabel(field))}
+          <span title="מידע סותר מכמה מקורות" style="cursor:help">⚠️</span>
         </div>
-        <button class="btn btn-sm btn-ghost" onclick="promoteShelved(${s.id})">↑ קדם לפעיל</button>
-      </div>`).join('')}`;
-}
-
-async function promoteShelved(shelvedId) {
-  await api('promote_shelved', shelvedId);
-  const nickId = S.selectedId;
-  closeModal();
-  await loadNicks(document.getElementById('search-input').value);
-  if (nickId) openNickDialog(nickId);
-  toast('הערך קודם לפעיל ✓', 'success');
+        <div style="font-size:12.5px;margin-bottom:3px">
+          <span style="color:var(--success)">▸ מוצג:</span> ${esc(winner.value)}
+          <span style="color:var(--subtext);font-size:11px"> (${srcKind(winner)}${winner.absolute?', אבסולוטי':`, אמינות ${winner.trust}`})</span>
+        </div>
+        ${others.map(o => `
+          <div style="font-size:12px;color:var(--subtext);padding-right:14px">
+            ◦ ${esc(o.value)} <span style="font-size:11px">(${srcKind(o)}${o.absolute?', אבסולוטי':`, אמינות ${o.trust}`})</span>
+          </div>`).join('')}
+      </div>`;
+  }).join('');
+  return `
+    <div class="section-hdr" style="color:var(--subtext)">⚠️ מידע לפי מקור (אבות)</div>
+    <p style="font-size:11.5px;color:var(--subtext);margin-bottom:8px">
+      שדות עם יותר ממקור אחד. המוצג נבחר לפי האמינות הגבוהה. שינוי אמינות מקור בהגדרות סנכרון ישנה את המוצג.
+    </p>
+    ${blocks}`;
 }
 
 async function saveNick(nickId) {
@@ -1411,13 +1414,33 @@ async function openForumMgr() {
 }
 
 // ══ SYNC MANAGER ══════════════════════════════════════════════════════
+async function onSrcTrust(sid, val) {
+  await api('update_source', sid, null, null, parseInt(val), null);
+  await loadNicks(document.getElementById('search-input').value);
+}
+async function onSrcAbsolute(sid, checked) {
+  await api('update_source', sid, null, null, null, checked);
+  const wrap = document.querySelector(`.sync-item[data-sid="${sid}"] .src-trust`);
+  if (wrap) { wrap.disabled = checked; wrap.parentElement.style.opacity = checked ? '.4' : '1'; }
+  await loadNicks(document.getElementById('search-input').value);
+}
+async function onSrcDelete(sid) {
+  if (!confirm('למחוק את המקור הזה? כל הערכים שהגיעו ממנו יימחקו, והנתונים ייפלו לערך הבא לפי אמינות.')) return;
+  const r = await api('delete_source', sid);
+  if (r?.ok) {
+    document.querySelector(`.sync-item[data-sid="${sid}"]`)?.remove();
+    await loadNicks(document.getElementById('search-input').value);
+    toast('המקור נמחק, הנתונים עודכנו ✓', 'success');
+  }
+}
+
 async function openSyncMgr() {
   const fields   = await api('get_all_nick_fields');
   const sync     = await api('get_sync_settings');
   const forumIo  = await api('get_forum_io_flags') || {};
   const policy   = await api('get_conflict_policy') || 'ask';
   const myTrust  = await api('get_my_trust') ?? 10;
-  const impLog   = await api('get_import_sources') || [];
+  const sources  = await api('get_sources') || [];
 
   // ── סעיף 1: עמודות לייבוא/ייצוא בקובץ ──
   const sec1 = `
@@ -1475,46 +1498,41 @@ async function openSyncMgr() {
     ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
     ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}`;
 
-  // ── סעיף 4: אמינות ולוג ייבואים ──
-  const logRows = impLog.length ? impLog.map(s => `
-    <tr>
-      <td style="padding:6px 8px">${esc(s.name)}</td>
-      <td style="padding:6px 8px;text-align:center">${s.trust}/10</td>
-      <td style="padding:6px 8px;text-align:center">${s.nick_count}</td>
-      <td style="padding:6px 8px;text-align:center">${s.conflict_count}</td>
-      <td style="padding:6px 8px;font-size:11px;color:var(--subtext)">${esc((s.created_at||'').slice(0,16))}</td>
-    </tr>${s.notes ? `<tr><td colspan="5" style="padding:2px 8px 8px;font-size:11px;color:var(--subtext)">📝 ${esc(s.notes)}</td></tr>`:''}`).join('')
-    : `<tr><td colspan="5" style="padding:14px;text-align:center;color:var(--subtext)">עדיין לא בוצעו ייבואים</td></tr>`;
+  // ── סעיף 4: ניהול מקורות ("אבות") ──
+  const kindLabel = k => k==='me' ? '👤 אני' : k==='scrape' ? '🌐 סריקת אינטרנט' : '📥 ייבוא';
+  const srcRows = sources.map(s => `
+    <div class="sync-item" data-sid="${s.id}" style="flex-wrap:wrap;gap:8px">
+      <span class="sync-label" style="min-width:150px">
+        ${kindLabel(s.kind)} ${s.kind==='import'||s.kind==='scrape'?`— ${esc(s.name)}`:''}
+        ${s.notes?`<span style="font-size:10px;opacity:.6">(${esc(s.notes)})</span>`:''}
+      </span>
+      <label style="font-size:12px;display:flex;align-items:center;gap:5px">
+        <input type="checkbox" class="src-abs" ${s.absolute?'checked':''}
+               onchange="onSrcAbsolute(${s.id}, this.checked)">
+        אבסולוטי
+      </label>
+      <span style="display:flex;align-items:center;gap:6px" class="src-trust-wrap" style="${s.absolute?'opacity:.4':''}">
+        אמינות <b class="src-tval" id="stv-${s.id}">${s.trust}</b>
+        <input type="range" min="1" max="10" value="${s.trust}" class="src-trust" style="width:90px"
+               ${s.absolute?'disabled':''}
+               oninput="document.getElementById('stv-${s.id}').textContent=this.value"
+               onchange="onSrcTrust(${s.id}, this.value)">
+      </span>
+      ${s.id!==1 ? `<button class="btn btn-sm btn-ghost" onclick="onSrcDelete(${s.id})" title="מחק מקור">🗑️</button>` : ''}
+    </div>`).join('');
   const sec4 = `
-    <div class="section-hdr">דרגת האמינות שלי</div>
-    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
-      האמינות של המידע שאתה מזין ידנית ושנסרק על ידך. בהתנגשות בייבוא — מקור עם אמינות
-      גבוהה יותר משלך ידרוס; אחרת שלך נשמר.
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
+      כל מידע משויך למקור ("אב"). בכל שדה — הערך מהמקור בעל האמינות הגבוהה מוצג.
+      שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד. "אבסולוטי" = תמיד מנצח.
     </p>
-    <label class="form-label">האמינות שלי: <b id="mytrust-val">${myTrust}</b> / 10</label>
-    <input type="range" min="1" max="10" value="${myTrust}" id="mytrust" style="width:100%"
-           oninput="document.getElementById('mytrust-val').textContent=this.value">
-
-    <div class="section-hdr" style="margin-top:22px">לוג ייבואים</div>
-    <div style="max-height:240px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:8px">
-      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
-        <thead><tr style="background:var(--card2)">
-          <th style="padding:7px 8px;text-align:right">מקור</th>
-          <th style="padding:7px 8px">אמינות</th>
-          <th style="padding:7px 8px">ניקים</th>
-          <th style="padding:7px 8px">התנגשויות</th>
-          <th style="padding:7px 8px;text-align:right">תאריך</th>
-        </tr></thead>
-        <tbody>${logRows}</tbody>
-      </table>
-    </div>`;
+    <div class="sync-list">${srcRows}</div>`;
 
   const html = `
     <div class="tab-bar" style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--border-soft);flex-wrap:wrap">
       <button class="tab-btn active" data-tab="s1" onclick="switchSyncTab('s1')">📄 עמודות בקובץ</button>
       <button class="tab-btn" data-tab="s2" onclick="switchSyncTab('s2')">🏛️ פורומים</button>
       <button class="tab-btn" data-tab="s3" onclick="switchSyncTab('s3')">⚠️ התנגשויות אינטרנט</button>
-      <button class="tab-btn" data-tab="s4" onclick="switchSyncTab('s4')">🎖️ אמינות ולוג</button>
+      <button class="tab-btn" data-tab="s4" onclick="switchSyncTab('s4')">🎖️ מקורות</button>
     </div>
     <div id="tab-s1" class="sync-tab">${sec1}</div>
     <div id="tab-s2" class="sync-tab" style="display:none">${sec2}</div>
@@ -1550,9 +1568,6 @@ async function openSyncMgr() {
       // סעיף 3
       const chosen = document.querySelector('input[name="cpolicy"]:checked');
       if (chosen) await api('set_conflict_policy', chosen.value);
-      // סעיף 4
-      const mt = document.getElementById('mytrust');
-      if (mt) await api('set_my_trust', parseInt(mt.value) || 10);
       toast('הגדרות סנכרון נשמרו ✓', 'success');
       closeModal();
     }},

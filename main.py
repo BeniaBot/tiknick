@@ -36,7 +36,7 @@ _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.4.3"
+APP_VERSION = "0.5.0"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -125,6 +125,14 @@ class API:
         nick["conflicts"]  = db.get_conflicts(int(nick_id))
         nick["identities"] = db.get_identities(int(nick_id))
         nick["shelved"]    = db.get_shelved_values(int(nick_id))
+        # שדות שיש להם יותר ממקור אחד (מידע סותר/חלופי לפי אב)
+        multi = {}
+        for f in ["real_name","full_name","phone","email","address","groups",
+                  "status","join_date","post_count","notes","extra_info"]:
+            srcs = db.get_field_sources(int(nick_id), f)
+            if len(srcs) > 1:
+                multi[f] = srcs
+        nick["field_sources"] = multi
         return nick
 
     def create_nick(self, data):
@@ -516,6 +524,21 @@ class API:
 
     def promote_shelved(self, shelved_id):
         return {"ok": db.promote_shelved(int(shelved_id))}
+
+    # ── ניהול מקורות ("אבות") ──────────────────────────────────────
+    def get_sources(self):
+        return db.get_sources()
+
+    def update_source(self, source_id, name=None, notes=None, trust=None, absolute=None):
+        db.update_source(int(source_id), name=name, notes=notes,
+                         trust=trust, absolute=absolute)
+        return {"ok": True}
+
+    def delete_source(self, source_id):
+        return {"ok": db.delete_source(int(source_id))}
+
+    def get_field_sources(self, nick_id, field_name):
+        return db.get_field_sources(int(nick_id), field_name)
 
 
 if __name__ == "__main__":

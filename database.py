@@ -163,6 +163,31 @@ def init_db():
                 FOREIGN KEY (nick_id) REFERENCES nicks(id) ON DELETE CASCADE
             );
 
+            -- מקורות מידע ("אבות"): אני, סריקת אינטרנט, וכל ייבוא קובץ
+            CREATE TABLE IF NOT EXISTS sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL,            -- 'me' | 'scrape' | 'import'
+                name TEXT DEFAULT '',
+                notes TEXT DEFAULT '',
+                trust INTEGER DEFAULT 5,       -- 1..10 (מתעלמים אם absolute=1)
+                absolute INTEGER DEFAULT 0,    -- 1 = תמיד מנצח, בלי ערך מספרי
+                created_at TEXT DEFAULT (datetime('now'))
+            );
+
+            -- כל ערך שהגיע אי-פעם לכל שדה של כל ניק, עם המקור שלו.
+            -- הערך המוצג ב-nicks נגזר מכאן (הכי אמין מנצח).
+            CREATE TABLE IF NOT EXISTS field_values (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nick_id INTEGER NOT NULL,
+                field_name TEXT NOT NULL,
+                value TEXT NOT NULL,
+                source_id INTEGER NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (nick_id) REFERENCES nicks(id) ON DELETE CASCADE,
+                FOREIGN KEY (source_id) REFERENCES sources(id) ON DELETE CASCADE,
+                UNIQUE(nick_id, field_name, source_id)
+            );
+
             -- אינדקסים לביצועים (חיוני כשיש עשרות אלפי ניקים)
             CREATE INDEX IF NOT EXISTS idx_nicks_username    ON nicks(username);
             CREATE INDEX IF NOT EXISTS idx_nicks_forum       ON nicks(forum);
@@ -173,7 +198,13 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_identities_a      ON nick_identities(nick_id_a);
             CREATE INDEX IF NOT EXISTS idx_identities_b      ON nick_identities(nick_id_b);
             CREATE INDEX IF NOT EXISTS idx_shelved_nick_id   ON shelved_values(nick_id);
+            CREATE INDEX IF NOT EXISTS idx_fv_nick           ON field_values(nick_id);
+            CREATE INDEX IF NOT EXISTS idx_fv_source         ON field_values(source_id);
         """)
+        # מקור ברירת מחדל: "אני" (id יציב דרך kind='me')
+        conn.execute(
+            "INSERT OR IGNORE INTO sources (id, kind, name, trust, absolute) "
+            "VALUES (1, 'me', 'אני', 10, 0)")
         # "כללי" תמיד קיים — פורום ברירת המחדל לניקים לא משויכים
         conn.execute(
             "INSERT OR IGNORE INTO forums (name, color, url, sort_order) "
@@ -470,62 +501,39 @@ _SCRAPE_MERGE_FIELDS = ["groups", "reputation", "full_name", "email", "address",
 
 def merge_scraped_nick(forum, username, scraped, source_label="סריקה"):
     """
-    ממזג ניק שנסרק לתוך המאגר לפי המדיניות:
-      • ניק חדש → נוצר.
-      • שדה ריק בקיים + יש ערך בסריקה → מתמלא בשקט.
-      • שדה קיים עם ערך שונה → נרשם כ-nick_conflict לפתרון בממשק (לא דורס).
-    מחזיר: ('created'|'updated'|'unchanged', nick_id, conflicts_found:int)
+    ממזג ניק שנסרק — כל ערך נרשם תחת מקור 'סריקת אינטרנט' דרך מנוע המקורות.
+    הערך המנצח בכל שדה נקבע אוטומטית לפי אמינות (כולל הכללים המיוחדים
+    למוניטין ולסטטוס ב-resolve_field).
+    מחזיר: ('created'|'updated'|'unchanged', nick_id, 0)  — אין עוד "התנגשויות" ידניות בסריקה.
     """
     existing = find_nick(forum, username)
+    with get_connection() as conn:
+        srow = conn.execute("SELECT * FROM sources WHERE kind='scrape' LIMIT 1").fetchone()
+        if not srow:
+            conn.execute("INSERT INTO sources (kind,name,trust,absolute) VALUES ('scrape','סריקת אינטרנט',9,0)")
+            srow = conn.execute("SELECT * FROM sources WHERE kind='scrape' LIMIT 1").fetchone()
+        scrape_sid = srow["id"]
+
     if not existing:
-        data = {"forum": forum, "username": username, "source": source_label,
-                "trust_level": 4}
-        for f in _SCRAPE_MERGE_FIELDS:
-            if f in scraped and scraped[f] not in (None, ""):
-                data[f] = scraped[f]
-        # טביעת אצבע של הערכים הסרוקים — כדי לזהות בהמשך אם שונו ידנית
+        data = {"forum": forum, "username": username, "source": source_label, "trust_level": 4}
         data["scraped_email"] = scraped.get("email", "") or ""
         nid = create_nick(data)
+        action = "created"
+    else:
+        nid = existing["id"]
+        action = "unchanged"
+
+    changed = False
+    for f in _SCRAPE_MERGE_FIELDS:
+        new_val = scraped.get(f, "")
+        if new_val in (None, ""):
+            continue
+        record_field_value(nid, f, new_val, scrape_sid)
+        changed = True
+
+    if action == "created":
         return ("created", nid, 0)
-
-    nid = existing["id"]
-    fill = {}
-    conflicts = 0
-    with get_connection() as conn:
-        for f in _SCRAPE_MERGE_FIELDS:
-            new_val = scraped.get(f, "")
-            if new_val in (None, ""):
-                continue
-            # חריג מוניטין: תמיד להעדיף את החדש (משתנה כל הזמן), בלי התנגשות
-            if f == "reputation":
-                fill[f] = new_val
-                continue
-            old_val = existing.get(f, "")
-            if old_val in (None, ""):
-                fill[f] = new_val                      # מילוי שקט
-            elif str(old_val).strip() != str(new_val).strip():
-                # התנגשות — לא דורסים, רושמים לפתרון בממשק
-                exists_c = conn.execute(
-                    """SELECT 1 FROM nick_conflicts
-                       WHERE nick_id=? AND field_name=? AND conflicting_value=? LIMIT 1""",
-                    (nid, f, str(new_val))
-                ).fetchone()
-                if not exists_c:
-                    conn.execute(
-                        """INSERT INTO nick_conflicts
-                           (nick_id, field_name, conflicting_value, source_info, created_at)
-                           VALUES (?,?,?,?,datetime('now'))""",
-                        (nid, f, str(new_val), source_label)
-                    )
-                    conflicts += 1
-        if fill:
-            set_clause = ", ".join([f"{f}=?" for f in fill]) + ", updated_at=datetime('now')"
-            conn.execute(f"UPDATE nicks SET {set_clause} WHERE id=?",
-                         list(fill.values()) + [nid])
-
-    if fill or conflicts:
-        return ("updated", nid, conflicts)
-    return ("unchanged", nid, 0)
+    return ("updated" if changed else "unchanged", nid, 0)
 
 _NICK_FIELDS = ["forum","username","groups","reputation","real_name","full_name","phone","email",
                 "notes","private_notes","extra_info","address","status","join_date","post_count",
@@ -538,7 +546,15 @@ def create_nick(data):
     with get_connection() as conn:
         cur = conn.execute(
             f"INSERT INTO nicks ({','.join(_NICK_FIELDS)}) VALUES ({ph})", vals)
-        return cur.lastrowid
+        nid = cur.lastrowid
+    # רשום ערכים ידניים תחת מקור "אני" (source_id=1)
+    for f in _NICK_FIELDS:
+        if f in _NON_SOURCED:
+            continue
+        v = data.get(f, "")
+        if v not in (None, ""):
+            record_field_value(nid, f, v, 1)
+    return nid
 
 def update_nick(nick_id, data):
     upd_fields = [f for f in _NICK_FIELDS if f != "source"]
@@ -546,6 +562,19 @@ def update_nick(nick_id, data):
     vals = [data.get(f, '') for f in upd_fields] + [nick_id]
     with get_connection() as conn:
         conn.execute(f"UPDATE nicks SET {set_clause} WHERE id=?", vals)
+    # רשום ערכים ידניים תחת מקור "אני" (source_id=1); ערך ריק מוחק את התרומה שלי
+    for f in upd_fields:
+        if f in _NON_SOURCED:
+            continue
+        v = data.get(f, "")
+        if v not in (None, ""):
+            record_field_value(nick_id, f, v, 1)
+        else:
+            # ריקון ידני → הסר את הערך שלי מהמקור, ואז הכרע מחדש
+            with get_connection() as conn:
+                conn.execute("DELETE FROM field_values WHERE nick_id=? AND field_name=? AND source_id=1",
+                             (nick_id, f))
+            resolve_field(nick_id, f)
 
 def delete_nick(nick_id):
     with get_connection() as conn:
@@ -813,13 +842,163 @@ def set_my_trust(val):
     set_setting("my_trust", v)
     return v
 
+# ══ מנוע מקורות (source attribution) ═══════════════════════════════════
+# שדות שאינם מנוהלים דרך מקורות (מזהים/מבניים)
+_NON_SOURCED = {"forum", "username", "source", "trust_level",
+                "scraped_real_name", "scraped_email", "created_at", "updated_at"}
+# שדות בעלי כלל מיוחד:
+#   reputation → רק סריקה, והחדש תמיד מנצח
+#   status     → סריקה מקבלת אמינות מלאה (absolute-כמו)
+
+def _source_effective_trust(src):
+    """מחזיר ערך השוואה: absolute → אינסוף, אחרת trust המספרי."""
+    if src.get("absolute"):
+        return 10**6
+    return int(src.get("trust", 5))
+
+def get_me_source_id():
+    return 1  # מקור קבוע שנוצר ב-init
+
+def get_scrape_source(conn=None):
+    """מקור הסריקה — נוצר בפעם הראשונה. מחזיר dict."""
+    own = conn is None
+    if own: conn = get_connection().__enter__()
+    try:
+        row = conn.execute("SELECT * FROM sources WHERE kind='scrape' LIMIT 1").fetchone()
+        if not row:
+            conn.execute("INSERT INTO sources (kind,name,trust,absolute) VALUES ('scrape','סריקת אינטרנט',9,0)")
+            row = conn.execute("SELECT * FROM sources WHERE kind='scrape' LIMIT 1").fetchone()
+        return dict(row)
+    finally:
+        pass
+
+def create_import_source(name, notes, trust, absolute=0):
+    with get_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO sources (kind,name,notes,trust,absolute) VALUES ('import',?,?,?,?)",
+            (name or "ייבוא", notes or "", int(trust), 1 if absolute else 0))
+        return cur.lastrowid
+
+def get_sources():
+    with get_connection() as conn:
+        rows = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+def update_source(source_id, name=None, notes=None, trust=None, absolute=None):
+    sets, vals = [], []
+    if name is not None:     sets.append("name=?");     vals.append(name)
+    if notes is not None:    sets.append("notes=?");    vals.append(notes)
+    if trust is not None:    sets.append("trust=?");    vals.append(max(1, min(10, int(trust))))
+    if absolute is not None: sets.append("absolute=?"); vals.append(1 if absolute else 0)
+    if not sets:
+        return
+    vals.append(source_id)
+    affected = set()
+    with get_connection() as conn:
+        conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id=?", vals)
+        rows = conn.execute(
+            "SELECT DISTINCT nick_id, field_name FROM field_values WHERE source_id=?",
+            (source_id,)).fetchall()
+        affected = {(r[0], r[1]) for r in rows}
+    for nid, fld in affected:
+        resolve_field(nid, fld)
+
+def delete_source(source_id):
+    """מוחק מקור וכל הערכים שלו; מריץ הכרעה מחדש לשדות המושפעים."""
+    if source_id == 1:
+        return False  # לא מוחקים את "אני"
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT nick_id, field_name FROM field_values WHERE source_id=?",
+            (source_id,)).fetchall()
+        affected = {(r[0], r[1]) for r in rows}
+        conn.execute("DELETE FROM field_values WHERE source_id=?", (source_id,))
+        conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
+    for nid, fld in affected:
+        resolve_field(nid, fld)
+    return True
+
+def record_field_value(nick_id, field_name, value, source_id):
+    """רושם/מעדכן ערך של שדה ממקור מסוים, ואז מכריע מחדש מי מנצח."""
+    if field_name in _NON_SOURCED or value in (None, ""):
+        return
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO field_values (nick_id, field_name, value, source_id)
+            VALUES (?,?,?,?)
+            ON CONFLICT(nick_id, field_name, source_id)
+            DO UPDATE SET value=excluded.value, created_at=datetime('now')
+        """, (nick_id, field_name, str(value), source_id))
+    resolve_field(nick_id, field_name)
+
+def resolve_field(nick_id, field_name):
+    """
+    מחשב מחדש את הערך המנצח לשדה ומעדכן את טבלת nicks (ה-cache).
+    כללים מיוחדים:
+      • reputation: רק ערך ממקור סריקה, והחדש ביותר מנצח.
+      • status: מקור סריקה מקבל אמינות אבסולוטית.
+    """
+    if field_name in _NON_SOURCED:
+        return
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT fv.value, fv.created_at, s.id AS sid, s.kind, s.trust, s.absolute
+            FROM field_values fv JOIN sources s ON s.id = fv.source_id
+            WHERE fv.nick_id=? AND fv.field_name=?
+        """, (nick_id, field_name)).fetchall()
+        rows = [dict(r) for r in rows]
+
+        if not rows:
+            winner = ""
+        elif field_name == "reputation":
+            scr = [r for r in rows if r["kind"] == "scrape"]
+            pool = scr if scr else rows
+            pool.sort(key=lambda r: r["created_at"], reverse=True)
+            winner = pool[0]["value"]
+        else:
+            def score(r):
+                eff = 10**6 if r["absolute"] else int(r["trust"])
+                if field_name == "status" and r["kind"] == "scrape":
+                    eff = 10**6  # סריקה = אמינות מלאה לסטטוס
+                return (eff, r["created_at"])
+            rows.sort(key=score, reverse=True)
+            winner = rows[0]["value"]
+
+        if field_name in _NICK_FIELDS:
+            conn.execute(
+                f"UPDATE nicks SET {field_name}=?, updated_at=datetime('now') WHERE id=?",
+                (winner, nick_id))
+
+def get_field_sources(nick_id, field_name):
+    """כל הערכים שהגיעו לשדה, עם המקור והאמינות — לתצוגת 'אבות' בחלון הניק."""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT fv.value, fv.created_at, s.id AS source_id, s.kind, s.name, s.trust, s.absolute
+            FROM field_values fv JOIN sources s ON s.id = fv.source_id
+            WHERE fv.nick_id=? AND fv.field_name=?
+            ORDER BY s.absolute DESC, s.trust DESC
+        """, (nick_id, field_name)).fetchall()
+        return [dict(r) for r in rows]
+
+
 def log_import_source(name, notes, trust, nick_count, conflict_count):
     with get_connection() as conn:
         cur = conn.execute(
             """INSERT INTO import_sources (name, notes, trust, nick_count, conflict_count)
                VALUES (?,?,?,?,?)""",
             (name or "ייבוא", notes or "", int(trust), nick_count, conflict_count))
-        return cur.lastrowid
+        rid = cur.lastrowid
+    # לוג טקסט שקט ליד ה-DB (המשתמש לא רואה אותו בממשק)
+    try:
+        from datetime import datetime as _dt
+        logpath = os.path.join(os.path.dirname(DB_PATH), "import_log.txt")
+        with open(logpath, "a", encoding="utf-8") as fh:
+            fh.write(f"[{_dt.now().isoformat(timespec='seconds')}] "
+                     f"מקור='{name}' אמינות={trust} ניקים={nick_count} "
+                     f"ערכים={conflict_count} הערות='{notes}'\n")
+    except Exception:
+        pass
+    return rid
 
 def get_import_sources():
     with get_connection() as conn:
@@ -860,20 +1039,18 @@ def promote_shelved(shelved_id):
         return True
 
 def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
-                import_name=None, import_notes="", import_trust=None):
+                import_name=None, import_notes="", import_trust=None, import_absolute=0):
     """
-    ייבוא עם הכרעת התנגשות מבוססת-אמינות:
-      • לכל ייבוא דרגת אמינות (import_trust). המידע שלי מדורג לפי my_trust (ברירת מחדל 10).
-      • בהתנגשות: הערך עם הציון הגבוה מנצח ונשמר ב-nicks; המפסיד נשמר ב-shelved_values (לריחוף).
-      • תיקו / שלי גבוה → שלי נשאר, הערך המיובא מושהה בצד.
-    מחזיר: (imported, conflicts_shelved)
+    ייבוא מבוסס-מקורות: נוצר מקור ייבוא אחד (שם/הערות/אמינות/אבסולוטי),
+    וכל ערך מיובא נרשם תחתיו במנוע המקורות. הערך המנצח בכל שדה נקבע אוטומטית.
+    מחזיר: (imported_new, values_recorded)
     """
-    imported = 0; conflicts = 0
+    imported = 0; recorded = 0
     exported_fields = data.get("exported_fields", get_exportable_fields())
     mapping = forum_mapping or {}
-    my_trust = get_my_trust()
-    src_trust = my_trust if import_trust is None else max(1, min(10, int(import_trust)))
+    trust = get_my_trust() if import_trust is None else max(1, min(10, int(import_trust)))
     src_name = import_name or source_info
+    import_sid = create_import_source(src_name, import_notes, trust, import_absolute)
 
     with get_connection() as conn:
         existing_forums = {row[0] for row in conn.execute("SELECT name FROM forums")}
@@ -886,57 +1063,32 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
                              (forum, "#8b90a0"))
                 existing_forums.add(forum)
 
-        io_flags = get_forum_io_flags()
-        for nick in data.get("nicks", []):
-            username  = nick.get("username","").strip()
-            forum_raw = nick.get("forum","").strip()
-            mapped    = mapping.get(forum_raw, "")
-            forum     = mapped if mapped else forum_raw
-            if not username: continue
-            if io_flags.get(forum, True) is False:
+    io_flags = get_forum_io_flags()
+    for nick in data.get("nicks", []):
+        username  = nick.get("username","").strip()
+        forum_raw = nick.get("forum","").strip()
+        mapped    = mapping.get(forum_raw, "")
+        forum     = mapped if mapped else forum_raw
+        if not username: continue
+        if io_flags.get(forum, True) is False:
+            continue
+        existing = find_nick(forum, username)
+        if existing:
+            nid = existing["id"]
+        else:
+            nid = create_nick({"forum": forum, "username": username,
+                               "source": src_name, "trust_level": 3})
+            imported += 1
+        # רשום כל שדה מיובא תחת מקור הייבוא
+        for field in exported_fields:
+            if field in _NON_SOURCED:
                 continue
-            existing = conn.execute(
-                "SELECT * FROM nicks WHERE username=? AND forum=?",
-                (username, forum)).fetchone()
-            if existing:
-                ex = dict(existing)
-                for field in exported_fields:
-                    if field in ("username","forum","trust_level","source"): continue
-                    new_val = nick.get(field,"")
-                    old_val = ex.get(field,"")
-                    if not new_val:
-                        continue
-                    if not old_val:
-                        # שדה ריק → מילוי שקט
-                        conn.execute(f"UPDATE nicks SET {field}=? WHERE id=?",
-                                     (new_val, ex["id"]))
-                    elif str(new_val).strip() != str(old_val).strip():
-                        # התנגשות — הכרעה לפי אמינות
-                        if src_trust > my_trust:
-                            # הייבוא מנצח: דורס, ומדף את הערך הישן שלי
-                            conn.execute(f"UPDATE nicks SET {field}=? WHERE id=?",
-                                         (new_val, ex["id"]))
-                            conn.execute("""INSERT INTO shelved_values
-                                (nick_id, field_name, value, source_name, source_trust)
-                                VALUES (?,?,?,?,?)""",
-                                (ex["id"], field, str(old_val), "המידע הקודם שלי", my_trust))
-                        else:
-                            # שלי מנצח (או תיקו): הערך המיובא מושהה בצד
-                            conn.execute("""INSERT INTO shelved_values
-                                (nick_id, field_name, value, source_name, source_trust)
-                                VALUES (?,?,?,?,?)""",
-                                (ex["id"], field, str(new_val), src_name, src_trust))
-                        conflicts += 1
-            else:
-                d = {f: nick.get(f,'') for f in exported_fields}
-                d["forum"]      = forum
-                d["source"]     = src_name
-                d["trust_level"]= min(int(nick.get("trust_level",3) or 3), 4)
-                vals = [d.get(f, '') for f in _NICK_FIELDS]
-                ph   = ",".join(["?"]*len(_NICK_FIELDS))
-                conn.execute(
-                    f"INSERT INTO nicks ({','.join(_NICK_FIELDS)}) VALUES ({ph})", vals)
-                imported += 1
+            val = nick.get(field, "")
+            if val in (None, ""):
+                continue
+            record_field_value(nid, field, val, import_sid)
+            recorded += 1
 
-    log_import_source(src_name, import_notes, src_trust, imported, conflicts)
-    return imported, conflicts
+    # עדכן ספירות בלוג הייבוא (import_sources הישן, לתאימות)
+    log_import_source(src_name, import_notes, trust, imported, recorded)
+    return imported, recorded
