@@ -819,17 +819,19 @@ def add_identity(nick_id_a, nick_id_b):
                     "INSERT OR IGNORE INTO nick_identities (nick_id_a, nick_id_b) VALUES (?,?)",
                     (a, b))
 
-def remove_identity(nick_id_a, nick_id_b):
+def remove_identity(current_nick_id, other_nick_id):
     """
-    מוציא את nick_id_b מקבוצת הזהות לחלוטין: מנתק את כל הקישורים בינו לבין
-    כל שאר חברי הקבוצה. כך לא נוצר מצב אבסורדי שבו B מנותק מ-A אך עדיין
-    מקושר לחברים אחרים בקבוצה של A. שאר החברים נשארים מקושרים ביניהם.
+    מוציא את הניק שממנו פעלת (current_nick_id — זה שפתחת את ההגדרות שלו)
+    מקבוצת הזהות לחלוטין: מנתק אותו מכל חברי הקבוצה. שאר החברים נשארים
+    מקושרים ביניהם.
+    לדוגמה: פתחת את "בני" ולחצת להסיר את "בני1" → "בני" יוצא מהקבוצה,
+    ו"בני1" ושאר החברים נשארים מקושרים.
     """
     with get_connection() as conn:
-        group = _identity_group(conn, nick_id_a)   # כולל את שני הצדדים
-        group.discard(nick_id_b)
+        group = _identity_group(conn, current_nick_id)
+        group.discard(current_nick_id)
         for other in group:
-            a, b = min(nick_id_b, other), max(nick_id_b, other)
+            a, b = min(current_nick_id, other), max(current_nick_id, other)
             conn.execute(
                 "DELETE FROM nick_identities WHERE nick_id_a=? AND nick_id_b=?", (a, b))
 

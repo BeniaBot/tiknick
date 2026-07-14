@@ -892,7 +892,7 @@ async function openNickDialog(nickId = null) {
       </div>
       <div class="form-group full">
         <label class="form-label">כתובת</label>
-        <input class="form-input" id="f-address" value="${esc(nick?.address||'')}">
+        <input class="form-input tag-field" id="f-address" oninput="onTagInput(event)" value="${esc(nick?.address||'')}">
       </div>
       <div class="form-group">
         <label class="form-label">קבוצות</label>
@@ -1145,8 +1145,13 @@ async function onTagInput(e) {
   const pos = ta.selectionStart;
   const upto = ta.value.slice(0, pos);
   const m = upto.match(/@([^\s@]{1,30})$/);   // @ ואז מילה, עד הסמן
-  const box = document.getElementById('tag-autocomplete');
+  let box = document.getElementById('tag-autocomplete');
+  // ודא שה-dropdown תלוי ישירות ב-body (לא נחתך/מוסתר ע"י המודאל)
+  if (box && box.parentElement !== document.body) {
+    document.body.appendChild(box);
+  }
   if (!box) return;
+  box.style.zIndex = '99999';
   if (!m) { box.style.display = 'none'; return; }
   const prefix = m[1];
   const results = await api('search_usernames', prefix, 8) || [];
@@ -1157,7 +1162,6 @@ async function onTagInput(e) {
       <span style="color:${S.forumColors[r.forum]||'#8b90a0'}">[${esc(r.forum)}]</span>
       ${esc(r.username)}
     </div>`).join('');
-  // מיקום מתחת לשדה
   const rect = ta.getBoundingClientRect();
   box.style.left = rect.left + 'px';
   box.style.top  = (rect.bottom + 4) + 'px';
@@ -2560,10 +2564,16 @@ function buildCardElement(n) {
     // rows — only fields that exist
     const rows = [];
     if (n.real_name)  rows.push(cardRow('👤', n.real_name));
+    if (n.full_name)  rows.push(cardRow('📛', n.full_name));
     if (n.phone)      rows.push(cardRow('📞', n.phone + (n.extra_contacts ? ' ❕' : '')));
     if (n.email)      rows.push(cardRow('📧', n.email));
+    if (n.address)    rows.push(cardRow('📍', n.address));
     if (n.groups)     rows.push(cardRow('🏷️', n.groups));
     if (n.reputation) rows.push(cardRow('⭐', String(n.reputation)));
+    if (n.status)     rows.push(cardRow('🔵', n.status));
+    if (n.join_date)  rows.push(cardRow('📅', n.join_date));
+    if (n.post_count) rows.push(cardRow('✍️', String(n.post_count)));
+    if (n.notes)      rows.push(cardRow('📝', n.notes));
     if (n.extra_info) rows.push(cardRow('ℹ️', n.extra_info));
     if (n.private_notes) rows.push(cardRow('🔒', n.private_notes, true));
 
