@@ -36,7 +36,7 @@ _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.6.3"
+APP_VERSION = "0.7.0"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -549,6 +549,17 @@ class API:
     def search_usernames(self, prefix, limit=8):
         """חיפוש שמות משתמש להשלמה אוטומטית בעת תיוג"""
         return db.search_usernames(prefix, int(limit))
+
+    # ── חיפוש/סינון/פעולות מרובות מתקדם ────────────────────────────
+    def get_filterable_fields(self):
+        return [{"key": k, "label": l} for k, l in db.FILTERABLE_FIELDS]
+
+    def filter_nicks(self, field, op="contains", value=""):
+        return db.filter_nicks(field, op, value)
+
+    def bulk_update_field(self, nick_ids, field, value):
+        n = db.bulk_update_field(nick_ids or [], field, value)
+        return {"ok": True, "count": n}
 
 
 if __name__ == "__main__":

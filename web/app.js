@@ -587,13 +587,23 @@ function renderUsername(td, n) {
 }
 
 async function showFieldSourcesTooltip(e, nickId, fieldKey) {
+  // שמור קואורדינטות מיד — לפני ה-await (אחרת האירוע עלול להתאפס)
+  const cx = e.clientX, cy = e.clientY;
   const srcs = await api('get_field_sources', nickId, fieldKey);
   if (!srcs || srcs.length < 2) return;
   const srcKind = s => s.kind==='me' ? 'אני' : s.kind==='scrape' ? 'סריקה' : s.name;
   const rows = srcs.map((s, i) =>
     `<div style="padding-right:8px">${i===0?'▸':'◦'} ${esc(String(s.value))} <span style="opacity:.65">— ${esc(srcKind(s))}</span></div>`
   ).join('');
-  showTooltip(e, `<b>גרסאות לפי מקור:</b>${rows}`);
+  showTooltipAt(cx, cy, `<b>גרסאות לפי מקור:</b>${rows}`);
+}
+
+function showTooltipAt(cx, cy, html) {
+  const tt = document.getElementById('tooltip');
+  tt.innerHTML = html;
+  tt.style.display = '';
+  tt.style.left = Math.min(cx + 12, window.innerWidth  - 300) + 'px';
+  tt.style.top  = Math.min(cy + 12, window.innerHeight - 150) + 'px';
 }
 
 function renderRep(td, n) {
@@ -1582,6 +1592,141 @@ async function openForumMgr() {
 }
 
 // ══ SYNC MANAGER ══════════════════════════════════════════════════════
+// ══ חיפוש / סינון / פעולות מרובות מתקדם ═════════════════════════════════
+let _filterResults = [];
+let _filterSelected = new Set();
+
+async function openAdvancedFilter() {
+  const fields = await api('get_filterable_fields') || [];
+  const fieldOpts = fields.map(f => `<option value="${f.key}">${esc(f.label)}</option>`).join('');
+  openModal('⚙️ חיפוש וסינון מתקדם', `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
+      סנן ניקים לפי שדה, ואז בחר ובצע פעולה מרובה (מחיקה או עריכה) על התוצאות.
+    </p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
+      <div>
+        <label style="display:block;font-size:11px;color:var(--subtext);margin-bottom:4px">שדה</label>
+        <select id="flt-field" class="form-select">${fieldOpts}</select>
+      </div>
+      <div>
+        <label style="display:block;font-size:11px;color:var(--subtext);margin-bottom:4px">תנאי</label>
+        <select id="flt-op" class="form-select" onchange="onFilterOpChange()">
+          <option value="contains">מכיל</option>
+          <option value="equals">שווה בדיוק</option>
+          <option value="starts">מתחיל ב-</option>
+          <option value="not_empty">לא ריק</option>
+          <option value="empty">ריק</option>
+        </select>
+      </div>
+      <div style="flex:1;min-width:140px">
+        <label style="display:block;font-size:11px;color:var(--subtext);margin-bottom:4px">ערך</label>
+        <input id="flt-value" class="form-input" placeholder="לדוגמה: בני ברק">
+      </div>
+      <button class="btn btn-primary" onclick="runFilter()">🔍 סנן</button>
+    </div>
+    <div id="flt-actions" style="display:none;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <label style="font-size:12.5px;display:flex;align-items:center;gap:5px">
+        <input type="checkbox" id="flt-select-all" onchange="filterSelectAll(this.checked)"> בחר הכל
+      </label>
+      <span class="stat-pill">נבחרו <b id="flt-sel-count">0</b></span>
+      <button class="btn btn-danger btn-sm" onclick="bulkDeleteFiltered()">🗑️ מחק נבחרים</button>
+      <button class="btn btn-warning btn-sm" onclick="bulkEditFiltered()">✏️ ערוך שדה בנבחרים</button>
+    </div>
+    <div id="flt-results" style="max-height:320px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:8px"></div>
+  `, [
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg');
+  onFilterOpChange();
+}
+
+function onFilterOpChange() {
+  const op = document.getElementById('flt-op').value;
+  const valInput = document.getElementById('flt-value');
+  const noValue = (op === 'empty' || op === 'not_empty');
+  valInput.disabled = noValue;
+  valInput.style.opacity = noValue ? '.4' : '1';
+}
+
+async function runFilter() {
+  const field = document.getElementById('flt-field').value;
+  const op    = document.getElementById('flt-op').value;
+  const value = document.getElementById('flt-value').value.trim();
+  _filterResults = await api('filter_nicks', field, op, value) || [];
+  _filterSelected = new Set();
+  renderFilterResults();
+  document.getElementById('flt-actions').style.display = _filterResults.length ? 'flex' : 'none';
+}
+
+function renderFilterResults() {
+  const box = document.getElementById('flt-results');
+  if (!_filterResults.length) {
+    box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--subtext)">לא נמצאו תוצאות</div>';
+    return;
+  }
+  box.innerHTML = _filterResults.map(n => `
+    <label class="sync-item" style="cursor:pointer">
+      <input type="checkbox" class="flt-cb" data-id="${n.id}" ${_filterSelected.has(n.id)?'checked':''}
+             onchange="toggleFilterSel(${n.id}, this.checked)">
+      <span style="flex:1">
+        <span style="color:${S.forumColors[n.forum]||'#8b90a0'}">[${esc(n.forum)}]</span>
+        <b>${esc(n.username)}</b>
+        ${n.real_name?`<span style="color:var(--subtext);font-size:12px"> · ${esc(n.real_name)}</span>`:''}
+        ${n.address?`<span style="color:var(--subtext);font-size:12px"> · ${esc(n.address)}</span>`:''}
+      </span>
+    </label>`).join('');
+  updateFilterSelCount();
+}
+
+function toggleFilterSel(id, checked) {
+  if (checked) _filterSelected.add(id); else _filterSelected.delete(id);
+  updateFilterSelCount();
+}
+function filterSelectAll(checked) {
+  _filterSelected = checked ? new Set(_filterResults.map(n => n.id)) : new Set();
+  renderFilterResults();
+}
+function updateFilterSelCount() {
+  const el = document.getElementById('flt-sel-count');
+  if (el) el.textContent = _filterSelected.size;
+}
+
+async function bulkDeleteFiltered() {
+  const ids = [..._filterSelected];
+  if (!ids.length) { toast('לא נבחרו ניקים', 'error'); return; }
+  if (!confirm(`למחוק ${ids.length} ניקים שנבחרו? פעולה בלתי הפיכה!`)) return;
+  await api('delete_nicks', ids);
+  toast(`${ids.length} ניקים נמחקו ✓`, 'success');
+  await loadNicks(document.getElementById('search-input').value);
+  await runFilter();
+}
+
+async function bulkEditFiltered() {
+  const ids = [..._filterSelected];
+  if (!ids.length) { toast('לא נבחרו ניקים', 'error'); return; }
+  const fields = await api('get_filterable_fields') || [];
+  const opts = fields.filter(f => f.key!=='username' && f.key!=='forum')
+                     .map(f => `<option value="${f.key}">${esc(f.label)}</option>`).join('');
+  openModal('✏️ עריכת שדה במרובים', `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
+      עדכון שדה אחד ל-${ids.length} הניקים שנבחרו (נרשם תחת מקור "אני").
+    </p>
+    <div class="form-group"><label class="form-label">שדה</label>
+      <select id="bulk-field" class="form-select">${opts}</select></div>
+    <div class="form-group"><label class="form-label">ערך חדש</label>
+      <input id="bulk-value" class="form-input" placeholder="הערך שיוחל על כולם"></div>
+  `, [
+    { label: 'עדכן', cls: 'btn-primary', action: async () => {
+      const field = document.getElementById('bulk-field').value;
+      const value = document.getElementById('bulk-value').value;
+      const r = await api('bulk_update_field', ids, field, value);
+      toast(`${r?.count ?? 0} ניקים עודכנו ✓`, 'success');
+      closeModal();
+      await loadNicks(document.getElementById('search-input').value);
+    }},
+    { label: 'ביטול', cls: 'btn-ghost', action: () => { closeModal(); openAdvancedFilter(); } },
+  ], 'modal-sm');
+}
+
 async function onSrcTrust(sid, val) {
   await api('update_source', sid, null, null, parseInt(val), null);
   await loadNicks(document.getElementById('search-input').value);
@@ -2022,8 +2167,7 @@ async function showContactsTooltip(e, nickId) {
 }
 
 async function showIdentityTooltip(e, nickId) {
-  const ids = S.nicks.find(n => n.id === nickId);
-  if (!ids) return;
+  const cx = e.clientX, cy = e.clientY;
   const nick = await api('get_nick', nickId);
   const list = nick?.identities || [];
   if (!list.length) return;
@@ -2031,7 +2175,7 @@ async function showIdentityTooltip(e, nickId) {
     `<div><span style="color:${S.forumColors[i.forum]||'#8b90a0'}">[${esc(i.forum)}]</span>
     <b style="margin-right:6px">${esc(i.username)}</b></div>`
   ).join('');
-  showTooltip(e, `<b>זהויות נוספות:</b><br>${html}<br><small>לחץ לניהול</small>`);
+  showTooltipAt(cx, cy, `<b>זהויות נוספות:</b><br>${html}<br><small>לחץ לניהול</small>`);
 }
 
 function showTooltip(e, html) {

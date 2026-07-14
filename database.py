@@ -512,6 +512,62 @@ def get_all_nicks(search="", limit=None, offset=0):
 
         return {"rows": [dict(r) for r in rows], "total": total}
 
+# שדות שמותר לסנן/לערוך לפיהם
+FILTERABLE_FIELDS = [
+    ("forum","פורום"),("username","שם משתמש"),("real_name","שם אמיתי"),
+    ("full_name","שם מלא"),("phone","טלפון"),("email","מייל"),("address","כתובת"),
+    ("groups","קבוצות"),("status","סטטוס"),("notes","הערות"),("private_notes","הערות אישיות"),
+    ("extra_info","פרטים נוספים"),("reputation","מוניטין"),("join_date","תאריך הצטרפות"),
+]
+_FILTERABLE_KEYS = {k for k, _ in FILTERABLE_FIELDS}
+
+def filter_nicks(field, op="contains", value=""):
+    """
+    מסנן ניקים לפי שדה בודד.
+    op: 'contains' | 'equals' | 'empty' | 'not_empty' | 'starts'
+    מחזיר רשימת שורות (עם אותם דגלים מחושבים כמו הרשימה הראשית).
+    """
+    if field not in _FILTERABLE_KEYS:
+        return []
+    computed = """
+        , (SELECT COUNT(*) FROM nick_conflicts c WHERE c.nick_id = n.id) as conflict_count,
+        (SELECT COUNT(*) FROM nick_identities i WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id) as has_identity,
+        (SELECT COUNT(*) FROM nick_contacts ct WHERE ct.nick_id=n.id) as extra_contacts,
+        (SELECT GROUP_CONCAT(field_name) FROM (
+            SELECT field_name FROM field_values fv WHERE fv.nick_id = n.id
+            GROUP BY field_name HAVING COUNT(DISTINCT value) > 1)) as conflict_fields
+    """
+    with get_connection() as conn:
+        if op == "empty":
+            where = f"WHERE (n.{field} IS NULL OR n.{field}='')"; params = []
+        elif op == "not_empty":
+            where = f"WHERE n.{field} IS NOT NULL AND n.{field}!=''"; params = []
+        elif op == "equals":
+            where = f"WHERE n.{field}=?"; params = [value]
+        elif op == "starts":
+            where = f"WHERE n.{field} LIKE ?"; params = [f"{value}%"]
+        else:  # contains
+            where = f"WHERE n.{field} LIKE ?"; params = [f"%{value}%"]
+        rows = conn.execute(
+            f"SELECT n.* {computed} FROM nicks n {where} "
+            f"ORDER BY n.{field}", params).fetchall()
+        return [dict(r) for r in rows]
+
+def bulk_update_field(nick_ids, field, value):
+    """עדכון מרובה של שדה בודד לקבוצת ניקים (דרך מקור 'אני')."""
+    if field not in _FILTERABLE_KEYS or field in ("forum","username"):
+        return 0
+    ids = [int(i) for i in (nick_ids or [])]
+    n = 0
+    for nid in ids:
+        cur = get_nick(nid)
+        if not cur:
+            continue
+        cur[field] = value
+        update_nick(nid, cur)
+        n += 1
+    return n
+
 def get_nick(nick_id):
     with get_connection() as conn:
         row = conn.execute("SELECT * FROM nicks WHERE id=?", (nick_id,)).fetchone()
