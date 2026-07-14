@@ -29,8 +29,8 @@ const COLS = [
   { key: 'forum',         label: 'פורום',          width: 110, render: renderForum },
   { key: 'username',      label: 'שם משתמש',       width: 145, render: renderUsername },
   { key: '_open',         label: 'פרופיל',         width: 60,  render: renderOpenBtn },
-  { key: 'real_name',     label: 'שם אמיתי',       width: 130 },
   { key: 'full_name',     label: 'שם מלא',         width: 130 },
+  { key: 'real_name',     label: 'שם אמיתי',       width: 130 },
   { key: 'groups',        label: 'קבוצות',          width: 105 },
   { key: 'reputation',    label: 'מוניטין',         width: 65,  render: renderRep },
   { key: 'phone',         label: 'טלפון',           width: 115, render: renderPhone },
@@ -825,12 +825,12 @@ async function openNickDialog(nickId = null) {
         <input class="form-input" id="f-username" value="${esc(nick?.username||'')}">
       </div>
       <div class="form-group">
-        <label class="form-label">שם אמיתי</label>
-        <input class="form-input" id="f-real_name" value="${esc(nick?.real_name||'')}">
-      </div>
-      <div class="form-group">
         <label class="form-label">שם מלא <span style="font-size:10px;opacity:.6">(מהפורום)</span></label>
         <input class="form-input" id="f-full_name" value="${esc(nick?.full_name||'')}">
+      </div>
+      <div class="form-group">
+        <label class="form-label">שם אמיתי</label>
+        <input class="form-input" id="f-real_name" value="${esc(nick?.real_name||'')}">
       </div>
       <div class="form-group">
         <label class="form-label">טלפון ראשי</label>
