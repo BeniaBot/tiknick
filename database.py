@@ -464,7 +464,11 @@ def get_all_nicks(search="", limit=None, offset=0):
                      ) THEN 1 ELSE 0 END as has_info,
                 (SELECT COUNT(*) FROM nick_identities i
                  WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id) as has_identity,
-                (SELECT COUNT(*) FROM nick_contacts ct WHERE ct.nick_id=n.id) as extra_contacts
+                (SELECT COUNT(*) FROM nick_contacts ct WHERE ct.nick_id=n.id) as extra_contacts,
+                (SELECT COUNT(*) FROM (
+                    SELECT field_name FROM field_values fv WHERE fv.nick_id = n.id
+                    GROUP BY field_name HAVING COUNT(DISTINCT value) > 1
+                 )) as multi_source_count
             FROM nicks n
         """
         order_clause = "ORDER BY has_info DESC, n.trust_level DESC, n.updated_at DESC"

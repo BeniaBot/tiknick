@@ -559,6 +559,31 @@ function renderUsername(td, n) {
     warn.style.cursor = 'help';
     td.appendChild(warn);
   }
+  if (n.multi_source_count > 0) {
+    const mark = document.createElement('span');
+    mark.className = 'multi-src-mark';
+    mark.textContent = ' ❗';
+    mark.style.cursor = 'help';
+    mark.onmouseenter = e => showSourcesTooltip(e, n.id);
+    mark.onmouseleave = hideTooltip;
+    td.appendChild(mark);
+  }
+}
+
+async function showSourcesTooltip(e, nickId) {
+  const nick = await api('get_nick', nickId);
+  const fs = nick?.field_sources || {};
+  const keys = Object.keys(fs);
+  if (!keys.length) return;
+  const fieldLabel = k => (COLS.find(c => c.key===k)?.label) || k;
+  const srcKind = s => s.kind==='me' ? 'אני' : s.kind==='scrape' ? 'סריקה' : s.name;
+  const html = keys.map(f => {
+    const rows = fs[f].map((s, i) =>
+      `<div style="padding-right:8px">${i===0?'▸':'◦'} ${esc(s.value)} <span style="opacity:.65">— ${esc(srcKind(s))}</span></div>`
+    ).join('');
+    return `<div style="margin-bottom:4px"><b>${esc(fieldLabel(f))}</b>${rows}</div>`;
+  }).join('');
+  showTooltip(e, `<b>גרסאות נוספות לפי מקור:</b><br>${html}`);
 }
 
 function renderRep(td, n) {
@@ -1087,7 +1112,8 @@ function wireIdentitiesSection() {}
 async function searchForIdentity(q, nickId) {
   const box = document.getElementById('id-results');
   if (!q.trim()) { box.style.display = 'none'; return; }
-  const nicks = await api('get_nicks', q);
+  const res   = await api('get_nicks', q, 0, 50);
+  const nicks = res && Array.isArray(res.rows) ? res.rows : (Array.isArray(res) ? res : []);
   const nick  = await api('get_nick', nickId);
   const linked = new Set((nick.identities||[]).map(i => i.id));
   linked.add(nickId);
