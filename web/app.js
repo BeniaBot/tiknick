@@ -892,7 +892,7 @@ async function openNickDialog(nickId = null) {
       </div>
       <div class="form-group full">
         <label class="form-label">כתובת</label>
-        <input class="form-input tag-field" id="f-address" oninput="onTagInput(event)" value="${esc(nick?.address||'')}">
+        <input class="form-input tag-field" id="f-address" value="${esc(nick?.address||'')}">
       </div>
       <div class="form-group">
         <label class="form-label">קבוצות</label>
@@ -976,15 +976,15 @@ async function openNickDialog(nickId = null) {
     <div class="section-hdr">📝 תוכן</div>
     <div class="form-group" style="margin-bottom:12px">
       <label class="form-label accent">פרטים נוספים <span style="font-size:10px;opacity:.6">(@ לתיוג ניק)</span></label>
-      <textarea class="form-textarea tag-field" id="f-extra_info" oninput="onTagInput(event)">${esc(nick?.extra_info||'')}</textarea>
+      <textarea class="form-textarea tag-field" id="f-extra_info">${esc(nick?.extra_info||'')}</textarea>
     </div>
     <div class="form-group" style="margin-bottom:12px">
       <label class="form-label">הערות (מסונכרנות) <span style="font-size:10px;opacity:.6">(@ לתיוג ניק)</span></label>
-      <textarea class="form-textarea tag-field" id="f-notes" oninput="onTagInput(event)">${esc(nick?.notes||'')}</textarea>
+      <textarea class="form-textarea tag-field" id="f-notes">${esc(nick?.notes||'')}</textarea>
     </div>
     <div class="form-group" style="margin-bottom:12px">
       <label class="form-label warn">🔒 הערות אישיות (לא מיוצאות בברירת מחדל) <span style="font-size:10px;opacity:.6">(@ לתיוג)</span></label>
-      <textarea class="form-textarea private tag-field" id="f-private_notes" oninput="onTagInput(event)">${esc(nick?.private_notes||'')}</textarea>
+      <textarea class="form-textarea private tag-field" id="f-private_notes">${esc(nick?.private_notes||'')}</textarea>
     </div>
     <div id="tag-autocomplete" style="display:none;position:absolute;z-index:1000;background:var(--card);
          border:1px solid var(--border-soft);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);
@@ -1139,6 +1139,13 @@ function wireIdentitiesSection() {}
 // ══ תיוג ניקים בטקסט חופשי (@username) ═══════════════════════════════════
 let _tagField = null;
 
+// האזנה גלובלית — תופסת כל שדה עם class="tag-field" גם אם נוצר דינמית
+document.addEventListener('input', (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains('tag-field')) {
+    onTagInput(e);
+  }
+});
+
 async function onTagInput(e) {
   const ta = e.target;
   _tagField = ta;
@@ -1230,6 +1237,13 @@ async function tagHover(e, username) {
     showTooltip(e, `<span style="opacity:.7">@${esc(username)} — לא נמצא</span>`);
   }
 }
+
+// חשיפה גלובלית מפורשת — כדי ש-inline handlers ב-HTML שנוצר דינמית תמיד ימצאו אותן
+window.onTagInput = onTagInput;
+window.pickTag = pickTag;
+window.goToTag = goToTag;
+window.tagHover = tagHover;
+window.renderTaggedText = renderTaggedText;
 
 async function searchForIdentity(q, nickId) {
   const box = document.getElementById('id-results');
@@ -2562,19 +2576,21 @@ function buildCardElement(n) {
       : `<div class="card-avatar" style="background:linear-gradient(135deg,${nickCol},${shade(nickCol,-25)})">${esc(initial)}</div>`;
 
     // rows — only fields that exist
+    const cf = n.conflict_fields ? String(n.conflict_fields).split(',') : [];
+    const has = k => cf.includes(k);
     const rows = [];
-    if (n.real_name)  rows.push(cardRow('👤', n.real_name));
-    if (n.full_name)  rows.push(cardRow('📛', n.full_name));
-    if (n.phone)      rows.push(cardRow('📞', n.phone + (n.extra_contacts ? ' ❕' : '')));
-    if (n.email)      rows.push(cardRow('📧', n.email));
-    if (n.address)    rows.push(cardRow('📍', n.address));
-    if (n.groups)     rows.push(cardRow('🏷️', n.groups));
+    if (n.real_name)  rows.push(cardRow('👤', n.real_name, false, has('real_name')));
+    if (n.full_name)  rows.push(cardRow('📛', n.full_name, false, has('full_name')));
+    if (n.phone)      rows.push(cardRow('📞', n.phone + (n.extra_contacts ? ' ❕' : ''), false, has('phone')));
+    if (n.email)      rows.push(cardRow('📧', n.email, false, has('email')));
+    if (n.address)    rows.push(cardRow('📍', n.address, false, has('address')));
+    if (n.groups)     rows.push(cardRow('🏷️', n.groups, false, has('groups')));
     if (n.reputation) rows.push(cardRow('⭐', String(n.reputation)));
-    if (n.status)     rows.push(cardRow('🔵', n.status));
-    if (n.join_date)  rows.push(cardRow('📅', n.join_date));
+    if (n.status)     rows.push(cardRow('🔵', n.status, false, has('status')));
+    if (n.join_date)  rows.push(cardRow('📅', n.join_date, false, has('join_date')));
     if (n.post_count) rows.push(cardRow('✍️', String(n.post_count)));
-    if (n.notes)      rows.push(cardRow('📝', n.notes));
-    if (n.extra_info) rows.push(cardRow('ℹ️', n.extra_info));
+    if (n.notes)      rows.push(cardRow('📝', n.notes, false, has('notes')));
+    if (n.extra_info) rows.push(cardRow('ℹ️', n.extra_info, false, has('extra_info')));
     if (n.private_notes) rows.push(cardRow('🔒', n.private_notes, true));
 
     const bodyHtml = rows.length
@@ -2619,10 +2635,11 @@ function buildCardElement(n) {
     return card;
 }
 
-function cardRow(icon, val, isPrivate) {
+function cardRow(icon, val, isPrivate, conflictMark) {
+  const valHtml = String(val).includes('@') ? renderTaggedText(val) : esc(val);
   return `<div class="card-row${isPrivate ? ' private' : ''}">
     <span class="ci">${icon}</span>
-    <span class="cv">${esc(val)}</span>
+    <span class="cv">${valHtml}${conflictMark ? ' <span style="cursor:help" title="מידע סותר ממקורות שונים">❗</span>' : ''}</span>
   </div>`;
 }
 
