@@ -1448,11 +1448,11 @@ async function openSyncMgr() {
       אילו פורומים ייכללו בייבוא/ייצוא קובץ. פורום שכבוי — הניקים שלו יידלגו.
     </p>
     <div class="sync-list" id="forumio-list">
-      ${forumNames.length ? forumNames.map(name => `
+      ${forumNames.length ? forumNames.map((name, i) => `
         <div class="sync-item">
           <span class="sync-label">${esc(name)}</span>
           <label class="toggle">
-            <input type="checkbox" id="fio-${esc(name)}" ${forumIo[name]?'checked':''}>
+            <input type="checkbox" id="fio-${i}" data-forum="${esc(name)}" ${forumIo[name]?'checked':''}>
             <span class="toggle-slider"></span>
           </label>
         </div>`).join('') : '<div style="color:var(--subtext);padding:14px">אין פורומים מוגדרים</div>'}
@@ -1543,9 +1543,9 @@ async function openSyncMgr() {
         if (el) await api('set_sync_setting', f.key, el.checked);
       }
       // סעיף 2
-      for (const name of forumNames) {
-        const el = document.getElementById(`fio-${CSS.escape(name)}`);
-        if (el) await api('set_forum_io_flag', name, el.checked);
+      for (let i = 0; i < forumNames.length; i++) {
+        const el = document.getElementById(`fio-${i}`);
+        if (el) await api('set_forum_io_flag', el.dataset.forum, el.checked);
       }
       // סעיף 3
       const chosen = document.querySelector('input[name="cpolicy"]:checked');
