@@ -223,6 +223,7 @@ def init_db():
     # Migrations for existing DBs
     _migrate()
     _init_fts()
+    _backfill_sources()
 
 FTS_AVAILABLE = False
 
@@ -273,6 +274,33 @@ def _init_fts():
             FTS_AVAILABLE = True
         except sqlite3.OperationalError:
             FTS_AVAILABLE = False
+
+def _backfill_sources():
+    """
+    מיגרציה חד-פעמית: משייכת את כל ערכי הניקים הקיימים למקור "אני" (id=1),
+    כדי שנתונים מלפני v0.5.0 ישתתפו בהכרעת המקורות ויציגו את סימן ⚠️.
+    מוגן בדגל כדי לרוץ פעם אחת בלבד.
+    """
+    with get_connection() as conn:
+        done = conn.execute(
+            "SELECT value FROM settings WHERE key='backfill_sources_done'").fetchone()
+        if done:
+            return
+        # ודא שקיים מקור "אני"
+        conn.execute("INSERT OR IGNORE INTO sources (id,kind,name,trust,absolute) "
+                     "VALUES (1,'me','אני',10,0)")
+        sourced = [f for f in _NICK_FIELDS if f not in _NON_SOURCED]
+        rows = conn.execute("SELECT id, " + ", ".join(sourced) + " FROM nicks").fetchall()
+        for r in rows:
+            d = dict(r)
+            nid = d["id"]
+            for f in sourced:
+                v = d.get(f, "")
+                if v not in (None, ""):
+                    conn.execute("""INSERT OR IGNORE INTO field_values
+                        (nick_id, field_name, value, source_id) VALUES (?,?,?,1)""",
+                        (nid, f, str(v)))
+        conn.execute("INSERT OR REPLACE INTO settings (key,value) VALUES ('backfill_sources_done','1')")
 
 def _fts_match_query(search):
     """הופך מחרוזת חיפוש חופשית לביטוי MATCH בטוח (כל מילה כ-prefix, AND בין מילים)"""
