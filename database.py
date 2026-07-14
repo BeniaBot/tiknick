@@ -764,19 +764,46 @@ def get_identities(nick_id):
         """, (nick_id, nick_id, nick_id)).fetchall()
         return [dict(r) for r in rows]
 
+def _identity_group(conn, nick_id):
+    """מחזיר את כל ה-IDs בקבוצת הזהות של ניק (כולל עצמו), דרך סגור טרנזיטיבי."""
+    group = {nick_id}
+    frontier = {nick_id}
+    while frontier:
+        placeholders = ",".join(["?"] * len(frontier))
+        rows = conn.execute(f"""
+            SELECT nick_id_a, nick_id_b FROM nick_identities
+            WHERE nick_id_a IN ({placeholders}) OR nick_id_b IN ({placeholders})
+        """, list(frontier) * 2).fetchall()
+        new = set()
+        for a, b in rows:
+            for x in (a, b):
+                if x not in group:
+                    new.add(x); group.add(x)
+        frontier = new
+    return group
+
 def add_identity(nick_id_a, nick_id_b):
+    """
+    מקשר שני ניקים כזהות כפולה — באופן טרנזיטיבי.
+    אם A שייך לקבוצה {A, A1} ו-B לקבוצה {B, B1}, לאחר הקישור כל החמישה
+    מקושרים הדדית זה לזה (קבוצת זהות אחת מלאה).
+    """
     if nick_id_a == nick_id_b:
         return
-    a, b = min(nick_id_a, nick_id_b), max(nick_id_a, nick_id_b)
     with get_connection() as conn:
-        try:
-            conn.execute(
-                "INSERT OR IGNORE INTO nick_identities (nick_id_a, nick_id_b) VALUES (?,?)",
-                (a, b))
-        except Exception:
-            pass
+        # אחד את שתי הקבוצות של A ושל B
+        members = _identity_group(conn, nick_id_a) | _identity_group(conn, nick_id_b)
+        members = sorted(members)
+        # צור קישור בין כל זוג בקבוצה המאוחדת
+        for i in range(len(members)):
+            for j in range(i + 1, len(members)):
+                a, b = members[i], members[j]
+                conn.execute(
+                    "INSERT OR IGNORE INTO nick_identities (nick_id_a, nick_id_b) VALUES (?,?)",
+                    (a, b))
 
 def remove_identity(nick_id_a, nick_id_b):
+    """מסיר את הקישור הישיר בין שני הניקים (רק הזוג הספציפי)."""
     a, b = min(nick_id_a, nick_id_b), max(nick_id_a, nick_id_b)
     with get_connection() as conn:
         conn.execute(
