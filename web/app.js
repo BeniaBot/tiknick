@@ -426,6 +426,7 @@ function buildNickRow(n) {
   tr.appendChild(tdSel);
 
   const hiddenCols = hiddenColsSet();
+  const conflictFields = n.conflict_fields ? String(n.conflict_fields).split(',') : [];
   COLS.forEach(col => {
     if (hiddenCols.has(col.key)) return;
     const td = document.createElement('td');
@@ -435,6 +436,16 @@ function buildNickRow(n) {
     } else {
       const val = n[col.key] ?? '';
       td.textContent = String(val).slice(0, 80);
+    }
+    // סימן התנגשות על השדה הספציפי
+    if (conflictFields.includes(col.key)) {
+      const mark = document.createElement('span');
+      mark.className = 'field-conflict-mark';
+      mark.textContent = ' ❗';
+      mark.style.cursor = 'help';
+      mark.onmouseenter = e => showFieldSourcesTooltip(e, n.id, col.key);
+      mark.onmouseleave = hideTooltip;
+      td.appendChild(mark);
     }
     tr.appendChild(td);
   });
@@ -559,31 +570,16 @@ function renderUsername(td, n) {
     warn.style.cursor = 'help';
     td.appendChild(warn);
   }
-  if (n.multi_source_count > 0) {
-    const mark = document.createElement('span');
-    mark.className = 'multi-src-mark';
-    mark.textContent = ' ❗';
-    mark.style.cursor = 'help';
-    mark.onmouseenter = e => showSourcesTooltip(e, n.id);
-    mark.onmouseleave = hideTooltip;
-    td.appendChild(mark);
-  }
 }
 
-async function showSourcesTooltip(e, nickId) {
-  const nick = await api('get_nick', nickId);
-  const fs = nick?.field_sources || {};
-  const keys = Object.keys(fs);
-  if (!keys.length) return;
-  const fieldLabel = k => (COLS.find(c => c.key===k)?.label) || k;
+async function showFieldSourcesTooltip(e, nickId, fieldKey) {
+  const srcs = await api('get_field_sources', nickId, fieldKey);
+  if (!srcs || srcs.length < 2) return;
   const srcKind = s => s.kind==='me' ? 'אני' : s.kind==='scrape' ? 'סריקה' : s.name;
-  const html = keys.map(f => {
-    const rows = fs[f].map((s, i) =>
-      `<div style="padding-right:8px">${i===0?'▸':'◦'} ${esc(s.value)} <span style="opacity:.65">— ${esc(srcKind(s))}</span></div>`
-    ).join('');
-    return `<div style="margin-bottom:4px"><b>${esc(fieldLabel(f))}</b>${rows}</div>`;
-  }).join('');
-  showTooltip(e, `<b>גרסאות נוספות לפי מקור:</b><br>${html}`);
+  const rows = srcs.map((s, i) =>
+    `<div style="padding-right:8px">${i===0?'▸':'◦'} ${esc(String(s.value))} <span style="opacity:.65">— ${esc(srcKind(s))}</span></div>`
+  ).join('');
+  showTooltip(e, `<b>גרסאות לפי מקור:</b>${rows}`);
 }
 
 function renderRep(td, n) {
@@ -1666,7 +1662,7 @@ async function proceedImport(res) {
                          _pendingImportMeta.notes, _pendingImportMeta.trust);
     if (r2?.ok) {
       await loadNicks(document.getElementById('search-input').value);
-      toast(`יובאו ${r2.imported} ניקים, ${r2.conflicts} התנגשויות ✓`, 'success');
+      toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r2.imported} · ערכים שנקלטו: ${r2.conflicts}`, "success");
     } else {
       toast('שגיאה בייבוא: ' + (r2?.error||''), 'error');
     }
@@ -1757,7 +1753,7 @@ async function showForumMappingDialog(unknownForums, totalNicks) {
       if (r2?.ok) {
         await loadForums();
         await loadNicks(document.getElementById('search-input').value);
-        toast(`יובאו ${r2.imported} ניקים, ${r2.conflicts} התנגשויות ✓`, 'success');
+        toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r2.imported} · ערכים שנקלטו: ${r2.conflicts}`, "success");
       } else {
         toast('שגיאה בייבוא: ' + (r2?.error||''), 'error');
       }

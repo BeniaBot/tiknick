@@ -36,7 +36,7 @@ _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.5.2"
+APP_VERSION = "0.5.3"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -125,12 +125,13 @@ class API:
         nick["conflicts"]  = db.get_conflicts(int(nick_id))
         nick["identities"] = db.get_identities(int(nick_id))
         nick["shelved"]    = db.get_shelved_values(int(nick_id))
-        # שדות שיש להם יותר ממקור אחד (מידע סותר/חלופי לפי אב)
+        # שדות שיש להם ערכים שונים ממקורות שונים (התנגשות אמיתית)
         multi = {}
         for f in ["real_name","full_name","phone","email","address","groups",
                   "status","join_date","post_count","notes","extra_info"]:
             srcs = db.get_field_sources(int(nick_id), f)
-            if len(srcs) > 1:
+            distinct_vals = {str(s.get("value","")).strip() for s in srcs}
+            if len(distinct_vals) > 1:
                 multi[f] = srcs
         nick["field_sources"] = multi
         return nick
