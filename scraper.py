@@ -144,7 +144,7 @@ def _map_user(u):
         "avatar_url":   avatar,
         "nick_color":   g("icon:bgColor") or "",
         "email":        g("email"),   # כמעט תמיד ריק ב-NodeBB ציבורי
-        "extra_info":   (f'uid:{u.get("uid")}' if u.get("uid") else ""),
+        "forum_uid":    (str(u.get("uid")) if u.get("uid") else ""),
     }
 
 

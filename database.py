@@ -92,6 +92,7 @@ def init_db():
                 nick_color TEXT DEFAULT '',
                 avatar_image TEXT DEFAULT '',
                 source TEXT DEFAULT 'manual',
+                forum_uid TEXT DEFAULT '',
                 scraped_real_name TEXT DEFAULT '',
                 scraped_email TEXT DEFAULT '',
                 trust_level INTEGER DEFAULT 5,
@@ -258,7 +259,7 @@ def _migrate():
     with get_connection() as conn:
         existing = {row[1] for row in conn.execute("PRAGMA table_info(nicks)")}
         for col in ["extra_info", "private_notes", "nick_color", "avatar_image", "address",
-                    "scraped_real_name", "scraped_email", "full_name"]:
+                    "scraped_real_name", "scraped_email", "full_name", "forum_uid"]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE nicks ADD COLUMN {col} TEXT DEFAULT ''")
         ctcols = {row[1] for row in conn.execute("PRAGMA table_info(nick_contacts)")}
@@ -268,6 +269,16 @@ def _migrate():
         fcols = {row[1] for row in conn.execute("PRAGMA table_info(forums)")}
         if "profile_pattern" not in fcols:
             conn.execute("ALTER TABLE forums ADD COLUMN profile_pattern TEXT DEFAULT ''")
+        # ניקוי חד-פעמי: העברת 'uid:...' שנשמר בעבר ב-extra_info אל forum_uid
+        try:
+            rows = conn.execute(
+                "SELECT id, extra_info FROM nicks WHERE extra_info LIKE 'uid:%'").fetchall()
+            for rid, ei in rows:
+                uid = str(ei).split("uid:", 1)[1].strip() if "uid:" in str(ei) else ""
+                conn.execute(
+                    "UPDATE nicks SET forum_uid=?, extra_info='' WHERE id=?", (uid, rid))
+        except sqlite3.OperationalError:
+            pass
 
 # ── הגדרות סנכרון ────────────────────────────────────────────────────
 def get_sync_settings():
@@ -455,7 +466,7 @@ def find_nick(forum, username):
 # שדות שממוזגים מסריקה (לא נוגעים ב-private_notes/real_name של המשתמש)
 _SCRAPE_MERGE_FIELDS = ["groups", "reputation", "full_name", "email", "address",
                         "status", "join_date", "post_count", "avatar_url",
-                        "nick_color", "avatar_image", "extra_info"]
+                        "nick_color", "avatar_image", "extra_info", "forum_uid"]
 
 def merge_scraped_nick(forum, username, scraped, source_label="סריקה"):
     """
@@ -518,7 +529,7 @@ def merge_scraped_nick(forum, username, scraped, source_label="סריקה"):
 
 _NICK_FIELDS = ["forum","username","groups","reputation","real_name","full_name","phone","email",
                 "notes","private_notes","extra_info","address","status","join_date","post_count",
-                "avatar_url","nick_color","avatar_image","source","scraped_real_name",
+                "avatar_url","nick_color","avatar_image","source","forum_uid","scraped_real_name",
                 "scraped_email","trust_level"]
 
 def create_nick(data):
