@@ -39,7 +39,7 @@ const COLS = [
   { key: 'status',        label: 'סטטוס',           width: 85,  render: renderStatus },
   { key: 'updated_at',    label: 'עודכן',           width: 130, render: renderUpdated },
   { key: 'extra_info',    label: 'פרטים נוספים',    width: 170 },
-  { key: 'notes',         label: 'הערות',           width: 180 },
+  { key: 'notes',         label: 'הערות',           width: 180, render: renderNotes },
   { key: 'private_notes', label: 'הערות אישיות',    width: 175, render: renderPrivate },
   { key: 'identity',      label: 'זהות כפולה',      width: 90,  render: renderIdentity },
 ];
@@ -90,6 +90,11 @@ async function _origInit() {
   if (tableWrap) tableWrap.addEventListener('scroll', onTableScroll);
   const cardsWrap = document.getElementById('cards-wrap');
   if (cardsWrap) cardsWrap.addEventListener('scroll', onCardsScroll);
+  // אם סריקה כבר רצה ברקע — חדש את מד ההתקדמות
+  try {
+    const p = await api('get_scrape_progress');
+    if (p && p.running) startScrapeMonitor();
+  } catch (e) {}
   setInterval(() => {
     const el = document.getElementById('status-time');
     if (el) el.textContent = new Date().toLocaleTimeString('he-IL');
@@ -640,10 +645,24 @@ function renderStatus(td, n) {
   }
 }
 
+function renderNotes(td, n) {
+  if (n.notes) {
+    if (n.notes.includes('@')) {
+      td.innerHTML = renderTaggedText(n.notes.slice(0, 120));
+    } else {
+      td.textContent = n.notes.slice(0, 80);
+    }
+  }
+}
+
 function renderPrivate(td, n) {
   if (n.private_notes) {
     td.className = 'cell-private';
-    td.textContent = n.private_notes.slice(0, 60);
+    if (n.private_notes.includes('@')) {
+      td.innerHTML = renderTaggedText(n.private_notes.slice(0, 90));
+    } else {
+      td.textContent = n.private_notes.slice(0, 60);
+    }
   }
 }
 
@@ -956,17 +975,20 @@ async function openNickDialog(nickId = null) {
 
     <div class="section-hdr">📝 תוכן</div>
     <div class="form-group" style="margin-bottom:12px">
-      <label class="form-label accent">פרטים נוספים</label>
-      <textarea class="form-textarea" id="f-extra_info">${esc(nick?.extra_info||'')}</textarea>
+      <label class="form-label accent">פרטים נוספים <span style="font-size:10px;opacity:.6">(@ לתיוג ניק)</span></label>
+      <textarea class="form-textarea tag-field" id="f-extra_info" oninput="onTagInput(event)">${esc(nick?.extra_info||'')}</textarea>
     </div>
     <div class="form-group" style="margin-bottom:12px">
-      <label class="form-label">הערות (מסונכרנות)</label>
-      <textarea class="form-textarea" id="f-notes">${esc(nick?.notes||'')}</textarea>
+      <label class="form-label">הערות (מסונכרנות) <span style="font-size:10px;opacity:.6">(@ לתיוג ניק)</span></label>
+      <textarea class="form-textarea tag-field" id="f-notes" oninput="onTagInput(event)">${esc(nick?.notes||'')}</textarea>
     </div>
     <div class="form-group" style="margin-bottom:12px">
-      <label class="form-label warn">🔒 הערות אישיות (לא מיוצאות בברירת מחדל)</label>
-      <textarea class="form-textarea private" id="f-private_notes">${esc(nick?.private_notes||'')}</textarea>
+      <label class="form-label warn">🔒 הערות אישיות (לא מיוצאות בברירת מחדל) <span style="font-size:10px;opacity:.6">(@ לתיוג)</span></label>
+      <textarea class="form-textarea private tag-field" id="f-private_notes" oninput="onTagInput(event)">${esc(nick?.private_notes||'')}</textarea>
     </div>
+    <div id="tag-autocomplete" style="display:none;position:absolute;z-index:1000;background:var(--card);
+         border:1px solid var(--border-soft);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);
+         max-height:180px;overflow-y:auto;min-width:180px"></div>
 
     ${conflictsHtml}
     ${shelvedHtml}
@@ -1113,6 +1135,97 @@ function renderIdentitiesSection(nick) {
 }
 
 function wireIdentitiesSection() {}
+
+// ══ תיוג ניקים בטקסט חופשי (@username) ═══════════════════════════════════
+let _tagField = null;
+
+async function onTagInput(e) {
+  const ta = e.target;
+  _tagField = ta;
+  const pos = ta.selectionStart;
+  const upto = ta.value.slice(0, pos);
+  const m = upto.match(/@([^\s@]{1,30})$/);   // @ ואז מילה, עד הסמן
+  const box = document.getElementById('tag-autocomplete');
+  if (!box) return;
+  if (!m) { box.style.display = 'none'; return; }
+  const prefix = m[1];
+  const results = await api('search_usernames', prefix, 8) || [];
+  if (!results.length) { box.style.display = 'none'; return; }
+  box.innerHTML = results.map(r => `
+    <div class="tag-opt" style="padding:7px 12px;cursor:pointer;font-size:13px;direction:rtl"
+         onmousedown="pickTag(event,'${esc(r.username).replace(/'/g,"\\'")}')">
+      <span style="color:${S.forumColors[r.forum]||'#8b90a0'}">[${esc(r.forum)}]</span>
+      ${esc(r.username)}
+    </div>`).join('');
+  // מיקום מתחת לשדה
+  const rect = ta.getBoundingClientRect();
+  box.style.left = rect.left + 'px';
+  box.style.top  = (rect.bottom + 4) + 'px';
+  box.style.display = '';
+}
+
+function pickTag(e, username) {
+  e.preventDefault();
+  const ta = _tagField;
+  if (!ta) return;
+  const pos = ta.selectionStart;
+  const before = ta.value.slice(0, pos).replace(/@[^\s@]*$/, '@' + username + ' ');
+  const after = ta.value.slice(pos);
+  ta.value = before + after;
+  ta.focus();
+  const newPos = before.length;
+  ta.setSelectionRange(newPos, newPos);
+  document.getElementById('tag-autocomplete').style.display = 'none';
+}
+
+document.addEventListener('click', (e) => {
+  const box = document.getElementById('tag-autocomplete');
+  if (box && !e.target.closest('.tag-field') && !e.target.closest('#tag-autocomplete')) {
+    box.style.display = 'none';
+  }
+});
+
+function renderTaggedText(text) {
+  if (!text) return '';
+  // מפצל טקסט ל-@תיוגים לחיצים ושאר טקסט (בטוח מפני HTML)
+  const parts = String(text).split(/(@[^\s@]{1,30})/g);
+  return parts.map(p => {
+    const m = p.match(/^@([^\s@]{1,30})$/);
+    if (m) {
+      const uname = m[1];
+      return `<span class="nick-tag" style="color:var(--accent);cursor:pointer;font-weight:600"
+                onclick="goToTag(event,'${esc(uname).replace(/'/g,"\\'")}')"
+                onmouseenter="tagHover(event,'${esc(uname).replace(/'/g,"\\'")}')"
+                onmouseleave="hideTooltip()">@${esc(uname)}</span>`;
+    }
+    return esc(p);
+  }).join('');
+}
+
+async function goToTag(e, username) {
+  e.stopPropagation();
+  const n = await api('resolve_tag', username);
+  if (n && n.id) {
+    closeModal();
+    openNickDialog(n.id);
+  } else {
+    toast(`לא נמצא ניק בשם @${username}`, 'error');
+  }
+}
+
+async function tagHover(e, username) {
+  const n = await api('resolve_tag', username);
+  if (n && n.id) {
+    const full = await api('get_nick', n.id);
+    const bits = [];
+    if (full.real_name) bits.push('שם: ' + esc(full.real_name));
+    if (full.phone)     bits.push('טלפון: ' + esc(full.phone));
+    showTooltip(e, `<b>@${esc(username)}</b> <span style="opacity:.6">[${esc(n.forum)}]</span>` +
+      (bits.length ? '<br>' + bits.join('<br>') : ''));
+  } else {
+    showTooltip(e, `<span style="opacity:.7">@${esc(username)} — לא נמצא</span>`);
+  }
+}
 
 async function searchForIdentity(q, nickId) {
   const box = document.getElementById('id-results');
@@ -2209,7 +2322,6 @@ async function openInternetSync() {
 }
 
 function closeSyncModal() {
-  if (_scrapePoll) { clearInterval(_scrapePoll); _scrapePoll = null; }
   closeModal();
 }
 
@@ -2239,39 +2351,65 @@ async function doStartScrape() {
   const start = await api('start_scrape', name, url, cookie, null);
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל סריקה', 'error'); return; }
 
-  document.getElementById('sync-progress-wrap').style.display = '';
-  document.getElementById('sync-check-result').innerHTML = '';
+  const wrap = document.getElementById('sync-progress-wrap');
+  if (wrap) wrap.style.display = '';
+  const cr = document.getElementById('sync-check-result');
+  if (cr) cr.innerHTML = '';
+  startScrapeMonitor();
+}
+
+function startScrapeMonitor() {
+  if (_scrapePoll) clearInterval(_scrapePoll);
+  const banner = document.getElementById('scrape-banner');
+  if (banner) banner.style.display = '';
 
   _scrapePoll = setInterval(async () => {
     const p = await api('get_scrape_progress');
     if (!p) return;
     const pct = p.total_pages ? Math.round((p.page / p.total_pages) * 100) : 0;
-    document.getElementById('sync-bar').style.width = pct + '%';
-    document.getElementById('sync-progress-text').textContent =
-      `עמוד ${p.page}/${p.total_pages || '?'} · נוספו ${p.added} · עודכנו ${p.updated} · התנגשויות ${p.conflicts}`;
+    const label = `עמוד ${p.page}/${p.total_pages || '?'} · נוספו ${p.added} · עודכנו ${p.updated}`;
+
+    // עדכן באנר צף (תמיד)
+    const bBar = document.getElementById('scrape-banner-bar');
+    const bTxt = document.getElementById('scrape-banner-text');
+    if (bBar) bBar.style.width = pct + '%';
+    if (bTxt) bTxt.textContent = p.running ? label : 'מסיים…';
+
+    // עדכן גם את המודאל אם פתוח
+    const mBar = document.getElementById('sync-bar');
+    const mTxt = document.getElementById('sync-progress-text');
+    if (mBar) mBar.style.width = pct + '%';
+    if (mTxt) mTxt.textContent = label + ` · התנגשויות ${p.conflicts}`;
 
     if (p.done || !p.running) {
       clearInterval(_scrapePoll); _scrapePoll = null;
+      if (banner) banner.style.display = 'none';
       if (p.error) {
         toast('שגיאת סריקה: ' + p.error, 'error');
       } else {
         const msg = p.cancelled ? 'הסריקה בוטלה' : 'הסריקה הושלמה';
         let extra = '';
-        if (p.auto_resolved) extra = `, ${p.auto_resolved} התנגשויות נפתרו אוטומטית`;
-        else if (p.conflicts) extra = `, ${p.conflicts} התנגשויות`;
+        if (p.auto_resolved) extra = ` · ${p.auto_resolved} התנגשויות נפתרו אוטומטית`;
+        else if (p.conflicts) extra = ` · ${p.conflicts} התנגשויות`;
         toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`, 'success');
       }
       await loadNicks(document.getElementById('search-input').value);
-      if (p.conflicts > 0) {
+      if (!p.cancelled && p.conflicts > 0) {
         setTimeout(() => {
           if (confirm(`נמצאו ${p.conflicts} התנגשויות. לפתור אותן עכשיו?`)) {
-            closeSyncModal();
             if (typeof openConflictsResolver === 'function') openConflictsResolver();
           }
         }, 300);
       }
     }
   }, 700);
+}
+
+async function stopScrape() {
+  await api('cancel_scrape');
+  const bTxt = document.getElementById('scrape-banner-text');
+  if (bTxt) bTxt.textContent = 'עוצר…';
+  toast('הסריקה תיעצר…', 'info');
 }
 
 // ══ פותר התנגשויות גלובלי ═══════════════════════════════════════════════

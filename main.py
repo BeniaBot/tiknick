@@ -36,7 +36,7 @@ _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.5.5"
+APP_VERSION = "0.6.0"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -540,6 +540,15 @@ class API:
 
     def get_field_sources(self, nick_id, field_name):
         return db.get_field_sources(int(nick_id), field_name)
+
+    # ── תיוג ניקים בטקסט חופשי (@username) ─────────────────────────
+    def resolve_tag(self, username):
+        """מאתר ניק לפי שם משתמש מדויק (ללא תלות בפורום) — ללחיצה על תיוג"""
+        return db.find_nick_by_username(username)
+
+    def search_usernames(self, prefix, limit=8):
+        """חיפוש שמות משתמש להשלמה אוטומטית בעת תיוג"""
+        return db.search_usernames(prefix, int(limit))
 
 
 if __name__ == "__main__":

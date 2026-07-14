@@ -154,6 +154,21 @@
 
     <!-- (הוסר: כפתור "טען עוד" — הוחלף בגלילה וירטואלית שקופה) -->
 
+    <!-- floating scrape progress (persistent, works even outside the sync modal) -->
+    <div id="scrape-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+         background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:260px;direction:rtl">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span style="font-size:16px">🌐</span>
+        <span id="scrape-banner-text" style="font-size:12.5px;font-weight:700;flex:1">סורק…</span>
+        <button class="btn btn-sm btn-danger" onclick="stopScrape()" style="padding:3px 10px">עצור</button>
+      </div>
+      <div style="height:8px;background:var(--card2);border-radius:99px;overflow:hidden">
+        <div id="scrape-banner-bar" style="height:100%;width:0%;
+             background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s"></div>
+      </div>
+    </div>
+
     <!-- statusbar -->
     <div id="statusbar">
       <span id="status-msg">מוכן</span>

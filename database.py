@@ -526,6 +526,23 @@ def find_nick(forum, username):
         ).fetchone()
         return dict(row) if row else None
 
+def find_nick_by_username(username):
+    """מאתר ניק לפי שם משתמש בלבד (הראשון שנמצא) — לתיוג @"""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, username, forum FROM nicks WHERE username=? LIMIT 1",
+            (username,)).fetchone()
+        return dict(row) if row else None
+
+def search_usernames(prefix, limit=8):
+    """שמות משתמש שמתחילים ב-prefix, להשלמה אוטומטית בתיוג"""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT username, forum FROM nicks WHERE username LIKE ? "
+            "ORDER BY username LIMIT ?",
+            (prefix + "%", limit)).fetchall()
+        return [dict(r) for r in rows]
+
 # שדות שממוזגים מסריקה (לא נוגעים ב-private_notes/real_name של המשתמש)
 _SCRAPE_MERGE_FIELDS = ["groups", "reputation", "full_name", "email", "address",
                         "status", "join_date", "post_count", "avatar_url",
@@ -803,11 +820,18 @@ def add_identity(nick_id_a, nick_id_b):
                     (a, b))
 
 def remove_identity(nick_id_a, nick_id_b):
-    """מסיר את הקישור הישיר בין שני הניקים (רק הזוג הספציפי)."""
-    a, b = min(nick_id_a, nick_id_b), max(nick_id_a, nick_id_b)
+    """
+    מוציא את nick_id_b מקבוצת הזהות לחלוטין: מנתק את כל הקישורים בינו לבין
+    כל שאר חברי הקבוצה. כך לא נוצר מצב אבסורדי שבו B מנותק מ-A אך עדיין
+    מקושר לחברים אחרים בקבוצה של A. שאר החברים נשארים מקושרים ביניהם.
+    """
     with get_connection() as conn:
-        conn.execute(
-            "DELETE FROM nick_identities WHERE nick_id_a=? AND nick_id_b=?", (a, b))
+        group = _identity_group(conn, nick_id_a)   # כולל את שני הצדדים
+        group.discard(nick_id_b)
+        for other in group:
+            a, b = min(nick_id_b, other), max(nick_id_b, other)
+            conn.execute(
+                "DELETE FROM nick_identities WHERE nick_id_a=? AND nick_id_b=?", (a, b))
 
 # ── הגדרות תצוגה ─────────────────────────────────────────────────────
 DEFAULT_DISPLAY = {
