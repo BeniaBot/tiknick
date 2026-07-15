@@ -377,9 +377,7 @@ async function refreshAboutUpdate() {
     inner.innerHTML = `
       <span>🎉</span>
       <span>גרסה <b>${esc(res.latest)}</b> זמינה!</span>
-      <a onclick="${res.download_url
-        ? `api('open_url','${esc(res.download_url)}')`
-        : `api('open_url','${esc(res.release_url)}')`}" class="au-action">הורד</a>`;
+      <a onclick="closeModal();checkUpdates()" class="au-action">עדכן עכשיו</a>`;
   } else {
     box.className = 'about-update ok';
     inner.innerHTML = `
@@ -3026,7 +3024,10 @@ async function saveChazonishnikReport(html) {
   else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
 }
 
-function openStinknik() {
+async function openStinknik() {
+  const forums = await api('get_scrapable_forums') || [];
+  const opts = forums.filter(f => (f.url||'').trim())
+    .map(f => `<option value="${esc(f.url)}">${esc(f.name)}</option>`).join('');
   openModal('🦨 Stinknik — כל הדיסלייקים של ניק', `
     <div style="font-size:13.5px;line-height:1.7">
       <div style="padding:12px 14px;background:var(--card2);border-radius:10px;margin-bottom:14px">
@@ -3034,16 +3035,17 @@ function openStinknik() {
         שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק "שנוי במחלוקת",
         כלומר רק פוסטים עם יותר דיסים מלייקים).
       </div>
-      <div style="padding:10px 12px;border:1px solid var(--accent-2);border-radius:8px;margin-bottom:14px;font-size:12.5px">
-        ⚠️ כרגע נתמך <b>רק עבור פורום מתמחים טופ</b> (mitmachim.top).
-      </div>
       <div style="font-size:12px;color:var(--subtext);margin-bottom:14px">
-        💡 ברוב המקרים <b>לא נדרשת עוגייה</b> (המידע ציבורי). אם בכל זאת מתקבלת שגיאת הרשאה,
-        אפשר להוסיף עוגיית express.sid — <b style="color:var(--accent-2);cursor:pointer" onclick="openChazonishnik()">ראה הדרכה ב-Chazonishnik</b>.
+        💡 עובד על כל פורום NodeBB. ברוב המקרים <b>לא נדרשת עוגייה</b> (המידע ציבורי). אם מתקבלת
+        שגיאת הרשאה, אפשר להוסיף עוגייה — <b style="color:var(--accent-2);cursor:pointer" onclick="openChazonishnik()">ראה הדרכה ב-Chazonishnik</b>.
+      </div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">פורום</label>
+        <select id="stink-forum" class="form-select">${opts}</select>
       </div>
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">שם משתמש או קישור לפרופיל</label>
-        <input id="stink-user" class="form-input" placeholder="בנימין  או  https://mitmachim.top/user/בנימין">
+        <input id="stink-user" class="form-input" placeholder="בנימין  או  קישור מלא לפרופיל">
       </div>
       <div class="form-group" style="margin-bottom:6px">
         <label class="form-label" style="font-size:11px;color:var(--subtext)">עוגייה (אופציונלי)</label>
@@ -3061,8 +3063,13 @@ let _stinkPoll = null;
 async function runStinknik() {
   const user = document.getElementById('stink-user')?.value.trim();
   const cookie = document.getElementById('stink-cookie')?.value.trim() || '';
+  let baseUrl = document.getElementById('stink-forum')?.value || 'https://mitmachim.top';
+  // אם הודבק קישור מלא — נחלץ ממנו את הדומיין
+  if (user && /^https?:\/\//i.test(user)) {
+    try { const u = new URL(user); baseUrl = u.origin; } catch (e) {}
+  }
   if (!user) { toast('הזן שם משתמש או קישור', 'error'); return; }
-  const start = await api('run_stinknik', user, cookie);
+  const start = await api('run_stinknik', user, cookie, baseUrl);
   if (!start?.ok) { toast('שגיאה: ' + (start?.error || ''), 'error'); return; }
   showStinknikProgress(user);
 }

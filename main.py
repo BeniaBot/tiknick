@@ -56,7 +56,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.16"
+APP_VERSION = "0.7.17"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -478,7 +478,7 @@ class API:
         return dict(_chz_state)
 
     # ── Stinknik — ניתוח דיסלייקים ─────────────────────────────────
-    def run_stinknik(self, user_input, cookie=""):
+    def run_stinknik(self, user_input, cookie="", base_url="https://mitmachim.top"):
         """מתחיל ניתוח דיסלייקים ברקע. התקדמות דרך get_stinknik_progress."""
         if _stink_state["running"]:
             return {"ok": False, "error": "ניתוח כבר רץ"}
@@ -498,7 +498,7 @@ class API:
             try:
                 import stinknik
                 result = stinknik.analyze_dislikes(
-                    user_input, base_url="https://mitmachim.top",
+                    user_input, base_url=(base_url or "https://mitmachim.top"),
                     cookie=(cookie or None), progress=_progress, cancel_flag=_stink_cancel)
                 if result.get("cancelled"):
                     _stink_state["cancelled"] = True
