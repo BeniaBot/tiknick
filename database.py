@@ -1025,16 +1025,16 @@ def get_me_source_id():
 
 def get_scrape_source(conn=None):
     """מקור הסריקה — נוצר בפעם הראשונה. מחזיר dict."""
-    own = conn is None
-    if own: conn = get_connection().__enter__()
-    try:
-        row = conn.execute("SELECT * FROM sources WHERE kind='scrape' LIMIT 1").fetchone()
+    def _get(c):
+        row = c.execute("SELECT * FROM sources WHERE kind='scrape' LIMIT 1").fetchone()
         if not row:
-            conn.execute("INSERT INTO sources (kind,name,trust,absolute) VALUES ('scrape','סריקת אינטרנט',9,0)")
-            row = conn.execute("SELECT * FROM sources WHERE kind='scrape' LIMIT 1").fetchone()
+            c.execute("INSERT INTO sources (kind,name,trust,absolute) VALUES ('scrape','סריקת אינטרנט',9,0)")
+            row = c.execute("SELECT * FROM sources WHERE kind='scrape' LIMIT 1").fetchone()
         return dict(row)
-    finally:
-        pass
+    if conn is not None:
+        return _get(conn)
+    with get_connection() as c:
+        return _get(c)
 
 def create_import_source(name, notes, trust, absolute=0):
     with get_connection() as conn:
@@ -1203,6 +1203,14 @@ def promote_shelved(shelved_id):
                 VALUES (?,?,?,?,?)""",
                 (s["nick_id"], field, str(old_active), "הערך הקודם שלי", get_my_trust()))
         return True
+
+def force_field_value(nick_id, field_name, value):
+    """כותב ערך ישירות ל-cache (nicks) — לבחירה מפורשת שגוברת על הכרעת אמינות."""
+    if field_name in _NICK_FIELDS and field_name not in ("forum", "username"):
+        with get_connection() as conn:
+            conn.execute(
+                f"UPDATE nicks SET {field_name}=?, updated_at=datetime('now') WHERE id=?",
+                (value, int(nick_id)))
 
 def apply_import_conflict(nick_id, field, value, source_id, accept):
     """

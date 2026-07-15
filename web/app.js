@@ -1684,6 +1684,16 @@ async function bulkEditSelected() {
   ], 'modal-sm');
 }
 
+async function syncSelectedOnline() {
+  const ids = [...S.multiSelected];
+  if (!ids.length) { toast('לא נבחרו ניקים', 'error'); return; }
+  if (!confirm(`לסנכרן ${ids.length} ניקים נבחרים מהאינטרנט?\nהערך מהאינטרנט תמיד ינצח (בחרת במפורש לסנכרן).`)) return;
+  const cookie = '';
+  const start = await api('sync_selected_online', ids, cookie);
+  if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל', 'error'); return; }
+  startScrapeMonitor();
+}
+
 async function onSrcTrust(sid, val) {
   await api('update_source', sid, null, null, parseInt(val), null);
   await loadNicks(document.getElementById('search-input').value);

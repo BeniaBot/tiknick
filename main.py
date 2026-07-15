@@ -36,7 +36,7 @@ _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.7"
+APP_VERSION = "0.7.8"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -295,6 +295,68 @@ class API:
     def cancel_scrape(self):
         _scrape_cancel.set()
         return {"ok": True}
+
+    def sync_selected_online(self, nick_ids, cookie=""):
+        """
+        מסנכרן ניקים נבחרים מהאינטרנט — הערך הסרוק תמיד מנצח (המשתמש בחר במפורש).
+        רץ ברקע; התקדמות דרך _scrape_state.
+        """
+        if _scrape_state["running"]:
+            return {"ok": False, "error": "סריקה כבר רצה"}
+        ids = [int(i) for i in (nick_ids or [])]
+        if not ids:
+            return {"ok": False, "error": "לא נבחרו ניקים"}
+
+        _scrape_cancel.clear()
+        _scrape_state.update({
+            "running": True, "done": False, "error": None,
+            "page": 0, "total_pages": len(ids),
+            "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
+            "forum": None, "cancelled": False, "auto_resolved": 0,
+            "all_mode": False, "selected_mode": True,
+            "forum_index": 0, "forum_total": 0, "skipped": [],
+        })
+
+        # מפת URL לכל פורום
+        forum_urls = {f["name"]: (f.get("url") or "").strip() for f in db.get_forums()}
+
+        def _run():
+            updated = 0
+            for i, nid in enumerate(ids):
+                if _scrape_cancel.is_set():
+                    _scrape_state["cancelled"] = True
+                    break
+                _scrape_state["page"] = i + 1
+                nick = db.get_nick(nid)
+                if not nick:
+                    continue
+                url = forum_urls.get(nick["forum"], "")
+                if not url:
+                    _scrape_state["skipped"].append({"forum": nick.get("username",""), "error": "אין URL לפורום"})
+                    continue
+                try:
+                    mapped = scraper.scrape_single_user(url, nick["username"], cookie=cookie or None)
+                    if not mapped:
+                        _scrape_state["skipped"].append({"forum": nick["username"], "error": "לא נמצא"})
+                        continue
+                    # אלץ את ערך הסריקה לנצח — כתיבה ישירה + רישום למקור סריקה
+                    scrape_src = db.get_scrape_source()
+                    for field, val in mapped.items():
+                        if val in (None, ""):
+                            continue
+                        db.record_field_value(nid, field, val, scrape_src["id"])
+                        # בחירה מפורשת → ערך הסריקה מנצח בתצוגה
+                        db.force_field_value(nid, field, val)
+                    updated += 1
+                    _scrape_state["updated"] = updated
+                except Exception as e:
+                    _scrape_state["skipped"].append({"forum": nick.get("username",""), "error": str(e)})
+                    continue
+            _scrape_state["running"] = False
+            _scrape_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "count": len(ids)}
 
     def reset_all(self):
         db.reset_all()

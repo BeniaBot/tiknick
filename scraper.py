@@ -74,6 +74,28 @@ def _fetch_json(url, cookie=None):
     raise last_err or ScrapeError("הבקשה נכשלה")
 
 
+def scrape_single_user(forum_url, username, cookie=None):
+    """
+    שולף משתמש בודד מ-NodeBB לפי שם משתמש (endpoint /api/user/{username}).
+    מחזיר dict של שדות ממופים, או None אם לא נמצא.
+    """
+    try:
+        base = _api_base(forum_url)
+        # NodeBB: /api/user/{userslug} — נסה גם slug וגם username
+        import urllib.parse
+        slug = urllib.parse.quote(username.lower().replace(" ", "-"))
+        for path in (f"/api/user/{slug}", f"/api/user/username/{urllib.parse.quote(username)}"):
+            try:
+                data = _fetch_json(base + path, cookie=cookie)
+                if isinstance(data, dict) and (data.get("uid") or data.get("username")):
+                    return _map_user(data)
+            except ScrapeError:
+                continue
+    except ScrapeError:
+        return None
+    return None
+
+
 def check_forum(forum_url, cookie=None):
     """
     בדיקה מקדימה: מאמת שהכתובת היא פורום NodeBB עם API פעיל,
