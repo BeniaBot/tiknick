@@ -309,14 +309,16 @@ async function openAbout() {
         <div class="credit-card credit-hero">
           <div class="credit-avatar">🤖</div>
           <div class="credit-body">
-            <div class="credit-role">פיתוח וקוד</div>
+            <div class="credit-role">מאחורי הקלעים</div>
             <div class="credit-name">Claude Opus 4.8</div>
-            <div class="credit-desc">המתכנת של האפליקציה — מבית Anthropic 💛</div>
+            <div class="credit-desc">על פיתוח סבלני ומכיל חרף פרומפטים הפכפכים 💛</div>
           </div>
         </div>
 
         <div class="credit-card">
-          <div class="credit-avatar">📖</div>
+          <div class="credit-avatar" style="padding:0;overflow:hidden">
+            <img src="cfopuser.png" alt="cfopuser" style="width:100%;height:100%;object-fit:cover">
+          </div>
           <div class="credit-body">
             <div class="credit-role">רעיון ופיתוח Chazonishnik</div>
             <a class="credit-name-link" onclick="api('open_url','https://mitmachim.top/user/cfopuser')">cfopuser</a>
@@ -336,7 +338,10 @@ async function openAbout() {
           <div class="credit-body">
             <div class="credit-role">תודה מיוחדת</div>
             <a class="credit-name-link" onclick="api('open_url','https://mitmachim.top/user/%D7%A6%D7%95%D7%9C-%D7%92%D7%90%D7%94')">צול גאה</a>
-            <div class="credit-desc">על עידוד ותמיכה מורלית ;) ובעיקר על ההשראה לשם "חזונישניק" 😄</div>
+            <div class="credit-desc">
+              על עידוד ותמיכה מורלית ;)<br>
+              ובעיקר על ההשראה לשם Chazonishnik 😄
+            </div>
           </div>
         </div>
       </div>
