@@ -277,6 +277,8 @@ async function openAbout() {
           </svg>
           בקר בעמוד ה-GitHub
         </a>
+        <a class="about-link" style="opacity:.85;font-size:12px" title="תן כוכב בגיטהאב"
+           onclick="api('open_url','https://github.com/${esc(repo)}')">⭐ תן כוכב</a>
       </div>
 
       <!-- כפתורי ניווט -->
@@ -297,15 +299,6 @@ async function openAbout() {
           <div class="about-meta"><span class="am-k">פלטפורמה</span><span class="am-v">Windows 10/11</span></div>
           <div class="about-meta"><span class="am-k">מנוע</span><span class="am-v">PyWebView</span></div>
           <div class="about-meta"><span class="am-k">אחסון</span><span class="am-v">מקומי (SQLite)</span></div>
-        </div>
-        <div style="margin-top:20px;text-align:center">
-          <button class="btn btn-primary" style="display:inline-flex;align-items:center;gap:8px"
-                  onclick="api('open_url','https://github.com/BeniaBot/tiknick')">
-            ⭐ תן כוכב לפרויקט בגיטהאב
-          </button>
-          <div style="font-size:11.5px;color:var(--subtext);margin-top:8px">
-            אם התוכנה עוזרת לך — כוכב אחד בגיטהאב עוזר לנו להמשיך לפתח ולשפר 🙏
-          </div>
         </div>
       </div>
 
