@@ -311,7 +311,10 @@ async function openAbout() {
           <div class="credit-body">
             <div class="credit-role">מאחורי הקלעים</div>
             <div class="credit-name">Claude Opus 4.8</div>
-            <div class="credit-desc">על פיתוח סבלני ומכיל חרף פרומפטים הפכפכים 💛</div>
+            <div class="credit-desc">
+              המתכנת של האפליקציה — מבית Anthropic<br>
+              על פיתוח סבלני ומכיל חרף פרומפטים הפכפכים 💛
+            </div>
           </div>
         </div>
 
