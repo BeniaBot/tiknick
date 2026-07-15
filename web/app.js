@@ -180,6 +180,7 @@ async function checkUpdates() {
     res.download_url
       ? { label: '⬇️ עדכן עכשיו', cls: 'btn-primary', action: () => startInAppUpdate(res.download_url, res.release_url) }
       : { label: '🌐 פתח דף ההורדה', cls: 'btn-primary', action: () => { api('open_url', res.release_url); closeModal(); } },
+    { label: '📥 הורד ידנית', cls: 'btn-ghost', action: () => { api('open_url', res.download_url || res.release_url); closeModal(); } },
     { label: 'אחר כך', cls: 'btn-ghost', action: closeModal },
   ]);
 }

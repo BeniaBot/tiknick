@@ -56,7 +56,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.20"
+APP_VERSION = "0.7.21"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -623,12 +623,18 @@ class API:
             cur_exe = _sys.executable
             exe_name = os.path.basename(cur_exe)
             bat = os.path.join(tempfile.gettempdir(), "tiknick_update.bat")
-            # ממתין שהתהליך ייסגר לגמרי, נותן ל-PyInstaller לנקות את תיקיית _MEI,
-            # מחליף עם ניסיונות חוזרים (למקרה שהקובץ עדיין נעול), ורק אז מריץ מחדש.
+            # ממתין לסגירה מלאה, נותן ל-PyInstaller לנקות את _MEI, מחליף עם ניסיונות
+            # חוזרים, ומריץ מחדש בסביבה נקייה (מנקה _MEIPASS2 כדי למנוע שגיאת DLL).
             script = f"""@echo off
 chcp 65001 >nul
 title Tik-Nick Updater
 echo מעדכן את Tik-Nick, נא להמתין...
+
+rem — נקה משתני PyInstaller שירשנו מהתהליך הישן (מונע שגיאת python DLL) —
+set "_MEIPASS2="
+set "_PYI_APPLICATION_HOME_DIR="
+set "_PYI_ARCHIVE_FILE="
+set "_PYI_PARENT_PROCESS_LEVEL="
 
 rem — המתן עד שהתהליך הישן ייסגר לחלוטין —
 :waitloop
@@ -638,29 +644,38 @@ if not errorlevel 1 (
     goto waitloop
 )
 
-rem — המתן עוד רגע כדי לאפשר שחרור קבצים וניקוי תיקיית _MEI —
+rem — המתן עוד רגע לשחרור קבצים וניקוי _MEI —
 ping -n 4 127.0.0.1 >nul
 
-rem — נסה להחליף את הקובץ, עד 10 ניסיונות —
+rem — החלף את הקובץ, עד 15 ניסיונות —
 set /a tries=0
 :movetry
 move /Y "{new_exe_path}" "{cur_exe}" >nul 2>&1
 if exist "{new_exe_path}" (
     set /a tries+=1
-    if %tries% lss 10 (
+    if %tries% lss 15 (
         ping -n 2 127.0.0.1 >nul
         goto movetry
     )
 )
 
-rem — המתן עוד רגע לפני הפעלה מחדש —
+rem — הפעל מחדש בסביבה נקייה (cmd חדש בלי משתני PyInstaller) —
 ping -n 3 127.0.0.1 >nul
-start "" "{cur_exe}"
+start "" /D "{os.path.dirname(cur_exe)}" "{cur_exe}"
 del "%~f0"
 """
             with open(bat, "w", encoding="utf-8") as f:
                 f.write(script)
-            subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)  # CREATE_NO_WINDOW
+            # הרץ את ה-batch בסביבה נקייה: TEMP אמיתי, בלי משתני _MEI של PyInstaller
+            clean_env = {k: v for k, v in os.environ.items()
+                         if not k.startswith("_MEI") and not k.startswith("_PYI")}
+            real_temp = os.environ.get("SYSTEMROOT", r"C:\Windows")
+            # השתמש ב-TEMP של המשתמש (מחוץ ל-_MEI)
+            user_temp = os.path.join(os.environ.get("LOCALAPPDATA", real_temp), "Temp")
+            if os.path.isdir(user_temp):
+                clean_env["TEMP"] = user_temp
+                clean_env["TMP"] = user_temp
+            subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000, env=clean_env)
             # סגור את התוכנה כדי לאפשר את ההחלפה
             try:
                 webview.windows[0].destroy()
