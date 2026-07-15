@@ -1687,9 +1687,8 @@ async function bulkEditSelected() {
 async function syncSelectedOnline() {
   const ids = [...S.multiSelected];
   if (!ids.length) { toast('לא נבחרו ניקים', 'error'); return; }
-  if (!confirm(`לסנכרן ${ids.length} ניקים נבחרים מהאינטרנט?\nהערך מהאינטרנט תמיד ינצח (בחרת במפורש לסנכרן).`)) return;
-  const cookie = '';
-  const start = await api('sync_selected_online', ids, cookie);
+  if (!confirm(`לסנכרן ${ids.length} ניקים מהאינטרנט? הערך מהאינטרנט יגבר.`)) return;
+  const start = await api('sync_selected_online', ids, '');
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל', 'error'); return; }
   startScrapeMonitor();
 }
@@ -2675,29 +2674,8 @@ function startScrapeMonitor() {
 }
 
 function openChazonishnikHelp() {
-  openModal('🍪 Getting Cookies — Chazonishnik', `
-    <div style="direction:ltr;text-align:left;font-size:13.5px;line-height:1.7">
-      <p>Some forums require you to be logged in to view the member list.
-      In that case you'll need to provide your <b>express.sid</b> session cookie.</p>
-      <p style="margin-top:10px"><b>Chazonishnik</b> is our upcoming helper that will walk you through
-      capturing this cookie from your browser automatically — no technical steps needed.</p>
-      <div style="margin-top:14px;padding:12px;background:var(--card2);border-radius:8px">
-        <b>Manual method (for now):</b>
-        <ol style="margin:8px 0 0;padding-inline-start:20px">
-          <li>Log in to the forum in your browser</li>
-          <li>Open Developer Tools (F12) → Application → Cookies</li>
-          <li>Copy the value of <code>express.sid</code></li>
-          <li>Paste it into the cookie field here</li>
-        </ol>
-      </div>
-      <p style="margin-top:12px;color:var(--subtext);font-size:12px">
-        Chazonishnik is coming soon and will make this fully automatic. 🚀
-      </p>
-    </div>
-  `, [{ label: 'הבנתי', cls: 'btn-primary', action: closeModal }], 'modal-sm');
+  openChazonishnik();
 }
-
-function openChazonishnikHelpEnd() {}
 
 function onSyncForumChange() {
   const sel = document.getElementById('sync-forum');
@@ -2791,16 +2769,94 @@ async function resolveAllConflicts(prefer) {
 }
 
 function openChazonishnik() {
-  openModal('📖 Chazonishnik', `
-    <div style="text-align:center;padding:30px 20px">
-      <div style="font-size:52px;margin-bottom:16px">📖</div>
-      <h3 style="font-size:18px;margin-bottom:10px">Chazonishnik</h3>
-      <p style="color:var(--subtext);font-size:14px;line-height:1.6">
-        פיצ'ר זה עדיין בפיתוח.<br>הפונקציונליות תתווסף בקרוב.
-      </p>
-    </div>`, [
+  openModal('📖 Chazonishnik — ניתוח פעילות משתמש', `
+    <div style="font-size:13.5px;line-height:1.7">
+      <div style="padding:12px 14px;background:var(--card2);border-radius:10px;margin-bottom:14px">
+        <b>מה זה עושה?</b> Chazonishnik שולף את היסטוריית הפוסטים של משתמש בפורום ומייצר
+        דוח אינטראקטיבי: כמות פוסטים, לייקים, מילים, שעות וימי פעילות, מעריצים מובילים,
+        והפוסטים המוצלחים ביותר.
+      </div>
+
+      <div style="padding:10px 12px;border:1px solid var(--accent-2);border-radius:8px;margin-bottom:14px;font-size:12.5px">
+        ⚠️ כרגע נתמך <b>רק עבור פורום מתמחים טופ</b> (mitmachim.top). תמיכה בפורומים נוספים תתווסף.
+      </div>
+
+      <div style="margin-bottom:14px">
+        <b>🍪 דורש עוגיית התחברות (express.sid)</b>
+        <div style="color:var(--subtext);font-size:12.5px;margin-top:4px">
+          הפורום דורש התחברות כדי לגשת להיסטוריית הפוסטים. יש שתי דרכים להשיג את העוגייה:
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        <div style="padding:12px;border:1px solid var(--border-soft);border-radius:8px">
+          <b style="font-size:12.5px">דרך 1: ידני (F12)</b>
+          <ol style="margin:6px 0 0;padding-inline-start:18px;font-size:11.5px;color:var(--subtext);line-height:1.6">
+            <li>התחבר לפורום בדפדפן</li>
+            <li>פתח כלי מפתחים (F12)</li>
+            <li>Application ← Cookies</li>
+            <li>העתק את הערך של express.sid</li>
+          </ol>
+        </div>
+        <div style="padding:12px;border:1px solid var(--border-soft);border-radius:8px">
+          <b style="font-size:12.5px">דרך 2: תוסף (מומלץ)</b>
+          <ol style="margin:6px 0 0;padding-inline-start:18px;font-size:11.5px;color:var(--subtext);line-height:1.6">
+            <li>התקן את התוסף
+              <b style="color:var(--accent-2);cursor:pointer" onclick="openExt('https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc')">Get cookies.txt</b></li>
+            <li>התחבר לפורום</li>
+            <li>לחץ על התוסף ← Export</li>
+            <li>מצא את שורת express.sid והעתק את הערך</li>
+          </ol>
+        </div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">שם משתמש לניתוח</label>
+        <input id="chz-user" class="form-input" placeholder="שם המשתמש בפורום (למשל: בנימין)">
+      </div>
+      <div class="form-group" style="margin-bottom:6px">
+        <label class="form-label">עוגיית express.sid</label>
+        <input id="chz-cookie" class="form-input" dir="ltr" placeholder="s%3A...">
+      </div>
+    </div>
+  `, [
+    { label: '📊 נתח פעילות', cls: 'btn-primary', action: runChazonishnik },
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg');
+}
+
+function openExt(url) {
+  api('open_url', url);
+}
+
+async function runChazonishnik() {
+  const username = document.getElementById('chz-user')?.value.trim();
+  const cookie   = document.getElementById('chz-cookie')?.value.trim();
+  if (!username) { toast('הזן שם משתמש', 'error'); return; }
+  if (!cookie)   { toast('נדרשת עוגיית express.sid', 'error'); return; }
+  toast('מנתח פעילות… זה עשוי לקחת דקה', 'info');
+  const r = await api('run_chazonishnik', username, cookie);
+  if (r?.ok) {
+    toast('הניתוח הושלם ✓', 'success');
+    // הדוח נפתח בדפדפן ע"י הבקאנד; אם יש HTML גם נציג בתוכנה
+    if (r.html) showChazonishnikReport(r.html);
+  } else {
+    toast('שגיאה: ' + (r?.error || 'לא ניתן לנתח'), 'error');
+  }
+}
+
+function showChazonishnikReport(html) {
+  const overlay = document.getElementById('modal-overlay');
+  // הצג בתוך iframe בחלון מלא בתוכנה
+  openModal('📊 דוח פעילות', `
+    <iframe id="chz-frame" style="width:100%;height:70vh;border:none;border-radius:8px;background:#0f172a"></iframe>
+  `, [
     { label: 'סגור', cls: 'btn-primary', action: closeModal },
-  ], 'modal-sm');
+  ], 'modal-lg');
+  setTimeout(() => {
+    const frame = document.getElementById('chz-frame');
+    if (frame) frame.srcdoc = html;
+  }, 100);
 }
 
 function openStinknik() {

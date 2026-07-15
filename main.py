@@ -37,7 +37,7 @@ _scrape_skip = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.11"
+APP_VERSION = "0.7.12"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -404,6 +404,25 @@ class API:
             return {"ok": True}
         except Exception as e:
             logging.exception("open_url failed for %s", url)
+            return {"ok": False, "error": str(e)}
+
+    def run_chazonishnik(self, username, cookie, base_url="https://mitmachim.top"):
+        """מריץ ניתוח פעילות משתמש (Chazonishnik) ומחזיר HTML; גם שומר ופותח בדפדפן."""
+        try:
+            import chazonishnik
+            out_dir = os.path.dirname(db.DB_PATH)
+            safe = "".join(c for c in username if c.isalnum() or c in "-_") or "user"
+            save_path = os.path.join(out_dir, f"chazonishnik_{safe}.html")
+            result = chazonishnik.analyze_user(
+                username, cookie, base_url=base_url, save_path=save_path)
+            if result.get("ok") and result.get("path"):
+                try:
+                    webbrowser.open("file://" + os.path.realpath(result["path"]))
+                except Exception:
+                    pass
+            return result
+        except Exception as e:
+            logging.exception("run_chazonishnik failed")
             return {"ok": False, "error": str(e)}
 
     # ── בדיקת עדכונים מ-GitHub ──────────────────────────────────────
