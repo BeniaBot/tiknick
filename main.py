@@ -35,17 +35,14 @@ _scrape_state = {
 _scrape_cancel = threading.Event()
 _scrape_skip = threading.Event()
 
-# מצב Chazonishnik (ניתוח פעילות ברקע)
-_chz_state = {"running": False, "done": False, "error": None, "phase": "",
-              "page": 0, "count": 0, "analyzed": 0, "total": 0, "html": None,
-              "path": None, "cancelled": False}
-_chz_cancel = threading.Event()
-
 # ── מצב Chazonishnik (ניתוח פעילות ברקע) ──
 _chz_state = {"running": False, "done": False, "error": None,
               "phase": "", "count": 0, "total": 0, "html": None, "path": None,
               "cancelled": False}
 _chz_cancel = threading.Event()
+
+# מצב הורדת עדכון
+_update_state = {"downloaded": 0, "total": 0}
 
 class _ChzCancelled(Exception):
     """נזרק כדי לבטל ניתוח Chazonishnik שרץ."""
@@ -53,7 +50,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.14"
+APP_VERSION = "0.7.15"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -504,6 +501,79 @@ class API:
     # ── בדיקת עדכונים מ-GitHub ──────────────────────────────────────
     def get_app_version(self):
         return {"version": APP_VERSION, "repo": GITHUB_REPO}
+
+    def download_update(self, download_url):
+        """מוריד את ה-EXE החדש לתיקייה זמנית ליד התוכנה. מחזיר את הנתיב."""
+        import urllib.request, sys as _sys
+        if not download_url:
+            return {"ok": False, "error": "אין קישור הורדה"}
+        # רק כשרצים כ-EXE (frozen)
+        if not getattr(_sys, "frozen", False):
+            return {"ok": False, "error": "עדכון מתוך התוכנה זמין רק בגרסת ה-EXE"}
+        try:
+            cur_exe = _sys.executable
+            folder = os.path.dirname(cur_exe)
+            new_path = os.path.join(folder, "TikNick_new.exe")
+            req = urllib.request.Request(download_url, headers={"User-Agent": "TikNick-Updater"})
+            with urllib.request.urlopen(req, timeout=60) as resp, open(new_path, "wb") as out:
+                total = int(resp.headers.get("Content-Length", 0))
+                got = 0
+                while True:
+                    chunk = resp.read(65536)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    got += len(chunk)
+                    _update_state["downloaded"] = got
+                    _update_state["total"] = total
+            return {"ok": True, "path": new_path}
+        except Exception as e:
+            logging.exception("download_update failed")
+            return {"ok": False, "error": str(e)}
+
+    def get_update_download_progress(self):
+        return dict(_update_state)
+
+    def apply_update(self, new_exe_path):
+        """
+        מחליף את ה-EXE הישן בחדש: כותב סקריפט batch שממתין לסגירת התוכנה,
+        מחליף את הקובץ, ומריץ מחדש. ואז סוגר את התוכנה.
+        """
+        import sys as _sys, subprocess, tempfile
+        if not getattr(_sys, "frozen", False):
+            return {"ok": False, "error": "זמין רק בגרסת ה-EXE"}
+        if not new_exe_path or not os.path.exists(new_exe_path):
+            return {"ok": False, "error": "קובץ העדכון לא נמצא"}
+        try:
+            cur_exe = _sys.executable
+            bat = os.path.join(tempfile.gettempdir(), "tiknick_update.bat")
+            # ממתין שהתהליך ייסגר, מחליף, מריץ מחדש, ומוחק את עצמו
+            script = f"""@echo off
+chcp 65001 >nul
+echo מעדכן את Tik-Nick...
+:waitloop
+tasklist /FI "IMAGENAME eq {os.path.basename(cur_exe)}" 2>nul | find /I "{os.path.basename(cur_exe)}" >nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto waitloop
+)
+timeout /t 1 /nobreak >nul
+move /Y "{new_exe_path}" "{cur_exe}" >nul
+start "" "{cur_exe}"
+del "%~f0"
+"""
+            with open(bat, "w", encoding="utf-8") as f:
+                f.write(script)
+            subprocess.Popen(["cmd", "/c", bat], creationflags=0x08000000)  # CREATE_NO_WINDOW
+            # סגור את התוכנה כדי לאפשר את ההחלפה
+            try:
+                webview.windows[0].destroy()
+            except Exception:
+                os._exit(0)
+            return {"ok": True}
+        except Exception as e:
+            logging.exception("apply_update failed")
+            return {"ok": False, "error": str(e)}
 
     def check_for_updates(self):
         """בודק אם קיימת גרסה חדשה יותר ב-GitHub Releases."""

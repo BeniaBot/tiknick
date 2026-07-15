@@ -164,15 +164,70 @@ async function checkUpdates() {
       </div>
     </div>
     ${notesHtml}
+    <div id="update-progress" style="display:none;margin-top:16px">
+      <div style="font-size:12.5px;color:var(--subtext);margin-bottom:6px" id="update-progress-text">מוריד…</div>
+      <div style="height:8px;background:var(--card2);border-radius:99px;overflow:hidden">
+        <div id="update-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s"></div>
+      </div>
+    </div>
     <p style="font-size:12px;color:var(--subtext);margin-top:14px;text-align:center">
-      ההורדה תיפתח בדפדפן. לאחר ההורדה, החלף את קובץ ה-EXE הישן בחדש.<br>
-      הנתונים שלך נשמרים בנפרד ולא יושפעו.
+      הנתונים שלך נשמרים בנפרד ולא יושפעו מהעדכון.
     </p>`, [
     res.download_url
-      ? { label: '⬇️ הורד עכשיו', cls: 'btn-primary', action: () => { api('open_url', res.download_url); closeModal(); } }
+      ? { label: '⬇️ עדכן עכשיו', cls: 'btn-primary', action: () => startInAppUpdate(res.download_url, res.release_url) }
       : { label: '🌐 פתח דף ההורדה', cls: 'btn-primary', action: () => { api('open_url', res.release_url); closeModal(); } },
     { label: 'אחר כך', cls: 'btn-ghost', action: closeModal },
   ]);
+}
+
+async function startInAppUpdate(downloadUrl, releaseUrl) {
+  // בדוק אם רצים כ-EXE (עדכון פנימי) או לא (fallback לדפדפן)
+  const prog = document.getElementById('update-progress');
+  const btnBar = document.querySelector('.modal-buttons') || document.querySelector('.modal-footer');
+  if (prog) prog.style.display = 'block';
+  const txt = document.getElementById('update-progress-text');
+  const bar = document.getElementById('update-bar');
+  if (txt) txt.textContent = 'מוריד את הגרסה החדשה…';
+
+  // התחל הורדה
+  const dlPromise = api('download_update', downloadUrl);
+  // עדכון פס התקדמות
+  const poll = setInterval(async () => {
+    const p = await api('get_update_download_progress');
+    if (p && p.total && bar) {
+      const pct = Math.round((p.downloaded / p.total) * 100);
+      bar.style.width = pct + '%';
+      if (txt) txt.textContent = `מוריד… ${pct}%`;
+    }
+  }, 400);
+
+  const dl = await dlPromise;
+  clearInterval(poll);
+
+  if (!dl?.ok) {
+    // fallback — פתח בדפדפן
+    if (dl?.error && dl.error.includes('EXE')) {
+      if (txt) txt.textContent = '';
+      toast('עדכון פנימי זמין רק בגרסת ה-EXE. פותח הורדה בדפדפן…', 'info');
+      api('open_url', downloadUrl || releaseUrl);
+      closeModal();
+      return;
+    }
+    toast('שגיאה בהורדה: ' + (dl?.error || ''), 'error');
+    return;
+  }
+
+  if (bar) bar.style.width = '100%';
+  if (txt) txt.textContent = 'ההורדה הושלמה. מחיל עדכון ומפעיל מחדש…';
+  if (!confirm('ההורדה הושלמה. התוכנה תיסגר, תתעדכן, ותיפתח מחדש. להמשיך?')) {
+    toast('העדכון בוטל. הקובץ הורד וממתין.', 'info');
+    return;
+  }
+  const ap = await api('apply_update', dl.path);
+  if (!ap?.ok) {
+    toast('שגיאה בהחלת העדכון: ' + (ap?.error || ''), 'error');
+  }
+  // אם הצליח — התוכנה נסגרת אוטומטית
 }
 
 // ══ ABOUT ═════════════════════════════════════════════════════════════
