@@ -301,28 +301,41 @@ async function openAbout() {
       </div>
 
       <div class="about-pane" id="about-pane-credits" style="display:none">
-        <p class="about-text">
+        <p class="about-text" style="text-align:center;margin-bottom:18px">
           תודה לכל מי שסייע, בדק, והציע רעיונות לאורך הפיתוח. 🙏
         </p>
-        <div style="display:flex;flex-direction:column;gap:12px;margin-top:6px">
-          <div style="padding:12px 14px;background:var(--card2);border-radius:10px">
-            <div style="font-weight:700;font-size:13.5px">📖 פיתוח Chazonishnik</div>
-            <div style="font-size:12.5px;color:var(--subtext);margin-top:3px">
-              <a class="about-link" style="font-size:12.5px" onclick="api('open_url','https://mitmachim.top/user/cfopuser')">cfopuser</a>
-            </div>
+
+        <div class="credit-card credit-hero">
+          <div class="credit-avatar">🤖</div>
+          <div class="credit-body">
+            <div class="credit-role">פיתוח וקוד</div>
+            <div class="credit-name">Claude Opus 4.8</div>
+            <div class="credit-desc">המתכנת של האפליקציה — מבית Anthropic 💛</div>
           </div>
-          <div style="padding:12px 14px;background:var(--card2);border-radius:10px">
-            <div style="font-weight:700;font-size:13.5px">🦨 פיתוח Stinknik</div>
-            <div style="font-size:12.5px;color:var(--subtext);margin-top:3px">
-              <a class="about-link" style="font-size:12.5px" onclick="api('open_url','https://mitmachim.top/user/%D7%98%D7%95%D7%A4-%D7%A9%D7%91%D7%9E%D7%AA%D7%9E%D7%97%D7%99%D7%9D')">טופ שבמתמחים</a>
-            </div>
+        </div>
+
+        <div class="credit-card">
+          <div class="credit-avatar">📖</div>
+          <div class="credit-body">
+            <div class="credit-role">רעיון ופיתוח Chazonishnik</div>
+            <a class="credit-name-link" onclick="api('open_url','https://mitmachim.top/user/cfopuser')">cfopuser</a>
           </div>
-          <div style="padding:12px 14px;background:var(--card2);border-radius:10px">
-            <div style="font-weight:700;font-size:13.5px">🙏 תודה מיוחדת</div>
-            <div style="font-size:12.5px;color:var(--subtext);margin-top:3px;line-height:1.6">
-              <a class="about-link" style="font-size:12.5px" onclick="api('open_url','https://mitmachim.top/user/%D7%A6%D7%95%D7%9C-%D7%92%D7%90%D7%94')">צול גאה</a>
-              — על עידוד ותמיכה מורלית ;) ובעיקר על ההשראה לשם "חזונישניק" 😄
-            </div>
+        </div>
+
+        <div class="credit-card">
+          <div class="credit-avatar">🦨</div>
+          <div class="credit-body">
+            <div class="credit-role">רעיון ופיתוח Stinknik</div>
+            <a class="credit-name-link" onclick="api('open_url','https://mitmachim.top/user/%D7%98%D7%95%D7%A4-%D7%A9%D7%91%D7%9E%D7%AA%D7%9E%D7%97%D7%99%D7%9D')">טופ שבמתמחים</a>
+          </div>
+        </div>
+
+        <div class="credit-card">
+          <div class="credit-avatar">🙏</div>
+          <div class="credit-body">
+            <div class="credit-role">תודה מיוחדת</div>
+            <a class="credit-name-link" onclick="api('open_url','https://mitmachim.top/user/%D7%A6%D7%95%D7%9C-%D7%92%D7%90%D7%94')">צול גאה</a>
+            <div class="credit-desc">על עידוד ותמיכה מורלית ;) ובעיקר על ההשראה לשם "חזונישניק" 😄</div>
           </div>
         </div>
       </div>

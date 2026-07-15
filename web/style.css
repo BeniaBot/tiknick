@@ -861,6 +861,34 @@ tbody tr:hover td:last-child::after {
   animation: dot-pulse 1.8s ease-in-out infinite;
 }
 
+/* ══ CREDITS ══ */
+.credit-card {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 16px; margin-bottom: 10px;
+  background: var(--card2); border: 1px solid var(--border-soft);
+  border-radius: 12px; text-align: right;
+}
+.credit-hero {
+  background: linear-gradient(135deg, rgba(240,192,120,.12), var(--card2));
+  border-color: var(--accent);
+}
+.credit-avatar {
+  width: 44px; height: 44px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; background: var(--bg); border-radius: 50%;
+  border: 1px solid var(--border-soft);
+}
+.credit-hero .credit-avatar { border-color: var(--accent); }
+.credit-body { flex: 1; min-width: 0; }
+.credit-role { font-size: 11px; color: var(--subtext); font-weight: 600; margin-bottom: 2px; }
+.credit-name { font-size: 15px; font-weight: 800; color: var(--text); }
+.credit-name-link {
+  font-size: 15px; font-weight: 800; color: var(--accent-2);
+  cursor: pointer; text-decoration: none;
+}
+.credit-name-link:hover { text-decoration: underline; }
+.credit-desc { font-size: 12px; color: var(--subtext); margin-top: 3px; line-height: 1.55; }
+
 /* ══════════════════════════════════════════════════════════════════
    ABOUT DIALOG (Olive-style)
    ══════════════════════════════════════════════════════════════════ */
