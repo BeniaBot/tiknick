@@ -1203,14 +1203,37 @@ def promote_shelved(shelved_id):
                 (s["nick_id"], field, str(old_active), "הערך הקודם שלי", get_my_trust()))
         return True
 
+def apply_import_conflict(nick_id, field, value, source_id, accept):
+    """
+    מחיל החלטה ידנית על התנגשות ייבוא.
+    accept=True → הערך המיובא מנצח בפועל (נרשם למקור וגם מוצג מיד),
+    כי בחירה ידנית גוברת על הכרעת האמינות האוטומטית.
+    accept=False → נשאר הקיים (לא נרשם כלום מהייבוא לשדה זה).
+    """
+    if not accept:
+        return True
+    nid = int(nick_id)
+    record_field_value(nid, field, value, int(source_id))
+    # בחירה ידנית גוברת — כתוב ישירות ל-cache כדי שיוצג
+    if field in _NICK_FIELDS and field not in ("forum", "username"):
+        with get_connection() as conn:
+            conn.execute(
+                f"UPDATE nicks SET {field}=?, updated_at=datetime('now') WHERE id=?",
+                (value, nid))
+    return True
+
 def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
-                import_name=None, import_notes="", import_trust=None, import_absolute=0):
+                import_name=None, import_notes="", import_trust=None, import_absolute=0,
+                manual_conflicts=False):
     """
     ייבוא מבוסס-מקורות: נוצר מקור ייבוא אחד (שם/הערות/אמינות/אבסולוטי),
     וכל ערך מיובא נרשם תחתיו במנוע המקורות. הערך המנצח בכל שדה נקבע אוטומטית.
-    מחזיר: (imported_new, values_recorded)
+    manual_conflicts=True → התנגשויות (ערך שונה בשדה קיים) לא נרשמות אלא מוחזרות
+    לפתרון ידני; מחזיר dict עם רשימת ההתנגשויות.
+    מחזיר: (imported_new, values_recorded) או dict במצב ידני.
     """
     imported = 0; recorded = 0
+    pending_conflicts = []
     exported_fields = data.get("exported_fields", get_exportable_fields())
     mapping = forum_mapping or {}
     trust = get_my_trust() if import_trust is None else max(1, min(10, int(import_trust)))
@@ -1251,9 +1274,23 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
             val = nick.get(field, "")
             if val in (None, ""):
                 continue
+            if manual_conflicts:
+                # בדוק אם קיים ערך שונה מאותו שדה (ממקור אחר)
+                cur = get_nick(nid)
+                old = str(cur.get(field, "") or "").strip() if cur else ""
+                if old and old != str(val).strip():
+                    pending_conflicts.append({
+                        "nick_id": nid, "username": username, "forum": forum,
+                        "field": field, "old_value": old, "new_value": str(val),
+                        "source_id": import_sid, "source_name": src_name,
+                    })
+                    continue  # אל תרשום עדיין — ימתין להכרעה ידנית
             record_field_value(nid, field, val, import_sid)
             recorded += 1
 
     # עדכן ספירות בלוג הייבוא (import_sources הישן, לתאימות)
     log_import_source(src_name, import_notes, trust, imported, recorded)
+    if manual_conflicts:
+        return {"imported": imported, "recorded": recorded,
+                "conflicts": pending_conflicts, "source_id": import_sid}
     return imported, recorded

@@ -710,7 +710,10 @@ body[data-view="cards"] #cards-wrap{display:block}
   flex-shrink: 0; box-shadow: var(--shadow-sm);
 }
 .uname-dot.has-img { background-size: cover; background-position: center; }
-tbody td:has(.uname-dot) { display: flex; align-items: center; }
+tbody td:has(.uname-dot) { display: flex; align-items: center; max-width: 230px; overflow: hidden; }
+tbody td:has(.uname-dot) > span:not(.uname-dot) {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
 
 /* ══════════════════════════════════════════════════════════════════
    POLISH — human details

@@ -1667,7 +1667,9 @@ async function bulkEditSelected() {
     <div class="form-group"><label class="form-label">שדה</label>
       <select id="bulk-field" class="form-select">${opts}</select></div>
     <div class="form-group"><label class="form-label">ערך חדש</label>
-      <input id="bulk-value" class="form-input" placeholder="הערך שיוחל על כולם"></div>
+      <input id="bulk-value" class="form-input" placeholder="הערך שיוחל על כולם — או השאר ריק לניקוי השדה">
+      <div style="font-size:11px;color:var(--subtext);margin-top:4px">💡 השארת השדה ריק תנקה את הערך אצל כל הנבחרים</div>
+    </div>
   `, [
     { label: 'עדכן', cls: 'btn-primary', action: async () => {
       const field = document.getElementById('bulk-field').value;
@@ -1712,6 +1714,7 @@ async function openSyncMgr() {
   const sync     = await api('get_sync_settings');
   const forumIo  = await api('get_forum_io_flags') || {};
   const policy   = await api('get_conflict_policy') || 'ask';
+  const importManual = (await api('get_setting', 'import_manual_conflicts', '0')) === '1';
   const myTrust  = await api('get_my_trust') ?? 10;
   const sources  = await api('get_sources') || [];
 
@@ -1769,7 +1772,20 @@ async function openSyncMgr() {
     </p>
     ${opt('ask', '🙋 לשאול אותי', 'ייפתח חלון פתרון התנגשויות בסיום הסריקה (ברירת מחדל)')}
     ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
-    ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}`;
+    ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}
+
+    <div class="section-hdr" style="margin-top:22px">התנגשויות בייבוא קובץ</div>
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
+      כשייבוא קובץ מכניס ערך שונה לשדה קיים, איך להכריע?
+    </p>
+    <label class="toggle" style="display:inline-flex;align-items:center;gap:8px">
+      <input type="checkbox" id="import-manual" ${importManual?'checked':''}>
+      <span class="toggle-slider"></span>
+    </label>
+    <span style="font-size:13px;margin-right:6px">פתרון ידני — שאל אותי לכל התנגשות</span>
+    <div style="font-size:11px;color:var(--subtext);margin-top:6px">
+      כבוי (ברירת מחדל) = הכרעה אוטומטית לפי דרגת אמינות. דלוק = ייפתח חלון לבחירה ידנית בכל התנגשות.
+    </div>`;
 
   // ── סעיף 4: ניהול מקורות ("אבות") ──
   const kindLabel = k => k==='me' ? '👤 אני' : k==='scrape' ? '🌐 סריקת אינטרנט' : '📥 ייבוא';
@@ -1845,6 +1861,8 @@ async function openSyncMgr() {
       // סעיף 3
       const chosen = document.querySelector('input[name="cpolicy"]:checked');
       if (chosen) await api('set_conflict_policy', chosen.value);
+      const im = document.getElementById('import-manual');
+      if (im) await api('set_setting', 'import_manual_conflicts', im.checked ? '1' : '0');
       toast('הגדרות סנכרון נשמרו ✓', 'success');
       // לא סוגר — סגירה דרך כפתור "סגור"
     }},
@@ -1917,13 +1935,75 @@ async function proceedImport(res) {
                          _pendingImportMeta.notes, _pendingImportMeta.trust);
     if (r2?.ok) {
       await loadNicks(document.getElementById('search-input').value);
-      toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r2.imported} · ערכים שנקלטו: ${r2.conflicts}`, "success");
+      if (r2.manual && r2.conflicts && r2.conflicts.length) {
+        startImportConflictResolver(r2.conflicts);
+      } else {
+        toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r2.imported} · ערכים שנקלטו: ${r2.conflicts}`, "success");
+      }
     } else {
       toast('שגיאה בייבוא: ' + (r2?.error||''), 'error');
     }
     return;
   }
   showForumMappingDialog(unknown, res.nick_count);
+}
+
+// פתרון ידני של התנגשויות ייבוא — אחד אחד
+let _impConflicts = [];
+let _impConflictIdx = 0;
+
+function startImportConflictResolver(conflicts) {
+  _impConflicts = conflicts;
+  _impConflictIdx = 0;
+  showNextImportConflict();
+}
+
+function showNextImportConflict() {
+  if (_impConflictIdx >= _impConflicts.length) {
+    closeModal();
+    toast(`פתרון התנגשויות הושלם ✓`, 'success');
+    loadNicks(document.getElementById('search-input').value);
+    return;
+  }
+  const c = _impConflicts[_impConflictIdx];
+  const fieldLabel = (COLS.find(x => x.key===c.field)?.label) || c.field;
+  openModal(`⚠️ התנגשות ${_impConflictIdx+1}/${_impConflicts.length}`, `
+    <p style="font-size:13px;margin-bottom:12px">
+      <b>${esc(c.username)}</b> <span style="color:var(--subtext)">[${esc(c.forum)}]</span> ·
+      שדה: <b>${esc(fieldLabel)}</b>
+    </p>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div style="padding:10px;border:1px solid var(--border-soft);border-radius:8px">
+        <div style="font-size:11px;color:var(--subtext)">הערך הקיים</div>
+        <div style="font-weight:600">${esc(c.old_value)}</div>
+      </div>
+      <div style="padding:10px;border:1px solid var(--accent);border-radius:8px">
+        <div style="font-size:11px;color:var(--subtext)">הערך המיובא (${esc(c.source_name)})</div>
+        <div style="font-weight:600">${esc(c.new_value)}</div>
+      </div>
+    </div>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:12px;font-size:12px;color:var(--subtext)">
+      <input type="checkbox" id="imp-apply-all"> החל את הבחירה על כל שאר ההתנגשויות
+    </label>
+  `, [
+    { label: 'קבל מיובא', cls: 'btn-primary', action: () => resolveImportConflict(true) },
+    { label: 'שמור קיים', cls: 'btn-ghost',   action: () => resolveImportConflict(false) },
+  ], 'modal-sm');
+}
+
+async function resolveImportConflict(accept) {
+  const all = document.getElementById('imp-apply-all')?.checked;
+  const c = _impConflicts[_impConflictIdx];
+  await api('apply_import_conflict', c.nick_id, c.field, c.new_value, c.source_id, accept);
+  _impConflictIdx++;
+  if (all) {
+    // החל את אותה בחירה על כל השאר
+    for (; _impConflictIdx < _impConflicts.length; _impConflictIdx++) {
+      const rest = _impConflicts[_impConflictIdx];
+      await api('apply_import_conflict', rest.nick_id, rest.field, rest.new_value, rest.source_id, accept);
+    }
+  }
+  showNextImportConflict();
 }
 
 async function showForumMappingDialog(unknownForums, totalNicks) {
@@ -2008,7 +2088,11 @@ async function showForumMappingDialog(unknownForums, totalNicks) {
       if (r2?.ok) {
         await loadForums();
         await loadNicks(document.getElementById('search-input').value);
-        toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r2.imported} · ערכים שנקלטו: ${r2.conflicts}`, "success");
+        if (r2.manual && r2.conflicts && r2.conflicts.length) {
+          startImportConflictResolver(r2.conflicts);
+        } else {
+          toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r2.imported} · ערכים שנקלטו: ${r2.conflicts}`, "success");
+        }
       } else {
         toast('שגיאה בייבוא: ' + (r2?.error||''), 'error');
       }

@@ -36,7 +36,7 @@ _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.3"
+APP_VERSION = "0.7.4"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -427,6 +427,13 @@ class API:
         db.set_setting("conflict_policy", policy)
         return {"ok": True}
 
+    def get_setting(self, key, default=""):
+        return db.get_setting(key, default)
+
+    def set_setting(self, key, value):
+        db.set_setting(key, value)
+        return {"ok": True}
+
     # ── ייצוא / ייבוא ──────────────────────────────────────────────
     def export_data(self):
         import shutil
@@ -502,13 +509,23 @@ class API:
             path     = pending["path"]
             mapping  = forum_mapping or {}
             name     = import_name or os.path.basename(path)
-            imp, conf = db.import_data(
+            manual   = db.get_setting("import_manual_conflicts", "0") == "1"
+            result = db.import_data(
                 data, os.path.basename(path), mapping,
-                import_name=name, import_notes=import_notes, import_trust=import_trust)
+                import_name=name, import_notes=import_notes, import_trust=import_trust,
+                manual_conflicts=manual)
             self._pending_import = None
+            if manual and isinstance(result, dict):
+                return {"ok": True, "imported": result["imported"],
+                        "conflicts": result["conflicts"], "manual": True}
+            imp, conf = result
             return {"ok": True, "imported": imp, "conflicts": conf}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def apply_import_conflict(self, nick_id, field, value, source_id, accept):
+        db.apply_import_conflict(nick_id, field, value, source_id, bool(accept))
+        return {"ok": True}
 
     # ── אמינות ולוג ייבואים ────────────────────────────────────────
     def get_my_trust(self):
