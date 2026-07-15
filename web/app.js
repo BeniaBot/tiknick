@@ -2541,9 +2541,13 @@ async function openInternetSync() {
     <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">פורום לסריקה</label>
     <select id="sync-forum" class="form-select" style="width:100%;margin-bottom:12px">${opts}</select>
 
-    <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">
-      עוגיית התחברות (express.sid) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה)
-    </label>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px">
+      <label style="font-size:12px;color:var(--subtext)">
+        עוגיית התחברות (express.sid) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה)
+      </label>
+      <button class="btn btn-ghost btn-sm" style="white-space:nowrap;flex-shrink:0"
+              onclick="openChazonishnikHelp()" title="איך משיגים עוגיות?">🍪 איך משיגים?</button>
+    </div>
     <input id="sync-cookie" class="form-input" style="width:100%;margin-bottom:12px" dir="ltr"
            placeholder="express.sid=s%3A...  (השאר ריק אם הפורום ציבורי)">
 
@@ -2661,6 +2665,31 @@ function startScrapeMonitor() {
     }
   }, 700);
 }
+
+function openChazonishnikHelp() {
+  openModal('🍪 Getting Cookies — Chazonishnik', `
+    <div style="direction:ltr;text-align:left;font-size:13.5px;line-height:1.7">
+      <p>Some forums require you to be logged in to view the member list.
+      In that case you'll need to provide your <b>express.sid</b> session cookie.</p>
+      <p style="margin-top:10px"><b>Chazonishnik</b> is our upcoming helper that will walk you through
+      capturing this cookie from your browser automatically — no technical steps needed.</p>
+      <div style="margin-top:14px;padding:12px;background:var(--card2);border-radius:8px">
+        <b>Manual method (for now):</b>
+        <ol style="margin:8px 0 0;padding-inline-start:20px">
+          <li>Log in to the forum in your browser</li>
+          <li>Open Developer Tools (F12) → Application → Cookies</li>
+          <li>Copy the value of <code>express.sid</code></li>
+          <li>Paste it into the cookie field here</li>
+        </ol>
+      </div>
+      <p style="margin-top:12px;color:var(--subtext);font-size:12px">
+        Chazonishnik is coming soon and will make this fully automatic. 🚀
+      </p>
+    </div>
+  `, [{ label: 'הבנתי', cls: 'btn-primary', action: closeModal }], 'modal-sm');
+}
+
+function openChazonishnikHelpEnd() {}
 
 async function skipCurrentForum() {
   await api('skip_current_forum');
