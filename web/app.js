@@ -807,12 +807,11 @@ function clearBulkSelection() {
 }
 
 function updateBulkBar() {
-  const bar = document.getElementById('bulk-actions-bar');
-  const cnt = document.getElementById('bulk-count');
-  if (!bar) return;
   const n = S.multiSelected.size;
-  bar.style.display = n > 0 ? '' : 'none';
-  if (cnt) cnt.textContent = n;
+  const lowerBar = document.getElementById('bulk-bar');
+  const cnt2 = document.getElementById('bulk-count2');
+  if (lowerBar) lowerBar.style.display = n > 0 ? 'flex' : 'none';
+  if (cnt2) cnt2.textContent = n;
   const selAllCb = document.getElementById('select-all-cb');
   if (selAllCb) selAllCb.checked = S.nicks.length > 0 && S.nicks.every(n2 => S.multiSelected.has(n2.id));
 }

@@ -125,12 +125,6 @@
         <span class="stat-pill">📊 <b id="stat-total">0</b> ניקים</span>
         <span class="stat-pill">✓ <b id="stat-info">0</b> עם מידע</span>
       </div>
-      <div class="topbar-stats" id="bulk-actions-bar" style="display:none">
-        <span class="stat-pill">✅ <b id="bulk-count">0</b> נבחרו</span>
-        <button class="btn btn-danger btn-sm" onclick="deleteBulkSelected()">🗑️ מחק נבחרים</button>
-        <button class="btn btn-warning btn-sm" onclick="bulkEditSelected()">✏️ ערוך שדה</button>
-        <button class="btn btn-ghost btn-sm" onclick="clearBulkSelection()">בטל בחירה</button>
-      </div>
     </div>
 
     <!-- inline advanced filter bar -->
@@ -149,6 +143,15 @@
              placeholder="ערך (לדוגמה: בני ברק)" oninput="applyFieldFilter()">
       <button class="btn btn-ghost btn-sm" onclick="clearFieldFilter()">✕ נקה סינון</button>
       <span id="flt-count" style="font-size:12px;color:var(--accent-2)"></span>
+    </div>
+
+    <!-- bulk actions bar (lower row, shows on selection) -->
+    <div id="bulk-bar" style="display:none;align-items:center;gap:8px;padding:8px 16px;
+         background:var(--card2);border-bottom:1px solid var(--border-soft);flex-wrap:wrap;direction:rtl">
+      <span class="stat-pill">✅ <b id="bulk-count2">0</b> נבחרו</span>
+      <button class="btn btn-danger btn-sm" onclick="deleteBulkSelected()">🗑️ מחק נבחרים</button>
+      <button class="btn btn-warning btn-sm" onclick="bulkEditSelected()">✏️ ערוך שדה</button>
+      <button class="btn btn-ghost btn-sm" onclick="clearBulkSelection()">בטל בחירה</button>
     </div>
 
     <!-- table -->
