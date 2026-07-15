@@ -53,7 +53,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.13"
+APP_VERSION = "0.7.14"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -804,6 +804,9 @@ class API:
 
     def filter_nicks(self, field, op="contains", value=""):
         return db.filter_nicks(field, op, value)
+
+    def filter_nicks_multi(self, conditions):
+        return db.filter_nicks_multi(conditions or [])
 
     def bulk_update_field(self, nick_ids, field, value):
         n = db.bulk_update_field(nick_ids or [], field, value)

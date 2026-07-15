@@ -127,22 +127,15 @@
       </div>
     </div>
 
-    <!-- inline advanced filter bar -->
-    <div id="filter-bar" style="display:none;align-items:center;gap:8px;padding:8px 16px;
-         border-bottom:1px solid var(--border-soft);flex-wrap:wrap;direction:rtl">
-      <span style="font-size:12px;color:var(--subtext)">סנן לפי:</span>
-      <select id="flt-field" class="form-select" style="width:auto;min-width:120px"></select>
-      <select id="flt-op" class="form-select" style="width:auto" onchange="onFilterOpChange();applyFieldFilter()">
-        <option value="contains">מכיל</option>
-        <option value="equals">שווה בדיוק</option>
-        <option value="starts">מתחיל ב-</option>
-        <option value="not_empty">לא ריק</option>
-        <option value="empty">ריק</option>
-      </select>
-      <input id="flt-value" class="form-input" style="width:auto;flex:1;min-width:120px"
-             placeholder="ערך (לדוגמה: בני ברק)" oninput="applyFieldFilter()">
-      <button class="btn btn-ghost btn-sm" onclick="clearFieldFilter()">✕ נקה סינון</button>
-      <span id="flt-count" style="font-size:12px;color:var(--accent-2)"></span>
+    <!-- inline advanced filter bar (supports multiple AND conditions) -->
+    <div id="filter-bar" style="display:none;flex-direction:column;gap:6px;padding:8px 16px;
+         border-bottom:1px solid var(--border-soft);direction:rtl">
+      <div id="filter-rows" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="addFilterRow()">➕ הוסף פילטר</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearFieldFilter()">✕ נקה סינון</button>
+        <span id="flt-count" style="font-size:12px;color:var(--accent-2)"></span>
+      </div>
     </div>
 
     <!-- bulk actions bar (lower row, shows on selection) -->
@@ -180,6 +173,17 @@
     </div>
 
     <!-- (הוסר: כפתור "טען עוד" — הוחלף בגלילה וירטואלית שקופה) -->
+
+    <!-- floating chazonishnik progress -->
+    <div id="chz-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+         background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:240px;direction:rtl">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:16px">📊</span>
+        <span id="chz-banner-text" style="font-size:12.5px;font-weight:700;flex:1">מנתח…</span>
+        <button class="btn btn-sm btn-danger" onclick="cancelChazonishnik()" style="padding:3px 10px">בטל</button>
+      </div>
+    </div>
 
     <!-- floating scrape progress (persistent, works even outside the sync modal) -->
     <div id="scrape-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;

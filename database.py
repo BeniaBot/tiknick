@@ -554,6 +554,42 @@ def filter_nicks(field, op="contains", value=""):
             f"ORDER BY n.{field}", params).fetchall()
         return [dict(r) for r in rows]
 
+def filter_nicks_multi(conditions):
+    """
+    מסנן ניקים לפי כמה תנאים במקביל (כולם חייבים להתקיים — AND).
+    conditions: [{field, op, value}, ...]
+    """
+    conds = [c for c in (conditions or []) if c.get("field") in _FILTERABLE_KEYS]
+    if not conds:
+        return []
+    computed = """
+        , (SELECT COUNT(*) FROM nick_conflicts c WHERE c.nick_id = n.id) as conflict_count,
+        (SELECT COUNT(*) FROM nick_identities i WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id) as has_identity,
+        (SELECT COUNT(*) FROM nick_contacts ct WHERE ct.nick_id=n.id) as extra_contacts,
+        (SELECT GROUP_CONCAT(field_name) FROM (
+            SELECT field_name FROM field_values fv WHERE fv.nick_id = n.id
+            GROUP BY field_name HAVING COUNT(DISTINCT value) > 1)) as conflict_fields
+    """
+    clauses, params = [], []
+    for c in conds:
+        f, op, val = c["field"], c.get("op", "contains"), c.get("value", "")
+        if op == "empty":
+            clauses.append(f"(n.{f} IS NULL OR n.{f}='')")
+        elif op == "not_empty":
+            clauses.append(f"(n.{f} IS NOT NULL AND n.{f}!='')")
+        elif op == "equals":
+            clauses.append(f"n.{f}=?"); params.append(val)
+        elif op == "starts":
+            clauses.append(f"n.{f} LIKE ?"); params.append(f"{val}%")
+        else:
+            clauses.append(f"n.{f} LIKE ?"); params.append(f"%{val}%")
+    where = "WHERE " + " AND ".join(clauses)
+    order = conds[0]["field"]
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT n.* {computed} FROM nicks n {where} ORDER BY n.{order}", params).fetchall()
+        return [dict(r) for r in rows]
+
 def bulk_update_field(nick_ids, field, value):
     """עדכון מרובה מהיר של שדה בודד (דרך מקור 'אני'), בטרנזקציה אחת."""
     if field not in _FILTERABLE_KEYS or field in ("forum","username"):
@@ -719,11 +755,25 @@ def delete_nicks(nick_ids):
         return cur.rowcount
 
 def reset_all():
+    """איפוס נתונים מלא — מוחק ניקים וכל המידע הנלווה כולל מקורות וייבואים."""
     with get_connection() as conn:
         conn.execute("DELETE FROM nicks")
         conn.execute("DELETE FROM nick_conflicts")
         conn.execute("DELETE FROM nick_contacts")
         conn.execute("DELETE FROM nick_identities")
+        conn.execute("DELETE FROM field_values")
+        conn.execute("DELETE FROM shelved_values")
+        conn.execute("DELETE FROM import_sources")
+        # מחק את כל המקורות פרט ל"אני", ואפס את "אני" לברירת מחדל
+        conn.execute("DELETE FROM sources WHERE id != 1")
+        conn.execute("UPDATE sources SET trust=10, absolute=0, notes='' WHERE id=1")
+        # אפס דגל ה-backfill כדי שהתחלה חדשה תהיה נקייה
+        conn.execute("DELETE FROM settings WHERE key='backfill_sources_done'")
+        # אפס טבלת ה-FTS אם קיימת
+        try:
+            conn.execute("INSERT INTO nicks_fts(nicks_fts) VALUES('rebuild')")
+        except Exception:
+            pass
 
 def reset_columns(columns):
     """מאפס (מרוקן) ערכים בעמודות ספציפיות בכל הניקים, בלי למחוק שורות"""
@@ -749,9 +799,13 @@ def reset_columns(columns):
         return len(cols)
 
 def reset_settings_only():
-    """מאפס רק הגדרות (תצוגה, סנכרון) — לא נתונים"""
+    """מאפס את כל ההגדרות (תצוגה, סנכרון, מדיניות התנגשות, ייבוא) — לא נתונים"""
+    _PRESERVE = {"export_version", "backfill_sources_done"}
     with get_connection() as conn:
-        conn.execute("DELETE FROM settings WHERE key LIKE 'display_%'")
+        rows = conn.execute("SELECT key FROM settings").fetchall()
+        for (k,) in rows:
+            if k not in _PRESERVE:
+                conn.execute("DELETE FROM settings WHERE key=?", (k,))
         conn.execute("DELETE FROM sync_settings")
 
 # ── אנשי קשר נוספים ──────────────────────────────────────────────────

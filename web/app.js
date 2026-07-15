@@ -95,6 +95,10 @@ async function _origInit() {
     const p = await api('get_scrape_progress');
     if (p && p.running) startScrapeMonitor();
   } catch (e) {}
+  try {
+    const cp = await api('get_chazonishnik_progress');
+    if (cp && cp.running) startChazonishnikMonitor();
+  } catch (e) {}
   setInterval(() => {
     const el = document.getElementById('status-time');
     if (el) el.textContent = new Date().toLocaleTimeString('he-IL');
@@ -1593,7 +1597,7 @@ async function openForumMgr() {
 // ══ SYNC MANAGER ══════════════════════════════════════════════════════
 // ══ חיפוש / סינון מתקדם — על הממשק הראשי ═══════════════════════════════
 let _fieldFilterActive = false;
-let _filterFieldsLoaded = false;
+let _filterFields = [];
 
 async function toggleFilterBar() {
   const bar = document.getElementById('filter-bar');
@@ -1603,52 +1607,84 @@ async function toggleFilterBar() {
     if (_fieldFilterActive) clearFieldFilter();
     return;
   }
-  // טען את רשימת השדות פעם אחת
-  if (!_filterFieldsLoaded) {
-    const fields = await api('get_filterable_fields') || [];
-    document.getElementById('flt-field').innerHTML =
-      fields.map(f => `<option value="${f.key}">${esc(f.label)}</option>`).join('');
-    document.getElementById('flt-field').onchange = applyFieldFilter;
-    _filterFieldsLoaded = true;
+  if (!_filterFields.length) {
+    _filterFields = await api('get_filterable_fields') || [];
   }
   bar.style.display = 'flex';
-  onFilterOpChange();
+  const rows = document.getElementById('filter-rows');
+  if (rows && !rows.children.length) addFilterRow();
 }
 
-function onFilterOpChange() {
-  const op = document.getElementById('flt-op').value;
-  const valInput = document.getElementById('flt-value');
-  const noValue = (op === 'empty' || op === 'not_empty');
+function _fieldOptions() {
+  return _filterFields.map(f => `<option value="${f.key}">${esc(f.label)}</option>`).join('');
+}
+
+function addFilterRow() {
+  const rows = document.getElementById('filter-rows');
+  if (!rows) return;
+  const idx = rows.children.length;
+  const row = document.createElement('div');
+  row.className = 'filter-row';
+  row.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+  row.innerHTML = `
+    <span style="font-size:12px;color:var(--subtext);min-width:48px">${idx === 0 ? 'סנן לפי:' : 'וגם:'}</span>
+    <select class="form-select flt-field" style="width:auto;min-width:120px">${_fieldOptions()}</select>
+    <select class="form-select flt-op" style="width:auto" onchange="onFilterOpChange(this);applyFieldFilter()">
+      <option value="contains">מכיל</option>
+      <option value="equals">שווה בדיוק</option>
+      <option value="starts">מתחיל ב-</option>
+      <option value="not_empty">לא ריק</option>
+      <option value="empty">ריק</option>
+    </select>
+    <input class="form-input flt-value" style="width:auto;flex:1;min-width:120px"
+           placeholder="ערך (לדוגמה: בני ברק)" oninput="applyFieldFilter()">
+    ${idx === 0 ? '' : '<button class="btn btn-ghost btn-sm" onclick="this.closest(\'.filter-row\').remove();applyFieldFilter()">✕</button>'}
+  `;
+  rows.appendChild(row);
+  row.querySelector('.flt-field').onchange = applyFieldFilter;
+}
+
+function onFilterOpChange(opSel) {
+  const row = opSel.closest('.filter-row');
+  const valInput = row.querySelector('.flt-value');
+  const noValue = (opSel.value === 'empty' || opSel.value === 'not_empty');
   valInput.disabled = noValue;
   valInput.style.opacity = noValue ? '.4' : '1';
 }
 
 async function applyFieldFilter() {
-  const field = document.getElementById('flt-field').value;
-  const op    = document.getElementById('flt-op').value;
-  const value = document.getElementById('flt-value').value.trim();
-  const needsValue = (op !== 'empty' && op !== 'not_empty');
-  if (needsValue && !value) {  // אין ערך עדיין — הצג הכל
+  const rows = [...document.querySelectorAll('#filter-rows .filter-row')];
+  const conditions = [];
+  for (const r of rows) {
+    const field = r.querySelector('.flt-field').value;
+    const op    = r.querySelector('.flt-op').value;
+    const value = r.querySelector('.flt-value').value.trim();
+    const needsValue = (op !== 'empty' && op !== 'not_empty');
+    if (needsValue && !value) continue;  // דלג על תנאי ריק
+    conditions.push({ field, op, value });
+  }
+  if (!conditions.length) {
     if (_fieldFilterActive) { _fieldFilterActive = false; await loadNicks(''); }
     document.getElementById('flt-count').textContent = '';
     return;
   }
-  const rows = await api('filter_nicks', field, op, value) || [];
+  const results = await api('filter_nicks_multi', conditions) || [];
   _fieldFilterActive = true;
-  // הזרק את התוצאות לרשימה הראשית — כך שבחירה/מחיקה/עריכה מרובה עובדים כרגיל
-  S.nicks = rows;
-  S.total = rows.length;
-  S.offset = rows.length;
+  S.nicks = results;
+  S.total = results.length;
+  S.offset = results.length;
   S.multiSelected.clear();
   sortNicks();
   renderTable();
   updateBulkBar();
-  document.getElementById('flt-count').textContent = `${rows.length} תוצאות`;
+  document.getElementById('flt-count').textContent = `${results.length} תוצאות`;
 }
 
 async function clearFieldFilter() {
   _fieldFilterActive = false;
-  document.getElementById('flt-value').value = '';
+  const rows = document.getElementById('filter-rows');
+  if (rows) rows.innerHTML = '';
+  addFilterRow();
   document.getElementById('flt-count').textContent = '';
   await loadNicks(document.getElementById('search-input').value);
 }
@@ -1814,7 +1850,7 @@ async function openSyncMgr() {
           <div style="font-size:12px;color:var(--subtext);padding:12px;margin-top:14px;
                background:var(--card2);border-radius:8px;line-height:1.6">
             💡 את דרגות האמינות (הציונים) של כל מקור קובעים בלשונית
-            <b style="color:var(--accent-2);cursor:pointer" onclick="switchSyncTab('s4')">🎖️ מקורות</b>.
+            <b style="color:var(--accent-2);cursor:pointer;white-space:nowrap" onclick="switchSyncTab('s4')">🎖️&nbsp;מקורות</b>.
           </div>
         </div>
       </div>
@@ -2784,30 +2820,40 @@ function openChazonishnik() {
       <div style="margin-bottom:14px">
         <b>🍪 דורש עוגיית התחברות (express.sid)</b>
         <div style="color:var(--subtext);font-size:12.5px;margin-top:4px">
-          הפורום דורש התחברות כדי לגשת להיסטוריית הפוסטים. יש שתי דרכים להשיג את העוגייה:
+          כדי לגשת להיסטוריית הפוסטים צריך "עוגיית" התחברות אישית שלך מהפורום.
+          זו מחרוזת ארוכה שמתחילה ב-<code>s%3A</code>. בחר אחת משתי הדרכים:
         </div>
       </div>
 
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
-        <div style="padding:12px;border:1px solid var(--border-soft);border-radius:8px">
-          <b style="font-size:12.5px">דרך 1: ידני (F12)</b>
-          <ol style="margin:6px 0 0;padding-inline-start:18px;font-size:11.5px;color:var(--subtext);line-height:1.6">
-            <li>התחבר לפורום בדפדפן</li>
-            <li>פתח כלי מפתחים (F12)</li>
-            <li>Application ← Cookies</li>
-            <li>העתק את הערך של express.sid</li>
-          </ol>
-        </div>
-        <div style="padding:12px;border:1px solid var(--border-soft);border-radius:8px">
-          <b style="font-size:12.5px">דרך 2: תוסף (מומלץ)</b>
-          <ol style="margin:6px 0 0;padding-inline-start:18px;font-size:11.5px;color:var(--subtext);line-height:1.6">
-            <li>התקן את התוסף
-              <b style="color:var(--accent-2);cursor:pointer" onclick="openExt('https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc')">Get cookies.txt</b></li>
-            <li>התחבר לפורום</li>
-            <li>לחץ על התוסף ← Export</li>
-            <li>מצא את שורת express.sid והעתק את הערך</li>
-          </ol>
-        </div>
+      <div style="margin-bottom:14px;padding:14px;border:1px solid var(--accent-2);border-radius:10px">
+        <b style="font-size:13px">✅ דרך מומלצת: תוסף Get cookies.txt</b>
+        <ol style="margin:8px 0 0;padding-inline-start:20px;font-size:12px;line-height:1.9">
+          <li>לחץ כאן להתקנת התוסף:
+            <b style="color:var(--accent-2);cursor:pointer;text-decoration:underline"
+               onclick="openExt('https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc')">Get cookies.txt LOCALLY</b>
+            → בחלון שנפתח לחץ "Add to Chrome" / "הוסף ל-Chrome" ואשר.</li>
+          <li>היכנס לפורום <b>mitmachim.top</b> והתחבר לחשבון שלך (אם עדיין לא).</li>
+          <li>לחץ על אייקון התוסף (בפינה הימנית-עליונה של הדפדפן, ליד סרגל הכתובת. אם לא רואים — לחץ על אייקון הפאזל 🧩 ואז על התוסף).</li>
+          <li>בחלון שנפתח לחץ על הכפתור <b>"Export"</b> — ייווצר קובץ טקסט, או שהתוכן יועתק.</li>
+          <li>בקובץ/טקסט חפש את השורה שכתוב בה <code>express.sid</code>, והעתק את <b>הערך שאחריה</b> (המחרוזת הארוכה שמתחילה ב-<code>s%3A</code>).</li>
+          <li>הדבק אותו בשדה "עוגיית express.sid" למטה.</li>
+        </ol>
+      </div>
+
+      <details style="margin-bottom:14px">
+        <summary style="cursor:pointer;font-size:12.5px;font-weight:600">🔧 דרך חלופית: ידנית דרך כלי מפתחים (למתקדמים)</summary>
+        <ol style="margin:8px 0 0;padding-inline-start:20px;font-size:12px;line-height:1.9;color:var(--subtext)">
+          <li>היכנס לפורום mitmachim.top והתחבר.</li>
+          <li>הקש <b>F12</b> לפתיחת כלי המפתחים.</li>
+          <li>עבור ללשונית <b>Application</b> (או "אחסון"/Storage בדפדפנים מסוימים).</li>
+          <li>בתפריט הצד: <b>Cookies</b> ← לחץ על הכתובת <code>https://mitmachim.top</code>.</li>
+          <li>ברשימה שתופיע, מצא את השורה בשם <code>express.sid</code>.</li>
+          <li>לחץ עליה, העתק את הערך שבעמודת <b>Value</b> (מתחיל ב-<code>s%3A</code>), והדבק למטה.</li>
+        </ol>
+      </details>
+
+      <div style="font-size:11.5px;color:var(--subtext);margin-bottom:14px;padding:8px 10px;background:var(--card2);border-radius:6px">
+        🔒 העוגייה היא אישית ומאפשרת גישה לחשבון שלך — אל תשתף אותה עם אחרים.
       </div>
 
       <div class="form-group" style="margin-bottom:10px">
@@ -2846,41 +2892,59 @@ function showChazonishnikProgress(username) {
     <div style="text-align:center;padding:24px 16px">
       <div style="font-size:40px;margin-bottom:14px">⏳</div>
       <div id="chz-progress-text" style="font-size:14px;margin-bottom:8px">מתחיל…</div>
-      <div style="font-size:12px;color:var(--subtext)">מנתח את הפעילות של ${esc(username)} — זה עשוי לקחת עד דקה</div>
+      <div style="font-size:12px;color:var(--subtext)">מנתח את הפעילות של ${esc(username)} — רץ ברקע, אפשר לצאת ולחזור</div>
       <div style="height:8px;background:var(--card2);border-radius:99px;overflow:hidden;margin-top:16px">
         <div id="chz-bar" style="height:100%;width:20%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .4s"></div>
       </div>
     </div>
   `, [
-    { label: '✕ בטל', cls: 'btn-ghost', action: cancelChazonishnik },
+    { label: '✕ בטל', cls: 'btn-danger', action: cancelChazonishnik },
+    { label: '🏠 המשך ברקע', cls: 'btn-ghost', action: closeModal },
   ], 'modal-sm');
+  startChazonishnikMonitor();
+}
 
+function startChazonishnikMonitor() {
   if (_chzPoll) clearInterval(_chzPoll);
+  const banner = document.getElementById('chz-banner');
+  if (banner) banner.style.display = '';
+
   _chzPoll = setInterval(async () => {
     const p = await api('get_chazonishnik_progress');
     if (!p) return;
+    let label = 'מתחיל…';
+    if (p.phase === 'scan') label = `סורק פוסטים… נמצאו ${p.count}`;
+    else if (p.phase === 'analyze') label = `מנתח… ${p.count}/${p.total}`;
+
     const txt = document.getElementById('chz-progress-text');
     const bar = document.getElementById('chz-bar');
-    if (txt) {
-      if (p.phase === 'scan') txt.textContent = `סורק פוסטים… נמצאו ${p.count}`;
-      else if (p.phase === 'analyze') txt.textContent = `מנתח… ${p.count}/${p.total}`;
-    }
+    if (txt) txt.textContent = label;
     if (bar && p.total) bar.style.width = Math.min(90, 20 + (p.count / p.total) * 70) + '%';
+    const bTxt = document.getElementById('chz-banner-text');
+    if (bTxt) bTxt.textContent = p.running ? label : 'מסיים…';
 
     if (p.done || !p.running) {
       clearInterval(_chzPoll); _chzPoll = null;
-      if (p.cancelled) { toast('הניתוח בוטל', 'info'); closeModal(); return; }
-      if (p.error) { toast('שגיאה: ' + p.error, 'error'); closeModal(); return; }
-      showChazonishnikReport(p.html, p.count);
+      if (banner) banner.style.display = 'none';
+      if (p.cancelled) { toast('הניתוח בוטל', 'info'); if (isModalOpen()) closeModal(); return; }
+      if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (isModalOpen()) closeModal(); return; }
+      if (p.html) { showChazonishnikReport(p.html, p.count); toast('הניתוח הושלם ✓', 'success'); }
     }
   }, 600);
+}
+
+function isModalOpen() {
+  const m = document.getElementById('modal-overlay');
+  return m && m.style.display !== 'none' && m.innerHTML.trim() !== '';
 }
 
 async function cancelChazonishnik() {
   await api('cancel_chazonishnik');
   if (_chzPoll) { clearInterval(_chzPoll); _chzPoll = null; }
+  const banner = document.getElementById('chz-banner');
+  if (banner) banner.style.display = 'none';
   toast('מבטל…', 'info');
-  closeModal();
+  if (isModalOpen()) closeModal();
 }
 
 function showChazonishnikReport(html, postCount) {
