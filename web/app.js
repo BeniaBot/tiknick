@@ -2628,6 +2628,8 @@ function startScrapeMonitor() {
     const bTxt = document.getElementById('scrape-banner-text');
     if (bBar) bBar.style.width = pct + '%';
     if (bTxt) bTxt.textContent = p.running ? label : 'מסיים…';
+    const skipBtn = document.getElementById('scrape-skip-btn');
+    if (skipBtn) skipBtn.style.display = (p.all_mode && p.running) ? '' : 'none';
 
     // עדכן גם את המודאל אם פתוח
     const mBar = document.getElementById('sync-bar');
@@ -2658,6 +2660,13 @@ function startScrapeMonitor() {
       }
     }
   }, 700);
+}
+
+async function skipCurrentForum() {
+  await api('skip_current_forum');
+  const bTxt = document.getElementById('scrape-banner-text');
+  if (bTxt) bTxt.textContent = 'מדלג לפורום הבא…';
+  toast('מדלג לפורום הבא ⏭️', 'info');
 }
 
 async function stopScrape() {

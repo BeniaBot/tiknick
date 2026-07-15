@@ -199,7 +199,7 @@ def _map_user(u):
 
 
 def scrape_forum(forum_name, forum_url, db, cookie=None,
-                 progress_cb=None, cancel_flag=None, max_pages=None):
+                 progress_cb=None, cancel_flag=None, max_pages=None, skip_flag=None):
     """
     סורק את כל המשתמשים בפורום וממזג למאגר.
 
@@ -246,6 +246,9 @@ def scrape_forum(forum_name, forum_url, db, cookie=None,
     for page in range(2, total_pages + 1):
         if cancel_flag is not None and cancel_flag.is_set():
             stats["cancelled"] = True
+            break
+        if skip_flag is not None and skip_flag.is_set():
+            stats["skipped"] = True
             break
         time.sleep(PAGE_DELAY_SEC)
         try:

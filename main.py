@@ -33,10 +33,11 @@ _scrape_state = {
     "forum": None, "cancelled": False, "auto_resolved": 0,
 }
 _scrape_cancel = threading.Event()
+_scrape_skip = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.8"
+APP_VERSION = "0.7.9"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -264,12 +265,14 @@ class API:
                 _scrape_state["forum_index"] = i + 1
                 _scrape_state["page"] = 0
                 _scrape_state["total_pages"] = 0
+                _scrape_skip.clear()
                 try:
                     stats = scraper.scrape_forum(
                         f["name"], f["url"], db,
                         cookie=cookie or None,
                         progress_cb=_progress,
                         cancel_flag=_scrape_cancel,
+                        skip_flag=_scrape_skip,
                     )
                     total_added   += stats.get("added", 0)
                     total_updated += stats.get("updated", 0)
@@ -294,6 +297,11 @@ class API:
 
     def cancel_scrape(self):
         _scrape_cancel.set()
+        return {"ok": True}
+
+    def skip_current_forum(self):
+        """דילוג לפורום הבא (במצב 'סרוק הכל')."""
+        _scrape_skip.set()
         return {"ok": True}
 
     def sync_selected_online(self, nick_ids, cookie=""):
