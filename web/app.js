@@ -1767,34 +1767,46 @@ async function openSyncMgr() {
       </div>
     </label>`;
   const sec3 = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
-      <div>
-        <div class="section-hdr">🌐 התנגשויות בסנכרון מהאינטרנט</div>
-        <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
-          כשסריקה מהאינטרנט מוצאת ערך שונה בשדה שכבר קיים, מה לעשות?
-        </p>
-        ${opt('ask', '🙋 לשאול אותי', 'ייפתח חלון פתרון התנגשויות בסיום הסריקה (ברירת מחדל)')}
-        ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
-        ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch">
+      <div style="display:flex;flex-direction:column;border:1px solid var(--border-soft);border-radius:12px;overflow:hidden">
+        <div style="background:var(--card2);padding:12px 16px;font-weight:800;font-size:14px;
+             border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:8px">
+          <span>🌐</span> התנגשויות בסנכרון מהאינטרנט
+        </div>
+        <div style="padding:16px;flex:1">
+          <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
+            כשסריקה מהאינטרנט מוצאת ערך שונה בשדה שכבר קיים, מה לעשות?
+          </p>
+          ${opt('ask', '🙋 לשאול אותי', 'ייפתח חלון פתרון התנגשויות בסיום הסריקה (ברירת מחדל)')}
+          ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
+          ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}
+        </div>
       </div>
-      <div>
-        <div class="section-hdr">📥 התנגשויות בייבוא קובץ</div>
-        <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
-          כשייבוא קובץ מכניס ערך שונה לשדה קיים, איך להכריע?
-        </p>
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <label class="toggle">
-            <input type="checkbox" id="import-manual" ${importManual?'checked':''}>
-            <span class="toggle-slider"></span>
-          </label>
-          <span style="font-size:13px">פתרון ידני — שאל אותי לכל התנגשות</span>
+      <div style="display:flex;flex-direction:column;border:1px solid var(--border-soft);border-radius:12px;overflow:hidden">
+        <div style="background:var(--card2);padding:12px 16px;font-weight:800;font-size:14px;
+             border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:8px">
+          <span>📥</span> התנגשויות בייבוא קובץ
         </div>
-        <div style="font-size:11px;color:var(--subtext);margin-bottom:12px">
-          כבוי (ברירת מחדל) = הכרעה אוטומטית לפי דרגת אמינות. דלוק = ייפתח חלון לבחירה ידנית בכל התנגשות.
-        </div>
-        <div style="font-size:12px;color:var(--subtext);padding:10px;border:1px dashed var(--border-soft);border-radius:8px">
-          💡 את דרגות האמינות (הציונים) של כל מקור קובעים בלשונית
-          <b style="color:var(--accent-2);cursor:pointer" onclick="switchSyncTab('s4')">🎖️ מקורות</b>.
+        <div style="padding:16px;flex:1;display:flex;flex-direction:column">
+          <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
+            כשייבוא קובץ מכניס ערך שונה לשדה קיים, איך להכריע?
+          </p>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <label class="toggle">
+              <input type="checkbox" id="import-manual" ${importManual?'checked':''}>
+              <span class="toggle-slider"></span>
+            </label>
+            <span style="font-size:13px;font-weight:600">פתרון ידני — שאל אותי לכל התנגשות</span>
+          </div>
+          <div style="font-size:11.5px;color:var(--subtext);margin-bottom:auto;line-height:1.6">
+            כבוי (ברירת מחדל) = הכרעה אוטומטית לפי דרגת אמינות.<br>
+            דלוק = ייפתח חלון לבחירה ידנית בכל התנגשות.
+          </div>
+          <div style="font-size:12px;color:var(--subtext);padding:12px;margin-top:14px;
+               background:var(--card2);border-radius:8px;line-height:1.6">
+            💡 את דרגות האמינות (הציונים) של כל מקור קובעים בלשונית
+            <b style="color:var(--accent-2);cursor:pointer" onclick="switchSyncTab('s4')">🎖️ מקורות</b>.
+          </div>
         </div>
       </div>
     </div>`;
