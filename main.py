@@ -44,13 +44,19 @@ _chz_cancel = threading.Event()
 # מצב הורדת עדכון
 _update_state = {"downloaded": 0, "total": 0}
 
+# מצב Stinknik (ניתוח דיסלייקים ברקע)
+_stink_state = {"running": False, "done": False, "error": None,
+                "checked": 0, "page": 0, "disliked": 0, "html": None,
+                "cancelled": False}
+_stink_cancel = threading.Event()
+
 class _ChzCancelled(Exception):
     """נזרק כדי לבטל ניתוח Chazonishnik שרץ."""
     pass
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.15"
+APP_VERSION = "0.7.16"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -470,6 +476,75 @@ class API:
 
     def get_chazonishnik_progress(self):
         return dict(_chz_state)
+
+    # ── Stinknik — ניתוח דיסלייקים ─────────────────────────────────
+    def run_stinknik(self, user_input, cookie=""):
+        """מתחיל ניתוח דיסלייקים ברקע. התקדמות דרך get_stinknik_progress."""
+        if _stink_state["running"]:
+            return {"ok": False, "error": "ניתוח כבר רץ"}
+        if not user_input or not user_input.strip():
+            return {"ok": False, "error": "הזן שם משתמש או קישור לפרופיל"}
+        _stink_cancel.clear()
+        _stink_state.update({"running": True, "done": False, "error": None,
+                             "checked": 0, "page": 0, "disliked": 0,
+                             "html": None, "cancelled": False})
+
+        def _progress(p):
+            _stink_state["checked"] = p.get("checked", 0)
+            _stink_state["page"] = p.get("page", 0)
+            _stink_state["disliked"] = p.get("disliked", 0)
+
+        def _run():
+            try:
+                import stinknik
+                result = stinknik.analyze_dislikes(
+                    user_input, base_url="https://mitmachim.top",
+                    cookie=(cookie or None), progress=_progress, cancel_flag=_stink_cancel)
+                if result.get("cancelled"):
+                    _stink_state["cancelled"] = True
+                elif result.get("ok"):
+                    _stink_state["html"] = result.get("html")
+                    _stink_state["disliked"] = result.get("disliked", 0)
+                    _stink_state["checked"] = result.get("checked", 0)
+                else:
+                    _stink_state["error"] = result.get("error")
+            except Exception as e:
+                logging.exception("stinknik failed")
+                _stink_state["error"] = str(e)
+            finally:
+                _stink_state["running"] = False
+                _stink_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True}
+
+    def get_stinknik_progress(self):
+        return dict(_stink_state)
+
+    def cancel_stinknik(self):
+        _stink_cancel.set()
+        return {"ok": True}
+
+    def save_stinknik_report(self, html=None):
+        content = html or _stink_state.get("html")
+        if not content:
+            return {"ok": False, "error": "אין דוח לשמירה"}
+        try:
+            import webview
+            result = webview.windows[0].create_file_dialog(
+                webview.SAVE_DIALOG, save_filename="stinknik_report.html",
+                file_types=("HTML Files (*.html)",))
+            if not result:
+                return {"ok": False, "error": "בוטל"}
+            path = result if isinstance(result, str) else result[0]
+            if not path.lower().endswith(".html"):
+                path += ".html"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return {"ok": True, "path": path}
+        except Exception as e:
+            logging.exception("save_stinknik_report failed")
+            return {"ok": False, "error": str(e)}
 
     def cancel_chazonishnik(self):
         _chz_cancel.set()

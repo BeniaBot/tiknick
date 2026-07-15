@@ -99,6 +99,10 @@ async function _origInit() {
     const cp = await api('get_chazonishnik_progress');
     if (cp && cp.running) startChazonishnikMonitor();
   } catch (e) {}
+  try {
+    const sp = await api('get_stinknik_progress');
+    if (sp && sp.running) startStinknikMonitor();
+  } catch (e) {}
   setInterval(() => {
     const el = document.getElementById('status-time');
     if (el) el.textContent = new Date().toLocaleTimeString('he-IL');
@@ -3023,16 +3027,109 @@ async function saveChazonishnikReport(html) {
 }
 
 function openStinknik() {
-  openModal('🦨 Stinknik', `
-    <div style="text-align:center;padding:30px 20px">
-      <div style="font-size:52px;margin-bottom:16px">🦨</div>
-      <h3 style="font-size:18px;margin-bottom:10px">Stinknik</h3>
-      <p style="color:var(--subtext);font-size:14px;line-height:1.6">
-        פיצ'ר זה עדיין בפיתוח.<br>הפונקציונליות תתווסף בקרוב.
-      </p>
-    </div>`, [
-    { label: 'סגור', cls: 'btn-primary', action: closeModal },
+  openModal('🦨 Stinknik — כל הדיסלייקים של ניק', `
+    <div style="font-size:13.5px;line-height:1.7">
+      <div style="padding:12px 14px;background:var(--card2);border-radius:10px;margin-bottom:14px">
+        <b>מה זה עושה?</b> Stinknik סורק את כל הפוסטים של משתמש ומציג את <b>כל</b> הפוסטים
+        שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק "שנוי במחלוקת",
+        כלומר רק פוסטים עם יותר דיסים מלייקים).
+      </div>
+      <div style="padding:10px 12px;border:1px solid var(--accent-2);border-radius:8px;margin-bottom:14px;font-size:12.5px">
+        ⚠️ כרגע נתמך <b>רק עבור פורום מתמחים טופ</b> (mitmachim.top).
+      </div>
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:14px">
+        💡 ברוב המקרים <b>לא נדרשת עוגייה</b> (המידע ציבורי). אם בכל זאת מתקבלת שגיאת הרשאה,
+        אפשר להוסיף עוגיית express.sid — <b style="color:var(--accent-2);cursor:pointer" onclick="openChazonishnik()">ראה הדרכה ב-Chazonishnik</b>.
+      </div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">שם משתמש או קישור לפרופיל</label>
+        <input id="stink-user" class="form-input" placeholder="בנימין  או  https://mitmachim.top/user/בנימין">
+      </div>
+      <div class="form-group" style="margin-bottom:6px">
+        <label class="form-label" style="font-size:11px;color:var(--subtext)">עוגייה (אופציונלי)</label>
+        <input id="stink-cookie" class="form-input" dir="ltr" placeholder="השאר ריק ברוב המקרים">
+      </div>
+    </div>
+  `, [
+    { label: '🦨 מצא דיסלייקים', cls: 'btn-primary', action: runStinknik },
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg');
+}
+
+let _stinkPoll = null;
+
+async function runStinknik() {
+  const user = document.getElementById('stink-user')?.value.trim();
+  const cookie = document.getElementById('stink-cookie')?.value.trim() || '';
+  if (!user) { toast('הזן שם משתמש או קישור', 'error'); return; }
+  const start = await api('run_stinknik', user, cookie);
+  if (!start?.ok) { toast('שגיאה: ' + (start?.error || ''), 'error'); return; }
+  showStinknikProgress(user);
+}
+
+function showStinknikProgress(user) {
+  openModal('🦨 סורק דיסלייקים…', `
+    <div style="text-align:center;padding:24px 16px">
+      <div style="font-size:40px;margin-bottom:14px">🔍</div>
+      <div id="stink-progress-text" style="font-size:14px;margin-bottom:8px">מתחיל…</div>
+      <div style="font-size:12px;color:var(--subtext)">סורק את הפוסטים של ${esc(user)} — רץ ברקע, אפשר לצאת ולחזור</div>
+    </div>
+  `, [
+    { label: '✕ בטל', cls: 'btn-danger', action: cancelStinknik },
+    { label: '🏠 המשך ברקע', cls: 'btn-ghost', action: closeModal },
   ], 'modal-sm');
+  startStinknikMonitor();
+}
+
+function startStinknikMonitor() {
+  if (_stinkPoll) clearInterval(_stinkPoll);
+  const banner = document.getElementById('stink-banner');
+  if (banner) banner.style.display = '';
+  _stinkPoll = setInterval(async () => {
+    const p = await api('get_stinknik_progress');
+    if (!p) return;
+    const label = `נסרקו ${p.checked} פוסטים · ${p.disliked} עם דיסים`;
+    const txt = document.getElementById('stink-progress-text');
+    if (txt) txt.textContent = label;
+    const bTxt = document.getElementById('stink-banner-text');
+    if (bTxt) bTxt.textContent = p.running ? label : 'מסיים…';
+    if (p.done || !p.running) {
+      clearInterval(_stinkPoll); _stinkPoll = null;
+      if (banner) banner.style.display = 'none';
+      if (p.cancelled) { toast('הסריקה בוטלה', 'info'); if (isModalOpen()) closeModal(); return; }
+      if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (isModalOpen()) closeModal(); return; }
+      if (p.html) { showStinknikReport(p.html, p.disliked); toast('הסריקה הושלמה ✓', 'success'); }
+    }
+  }, 600);
+}
+
+async function cancelStinknik() {
+  await api('cancel_stinknik');
+  if (_stinkPoll) { clearInterval(_stinkPoll); _stinkPoll = null; }
+  const banner = document.getElementById('stink-banner');
+  if (banner) banner.style.display = 'none';
+  toast('מבטל…', 'info');
+  if (isModalOpen()) closeModal();
+}
+
+function showStinknikReport(html, disCount) {
+  openModal(`🦨 דוח דיסלייקים${disCount != null ? ` · ${disCount} פוסטים` : ''}`, `
+    <iframe id="stink-frame" style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
+  `, [
+    { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveStinknikReport(html) },
+    { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openStinknik },
+    { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg');
+  setTimeout(() => {
+    const frame = document.getElementById('stink-frame');
+    if (frame) frame.srcdoc = html;
+  }, 100);
+}
+
+async function saveStinknikReport(html) {
+  const r = await api('save_stinknik_report', html);
+  if (r?.ok) toast('הדוח נשמר ✓', 'success');
+  else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
 }
 
 // ══ CARD RENDERING ════════════════════════════════════════════════════

@@ -174,6 +174,17 @@
 
     <!-- (הוסר: כפתור "טען עוד" — הוחלף בגלילה וירטואלית שקופה) -->
 
+    <!-- floating stinknik progress -->
+    <div id="stink-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+         background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:240px;direction:rtl">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:16px">🦨</span>
+        <span id="stink-banner-text" style="font-size:12.5px;font-weight:700;flex:1">סורק…</span>
+        <button class="btn btn-sm btn-danger" onclick="cancelStinknik()" style="padding:3px 10px">בטל</button>
+      </div>
+    </div>
+
     <!-- floating chazonishnik progress -->
     <div id="chz-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
          background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
