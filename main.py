@@ -56,7 +56,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.18"
+APP_VERSION = "0.7.19"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -621,19 +621,40 @@ class API:
             return {"ok": False, "error": "קובץ העדכון לא נמצא"}
         try:
             cur_exe = _sys.executable
+            exe_name = os.path.basename(cur_exe)
             bat = os.path.join(tempfile.gettempdir(), "tiknick_update.bat")
-            # ממתין שהתהליך ייסגר, מחליף, מריץ מחדש, ומוחק את עצמו
+            # ממתין שהתהליך ייסגר לגמרי, נותן ל-PyInstaller לנקות את תיקיית _MEI,
+            # מחליף עם ניסיונות חוזרים (למקרה שהקובץ עדיין נעול), ורק אז מריץ מחדש.
             script = f"""@echo off
 chcp 65001 >nul
-echo מעדכן את Tik-Nick...
+title Tik-Nick Updater
+echo מעדכן את Tik-Nick, נא להמתין...
+
+rem — המתן עד שהתהליך הישן ייסגר לחלוטין —
 :waitloop
-tasklist /FI "IMAGENAME eq {os.path.basename(cur_exe)}" 2>nul | find /I "{os.path.basename(cur_exe)}" >nul
+tasklist /FI "IMAGENAME eq {exe_name}" 2>nul | find /I "{exe_name}" >nul
 if not errorlevel 1 (
-    timeout /t 1 /nobreak >nul
+    ping -n 2 127.0.0.1 >nul
     goto waitloop
 )
-timeout /t 1 /nobreak >nul
-move /Y "{new_exe_path}" "{cur_exe}" >nul
+
+rem — המתן עוד רגע כדי לאפשר שחרור קבצים וניקוי תיקיית _MEI —
+ping -n 4 127.0.0.1 >nul
+
+rem — נסה להחליף את הקובץ, עד 10 ניסיונות —
+set /a tries=0
+:movetry
+move /Y "{new_exe_path}" "{cur_exe}" >nul 2>&1
+if exist "{new_exe_path}" (
+    set /a tries+=1
+    if %tries% lss 10 (
+        ping -n 2 127.0.0.1 >nul
+        goto movetry
+    )
+)
+
+rem — המתן עוד רגע לפני הפעלה מחדש —
+ping -n 3 127.0.0.1 >nul
 start "" "{cur_exe}"
 del "%~f0"
 """
@@ -644,8 +665,8 @@ del "%~f0"
             try:
                 webview.windows[0].destroy()
             except Exception:
-                os._exit(0)
-            return {"ok": True}
+                pass
+            os._exit(0)
         except Exception as e:
             logging.exception("apply_update failed")
             return {"ok": False, "error": str(e)}

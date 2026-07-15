@@ -277,8 +277,6 @@ async function openAbout() {
           </svg>
           בקר בעמוד ה-GitHub
         </a>
-        <a class="about-link" style="opacity:.85;font-size:12px" title="תן כוכב בגיטהאב"
-           onclick="api('open_url','https://github.com/${esc(repo)}')">⭐ תן כוכב</a>
       </div>
 
       <!-- כפתורי ניווט -->
@@ -306,9 +304,27 @@ async function openAbout() {
         <p class="about-text">
           תודה לכל מי שסייע, בדק, והציע רעיונות לאורך הפיתוח. 🙏
         </p>
-        <p class="about-text" style="color:var(--subtext);font-size:12.5px">
-          (מקום להוספת קרדיטים מפורטים בהמשך)
-        </p>
+        <div style="display:flex;flex-direction:column;gap:12px;margin-top:6px">
+          <div style="padding:12px 14px;background:var(--card2);border-radius:10px">
+            <div style="font-weight:700;font-size:13.5px">📖 פיתוח Chazonishnik</div>
+            <div style="font-size:12.5px;color:var(--subtext);margin-top:3px">
+              <a class="about-link" style="font-size:12.5px" onclick="api('open_url','https://mitmachim.top/user/cfopuser')">cfopuser</a>
+            </div>
+          </div>
+          <div style="padding:12px 14px;background:var(--card2);border-radius:10px">
+            <div style="font-weight:700;font-size:13.5px">🦨 פיתוח Stinknik</div>
+            <div style="font-size:12.5px;color:var(--subtext);margin-top:3px">
+              <a class="about-link" style="font-size:12.5px" onclick="api('open_url','https://mitmachim.top/user/%D7%98%D7%95%D7%A4-%D7%A9%D7%91%D7%9E%D7%AA%D7%9E%D7%97%D7%99%D7%9D')">טופ שבמתמחים</a>
+            </div>
+          </div>
+          <div style="padding:12px 14px;background:var(--card2);border-radius:10px">
+            <div style="font-weight:700;font-size:13.5px">🙏 תודה מיוחדת</div>
+            <div style="font-size:12.5px;color:var(--subtext);margin-top:3px;line-height:1.6">
+              <a class="about-link" style="font-size:12.5px" onclick="api('open_url','https://mitmachim.top/user/%D7%A6%D7%95%D7%9C-%D7%92%D7%90%D7%94')">צול גאה</a>
+              — על עידוד ותמיכה מורלית ;) ובעיקר על ההשראה לשם "חזונישניק" 😄
+            </div>
+          </div>
+        </div>
       </div>
 
       <div class="about-pane" id="about-pane-license" style="display:none">
