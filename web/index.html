@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tik-Nick</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-view="table" data-density="normal">
+<div id="app">
+
+  <!-- ══ SIDEBAR ══ -->
+  <aside id="sidebar">
+    <div class="sidebar-logo" onclick="refreshFromLogo()" style="cursor:pointer" title="רענן את הרשימה">
+      <span class="logo-mark">
+        <svg viewBox="0 0 100 100" width="21" height="21" xmlns="http://www.w3.org/2000/svg">
+          <g transform="rotate(-7 50 50)">
+            <rect x="22" y="30" width="56" height="40" rx="7" fill="#fff"/>
+            <circle cx="34" cy="47" r="8.5" fill="#d97706"/>
+            <circle cx="34" cy="44.5" r="3" fill="#fff"/>
+            <path d="M 28.5 52 A 5.5 5.5 0 0 1 39.5 52 Z" fill="#fff"/>
+            <rect x="46" y="43" width="26" height="4.5" rx="2" fill="#d97706"/>
+            <rect x="46" y="54" width="18" height="4" rx="2" fill="#f0c078"/>
+          </g>
+        </svg>
+      </span>
+      <span class="logo-text">Tik-Nick</span>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-group">
+        <div class="nav-label">ניקים</div>
+        <button class="nav-btn" onclick="openNickDialog()">
+          <span class="icon">➕</span> ניק חדש
+        </button>
+        <button class="nav-btn" id="btn-edit" onclick="editSelected()" disabled>
+          <span class="icon">✏️</span> ערוך ניק
+        </button>
+        <button class="nav-btn danger" id="btn-delete" onclick="deleteSelected()" disabled>
+          <span class="icon">🗑️</span> מחק ניק
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">קובץ</div>
+        <button class="nav-btn" onclick="exportData()">
+          <span class="icon">📤</span> ייצוא
+        </button>
+        <button class="nav-btn" onclick="importData()">
+          <span class="icon">📥</span> ייבוא
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">הגדרות</div>
+        <button class="nav-btn" onclick="openForumMgr()">
+          <span class="icon">🏛️</span> ניהול פורומים
+        </button>
+        <button class="nav-btn" onclick="openSyncMgr()">
+          <span class="icon">⚙️</span> הגדרות סנכרון
+        </button>
+        <button class="nav-btn" onclick="openDisplaySettings()">
+          <span class="icon">🎨</span> הגדרות תצוגה
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">כלים</div>
+        <button class="nav-btn" onclick="openInternetSync()">
+          <span class="icon">🌐</span> סנכרון לאינטרנט
+        </button>
+        <button class="nav-btn" onclick="openChazonishnik()">
+          <span class="icon">📖</span> Chazonishnik
+        </button>
+        <button class="nav-btn" onclick="openStinknik()">
+          <span class="icon">🦨</span> Stinknik
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">מתקדם</div>
+        <button class="nav-btn danger" onclick="confirmReset()">
+          <span class="icon">🔴</span> איפוס נתונים
+        </button>
+        <button class="nav-btn" onclick="openAbout()">
+          <span class="icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <path d="M12 4 C 7.5 4 4 7.5 4 12 v 1.5"/>
+              <path d="M12 4 C 16.5 4 20 7.5 20 12 v 3.5"/>
+              <path d="M12 7.5 C 9.5 7.5 7.5 9.5 7.5 12 v 3.5"/>
+              <path d="M12 7.5 C 14.5 7.5 16.5 9.5 16.5 12 v 5"/>
+              <path d="M12 11 v 8"/>
+              <path d="M12 11 C 10.6 11 10 12 10 13 v 3.5"/>
+            </svg>
+          </span>
+          <span>אודות</span>
+          <span id="about-update-dot" class="update-dot" style="display:none;margin-right:auto"></span>
+        </button>
+      </div>
+    </nav>
+    <div class="sidebar-footer" id="app-footer" onclick="openAbout()" title="אודות Tik-Nick">
+      <span id="footer-version">v0.2 | Tik-Nick</span>
+      <span id="update-dot" class="update-dot" style="display:none"></span>
+    </div>
+  </aside>
+
+  <!-- ══ MAIN ══ -->
+  <main id="main">
+
+    <!-- topbar -->
+    <div id="topbar">
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="search-input" placeholder="חיפוש בכל השדות..."
+               oninput="onSearch(this.value)">
+      </div>
+      <button id="advanced-filter-btn" class="btn btn-ghost btn-sm" onclick="toggleFilterBar()"
+              title="חיפוש וסינון מתקדם לפי שדה" style="display:flex;align-items:center;gap:5px">
+        <span>⚙️</span> <span>מתקדם</span>
+      </button>
+      <button id="theme-toggle" class="theme-toggle-btn" onclick="quickToggleTheme()"
+              title="החלף מצב כהה/בהיר">
+        <span class="tt-icon">🌙</span>
+      </button>
+      <div class="view-toggle">
+        <button id="vt-table" onclick="setView('table')" title="תצוגת טבלה">▤</button>
+        <button id="vt-cards" onclick="setView('cards')" title="תצוגת כרטיסים">▦</button>
+      </div>
+      <div class="topbar-stats" id="stats-bar">
+        <span class="stat-pill">📊 <b id="stat-total">0</b> ניקים</span>
+        <span class="stat-pill">✓ <b id="stat-info">0</b> עם מידע</span>
+      </div>
+    </div>
+
+    <!-- inline advanced filter bar (supports multiple AND conditions) -->
+    <div id="filter-bar" style="display:none;flex-direction:column;gap:6px;padding:8px 16px;
+         border-bottom:1px solid var(--border-soft);direction:rtl">
+      <div id="filter-rows" style="display:flex;flex-direction:column;gap:6px"></div>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-ghost btn-sm" onclick="addFilterRow()">➕ הוסף פילטר</button>
+        <button class="btn btn-ghost btn-sm" onclick="clearFieldFilter()">✕ נקה סינון</button>
+        <span id="flt-count" style="font-size:12px;color:var(--accent-2)"></span>
+      </div>
+    </div>
+
+    <!-- bulk actions bar (lower row, shows on selection) -->
+    <div id="bulk-bar" style="display:none;align-items:center;gap:8px;padding:8px 16px;
+         background:var(--card2);border-bottom:1px solid var(--border-soft);flex-wrap:wrap;direction:rtl">
+      <span class="stat-pill">✅ <b id="bulk-count2">0</b> נבחרו</span>
+      <button class="btn btn-danger btn-sm" onclick="deleteBulkSelected()">🗑️ מחק נבחרים</button>
+      <button class="btn btn-warning btn-sm" onclick="bulkEditSelected()">✏️ ערוך שדה</button>
+      <button class="btn btn-ghost btn-sm" onclick="syncSelectedOnline()" title="סנכרן את הנבחרים מהאינטרנט (הערך מהאינטרנט מנצח)">🌐 סנכרן</button>
+      <button class="btn btn-ghost btn-sm" onclick="clearBulkSelection()">בטל בחירה</button>
+    </div>
+
+    <!-- table -->
+    <div id="table-wrap">
+      <table id="nick-table">
+        <thead>
+          <tr id="thead-row"></tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div id="empty-state" class="empty-state" style="display:none">
+        <div class="empty-icon">📭</div>
+        <h3>אין ניקים להצגה</h3>
+        <p>לחץ "ניק חדש" כדי להתחיל</p>
+      </div>
+    </div>
+
+    <!-- cards view -->
+    <div id="cards-wrap">
+      <div class="cards-grid" id="cards-grid"></div>
+      <div id="cards-empty" class="empty-state" style="display:none">
+        <div class="empty-icon">📭</div>
+        <h3>אין ניקים להצגה</h3>
+      </div>
+    </div>
+
+    <!-- (הוסר: כפתור "טען עוד" — הוחלף בגלילה וירטואלית שקופה) -->
+
+    <!-- floating stinknik progress -->
+    <div id="stink-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+         background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:240px;direction:rtl">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:16px">🦨</span>
+        <span id="stink-banner-text" style="font-size:12.5px;font-weight:700;flex:1">סורק…</span>
+        <button class="btn btn-sm btn-danger" onclick="cancelStinknik()" style="padding:3px 10px">בטל</button>
+      </div>
+    </div>
+
+    <!-- floating chazonishnik progress -->
+    <div id="chz-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+         background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:240px;direction:rtl">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span style="font-size:16px">📊</span>
+        <span id="chz-banner-text" style="font-size:12.5px;font-weight:700;flex:1">מנתח…</span>
+        <button class="btn btn-sm btn-danger" onclick="cancelChazonishnik()" style="padding:3px 10px">בטל</button>
+      </div>
+    </div>
+
+    <!-- floating scrape progress (persistent, works even outside the sync modal) -->
+    <div id="scrape-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+         background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
+         box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:260px;direction:rtl">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span style="font-size:16px">🌐</span>
+        <span id="scrape-banner-text" style="font-size:12.5px;font-weight:700;flex:1">סורק…</span>
+        <button id="scrape-skip-btn" class="btn btn-sm btn-ghost" onclick="skipCurrentForum()"
+                style="padding:3px 10px;display:none">⏭️ דלג</button>
+        <button class="btn btn-sm btn-danger" onclick="stopScrape()" style="padding:3px 10px">עצור</button>
+      </div>
+      <div style="height:8px;background:var(--card2);border-radius:99px;overflow:hidden">
+        <div id="scrape-banner-bar" style="height:100%;width:0%;
+             background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s"></div>
+      </div>
+    </div>
+
+    <!-- statusbar -->
+    <div id="statusbar">
+      <span id="status-msg">מוכן</span>
+      <span id="status-time"></span>
+    </div>
+  </main>
+</div>
+
+<!-- ══ TOAST CONTAINER ══ -->
+<div id="toast-container"></div>
+
+<!-- ══ TOOLTIP ══ -->
+<div id="tooltip" class="tooltip" style="display:none"></div>
+
+<script src="app.js"></script>
+</body>
+</html>

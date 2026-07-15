@@ -1,0 +1,22 @@
+# נתונים מקומיים — לא מועלים
+tiknick.db
+tiknick.db-wal
+tiknick.db-shm
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+
+# PyInstaller output
+build/
+dist/
+*.spec.bak
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
