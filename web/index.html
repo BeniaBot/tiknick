@@ -109,9 +109,9 @@
         <input type="text" id="search-input" placeholder="חיפוש בכל השדות..."
                oninput="onSearch(this.value)">
       </div>
-      <button id="advanced-filter-btn" class="theme-toggle-btn" onclick="toggleFilterBar()"
-              title="חיפוש וסינון מתקדם לפי שדה">
-        <span class="tt-icon">⚙️</span>
+      <button id="advanced-filter-btn" class="btn btn-ghost btn-sm" onclick="toggleFilterBar()"
+              title="חיפוש וסינון מתקדם לפי שדה" style="display:flex;align-items:center;gap:5px">
+        <span>⚙️</span> <span>מתקדם</span>
       </button>
       <button id="theme-toggle" class="theme-toggle-btn" onclick="quickToggleTheme()"
               title="החלף מצב כהה/בהיר">
@@ -147,7 +147,6 @@
       </select>
       <input id="flt-value" class="form-input" style="width:auto;flex:1;min-width:120px"
              placeholder="ערך (לדוגמה: בני ברק)" oninput="applyFieldFilter()">
-      <button class="btn btn-warning btn-sm" onclick="bulkEditSelected()">✏️ ערוך שדה בנבחרים</button>
       <button class="btn btn-ghost btn-sm" onclick="clearFieldFilter()">✕ נקה סינון</button>
       <span id="flt-count" style="font-size:12px;color:var(--accent-2)"></span>
     </div>

@@ -554,19 +554,41 @@ def filter_nicks(field, op="contains", value=""):
         return [dict(r) for r in rows]
 
 def bulk_update_field(nick_ids, field, value):
-    """עדכון מרובה של שדה בודד לקבוצת ניקים (דרך מקור 'אני')."""
+    """עדכון מרובה מהיר של שדה בודד (דרך מקור 'אני'), בטרנזקציה אחת."""
     if field not in _FILTERABLE_KEYS or field in ("forum","username"):
         return 0
     ids = [int(i) for i in (nick_ids or [])]
-    n = 0
-    for nid in ids:
-        cur = get_nick(nid)
-        if not cur:
-            continue
-        cur[field] = value
-        update_nick(nid, cur)
-        n += 1
-    return n
+    if not ids:
+        return 0
+    with get_connection() as conn:
+        # עדכון ה-cache בטבלת nicks
+        conn.executemany(
+            f"UPDATE nicks SET {field}=?, updated_at=datetime('now') WHERE id=?",
+            [(value, nid) for nid in ids])
+        if field not in _NON_SOURCED:
+            if value in (None, ""):
+                # ריקון → הסר את תרומת "אני" לשדה זה
+                conn.executemany(
+                    "DELETE FROM field_values WHERE nick_id=? AND field_name=? AND source_id=1",
+                    [(nid, field) for nid in ids])
+            else:
+                # רשום/עדכן ערך תחת מקור "אני"
+                conn.executemany(
+                    """INSERT INTO field_values (nick_id, field_name, value, source_id)
+                       VALUES (?,?,?,1)
+                       ON CONFLICT(nick_id, field_name, source_id)
+                       DO UPDATE SET value=excluded.value, created_at=datetime('now')""",
+                    [(nid, field, value) for nid in ids])
+    # הכרעה מחדש (כדי לכבד מקורות אבסולוטיים/אמינים יותר) — רק אם יש ריבוי מקורות
+    if field not in _NON_SOURCED:
+        with get_connection() as conn:
+            multi = {r[0] for r in conn.execute(
+                f"""SELECT nick_id FROM field_values WHERE field_name=? AND nick_id IN
+                    ({','.join('?'*len(ids))}) GROUP BY nick_id HAVING COUNT(*)>1""",
+                [field] + ids).fetchall()}
+        for nid in multi:
+            resolve_field(nid, field)
+    return len(ids)
 
 def get_nick(nick_id):
     with get_connection() as conn:
