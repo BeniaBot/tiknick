@@ -1592,50 +1592,27 @@ async function openForumMgr() {
 }
 
 // ══ SYNC MANAGER ══════════════════════════════════════════════════════
-// ══ חיפוש / סינון / פעולות מרובות מתקדם ═════════════════════════════════
-let _filterResults = [];
-let _filterSelected = new Set();
+// ══ חיפוש / סינון מתקדם — על הממשק הראשי ═══════════════════════════════
+let _fieldFilterActive = false;
+let _filterFieldsLoaded = false;
 
-async function openAdvancedFilter() {
-  const fields = await api('get_filterable_fields') || [];
-  const fieldOpts = fields.map(f => `<option value="${f.key}">${esc(f.label)}</option>`).join('');
-  openModal('⚙️ חיפוש וסינון מתקדם', `
-    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
-      סנן ניקים לפי שדה, ואז בחר ובצע פעולה מרובה (מחיקה או עריכה) על התוצאות.
-    </p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:14px">
-      <div>
-        <label style="display:block;font-size:11px;color:var(--subtext);margin-bottom:4px">שדה</label>
-        <select id="flt-field" class="form-select">${fieldOpts}</select>
-      </div>
-      <div>
-        <label style="display:block;font-size:11px;color:var(--subtext);margin-bottom:4px">תנאי</label>
-        <select id="flt-op" class="form-select" onchange="onFilterOpChange()">
-          <option value="contains">מכיל</option>
-          <option value="equals">שווה בדיוק</option>
-          <option value="starts">מתחיל ב-</option>
-          <option value="not_empty">לא ריק</option>
-          <option value="empty">ריק</option>
-        </select>
-      </div>
-      <div style="flex:1;min-width:140px">
-        <label style="display:block;font-size:11px;color:var(--subtext);margin-bottom:4px">ערך</label>
-        <input id="flt-value" class="form-input" placeholder="לדוגמה: בני ברק">
-      </div>
-      <button class="btn btn-primary" onclick="runFilter()">🔍 סנן</button>
-    </div>
-    <div id="flt-actions" style="display:none;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-      <label style="font-size:12.5px;display:flex;align-items:center;gap:5px">
-        <input type="checkbox" id="flt-select-all" onchange="filterSelectAll(this.checked)"> בחר הכל
-      </label>
-      <span class="stat-pill">נבחרו <b id="flt-sel-count">0</b></span>
-      <button class="btn btn-danger btn-sm" onclick="bulkDeleteFiltered()">🗑️ מחק נבחרים</button>
-      <button class="btn btn-warning btn-sm" onclick="bulkEditFiltered()">✏️ ערוך שדה בנבחרים</button>
-    </div>
-    <div id="flt-results" style="max-height:320px;overflow-y:auto;border:1px solid var(--border-soft);border-radius:8px"></div>
-  `, [
-    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
-  ], 'modal-lg');
+async function toggleFilterBar() {
+  const bar = document.getElementById('filter-bar');
+  const showing = bar.style.display === 'flex';
+  if (showing) {
+    bar.style.display = 'none';
+    if (_fieldFilterActive) clearFieldFilter();
+    return;
+  }
+  // טען את רשימת השדות פעם אחת
+  if (!_filterFieldsLoaded) {
+    const fields = await api('get_filterable_fields') || [];
+    document.getElementById('flt-field').innerHTML =
+      fields.map(f => `<option value="${f.key}">${esc(f.label)}</option>`).join('');
+    document.getElementById('flt-field').onchange = applyFieldFilter;
+    _filterFieldsLoaded = true;
+  }
+  bar.style.display = 'flex';
   onFilterOpChange();
 }
 
@@ -1647,61 +1624,39 @@ function onFilterOpChange() {
   valInput.style.opacity = noValue ? '.4' : '1';
 }
 
-async function runFilter() {
+async function applyFieldFilter() {
   const field = document.getElementById('flt-field').value;
   const op    = document.getElementById('flt-op').value;
   const value = document.getElementById('flt-value').value.trim();
-  _filterResults = await api('filter_nicks', field, op, value) || [];
-  _filterSelected = new Set();
-  renderFilterResults();
-  document.getElementById('flt-actions').style.display = _filterResults.length ? 'flex' : 'none';
-}
-
-function renderFilterResults() {
-  const box = document.getElementById('flt-results');
-  if (!_filterResults.length) {
-    box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--subtext)">לא נמצאו תוצאות</div>';
+  const needsValue = (op !== 'empty' && op !== 'not_empty');
+  if (needsValue && !value) {  // אין ערך עדיין — הצג הכל
+    if (_fieldFilterActive) { _fieldFilterActive = false; await loadNicks(''); }
+    document.getElementById('flt-count').textContent = '';
     return;
   }
-  box.innerHTML = _filterResults.map(n => `
-    <label class="sync-item" style="cursor:pointer">
-      <input type="checkbox" class="flt-cb" data-id="${n.id}" ${_filterSelected.has(n.id)?'checked':''}
-             onchange="toggleFilterSel(${n.id}, this.checked)">
-      <span style="flex:1">
-        <span style="color:${S.forumColors[n.forum]||'#8b90a0'}">[${esc(n.forum)}]</span>
-        <b>${esc(n.username)}</b>
-        ${n.real_name?`<span style="color:var(--subtext);font-size:12px"> · ${esc(n.real_name)}</span>`:''}
-        ${n.address?`<span style="color:var(--subtext);font-size:12px"> · ${esc(n.address)}</span>`:''}
-      </span>
-    </label>`).join('');
-  updateFilterSelCount();
+  const rows = await api('filter_nicks', field, op, value) || [];
+  _fieldFilterActive = true;
+  // הזרק את התוצאות לרשימה הראשית — כך שבחירה/מחיקה/עריכה מרובה עובדים כרגיל
+  S.nicks = rows;
+  S.total = rows.length;
+  S.offset = rows.length;
+  S.multiSelected.clear();
+  sortNicks();
+  renderTable();
+  updateBulkBar();
+  document.getElementById('flt-count').textContent = `${rows.length} תוצאות`;
 }
 
-function toggleFilterSel(id, checked) {
-  if (checked) _filterSelected.add(id); else _filterSelected.delete(id);
-  updateFilterSelCount();
-}
-function filterSelectAll(checked) {
-  _filterSelected = checked ? new Set(_filterResults.map(n => n.id)) : new Set();
-  renderFilterResults();
-}
-function updateFilterSelCount() {
-  const el = document.getElementById('flt-sel-count');
-  if (el) el.textContent = _filterSelected.size;
-}
-
-async function bulkDeleteFiltered() {
-  const ids = [..._filterSelected];
-  if (!ids.length) { toast('לא נבחרו ניקים', 'error'); return; }
-  if (!confirm(`למחוק ${ids.length} ניקים שנבחרו? פעולה בלתי הפיכה!`)) return;
-  await api('delete_nicks', ids);
-  toast(`${ids.length} ניקים נמחקו ✓`, 'success');
+async function clearFieldFilter() {
+  _fieldFilterActive = false;
+  document.getElementById('flt-value').value = '';
+  document.getElementById('flt-count').textContent = '';
   await loadNicks(document.getElementById('search-input').value);
-  await runFilter();
 }
 
-async function bulkEditFiltered() {
-  const ids = [..._filterSelected];
+// עריכת שדה במרובים — משתמש בבחירה הקיימת (S.multiSelected)
+async function bulkEditSelected() {
+  const ids = [...S.multiSelected];
   if (!ids.length) { toast('לא נבחרו ניקים', 'error'); return; }
   const fields = await api('get_filterable_fields') || [];
   const opts = fields.filter(f => f.key!=='username' && f.key!=='forum')
@@ -1719,11 +1674,12 @@ async function bulkEditFiltered() {
       const field = document.getElementById('bulk-field').value;
       const value = document.getElementById('bulk-value').value;
       const r = await api('bulk_update_field', ids, field, value);
-      toast(`${r?.count ?? 0} ניקים עודכנו ✓`, 'success');
       closeModal();
-      await loadNicks(document.getElementById('search-input').value);
+      toast(`${r?.count ?? 0} ניקים עודכנו ✓`, 'success');
+      if (_fieldFilterActive) await applyFieldFilter();
+      else await loadNicks(document.getElementById('search-input').value);
     }},
-    { label: 'ביטול', cls: 'btn-ghost', action: () => { closeModal(); openAdvancedFilter(); } },
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
   ], 'modal-sm');
 }
 
@@ -2200,8 +2156,8 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '') {
   overlay.id = 'modal-overlay';
   overlay.onclick = e => { if (e.target === overlay) closeModal(); };
 
-  const btnsHtml = buttons.map(b =>
-    `<button class="btn ${b.cls}" id="mb-${b.label}">${b.label}</button>`
+  const btnsHtml = buttons.map((b, i) =>
+    `<button class="btn ${b.cls}" id="mb-idx-${i}">${b.label}</button>`
   ).join('');
 
   overlay.innerHTML = `
@@ -2216,8 +2172,8 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '') {
 
   document.body.appendChild(overlay);
 
-  buttons.forEach(b => {
-    const el = overlay.querySelector(`#mb-${CSS.escape(b.label)}`);
+  buttons.forEach((b, i) => {
+    const el = overlay.querySelector(`#mb-idx-${i}`);
     if (el) el.onclick = b.action;
   });
 }

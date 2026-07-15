@@ -109,8 +109,8 @@
         <input type="text" id="search-input" placeholder="חיפוש בכל השדות..."
                oninput="onSearch(this.value)">
       </div>
-      <button id="advanced-filter-btn" class="theme-toggle-btn" onclick="openAdvancedFilter()"
-              title="חיפוש וסינון מתקדם / פעולות מרובות">
+      <button id="advanced-filter-btn" class="theme-toggle-btn" onclick="toggleFilterBar()"
+              title="חיפוש וסינון מתקדם לפי שדה">
         <span class="tt-icon">⚙️</span>
       </button>
       <button id="theme-toggle" class="theme-toggle-btn" onclick="quickToggleTheme()"
@@ -128,8 +128,28 @@
       <div class="topbar-stats" id="bulk-actions-bar" style="display:none">
         <span class="stat-pill">✅ <b id="bulk-count">0</b> נבחרו</span>
         <button class="btn btn-danger btn-sm" onclick="deleteBulkSelected()">🗑️ מחק נבחרים</button>
+        <button class="btn btn-warning btn-sm" onclick="bulkEditSelected()">✏️ ערוך שדה</button>
         <button class="btn btn-ghost btn-sm" onclick="clearBulkSelection()">בטל בחירה</button>
       </div>
+    </div>
+
+    <!-- inline advanced filter bar -->
+    <div id="filter-bar" style="display:none;align-items:center;gap:8px;padding:8px 16px;
+         border-bottom:1px solid var(--border-soft);flex-wrap:wrap;direction:rtl">
+      <span style="font-size:12px;color:var(--subtext)">סנן לפי:</span>
+      <select id="flt-field" class="form-select" style="width:auto;min-width:120px"></select>
+      <select id="flt-op" class="form-select" style="width:auto" onchange="onFilterOpChange();applyFieldFilter()">
+        <option value="contains">מכיל</option>
+        <option value="equals">שווה בדיוק</option>
+        <option value="starts">מתחיל ב-</option>
+        <option value="not_empty">לא ריק</option>
+        <option value="empty">ריק</option>
+      </select>
+      <input id="flt-value" class="form-input" style="width:auto;flex:1;min-width:120px"
+             placeholder="ערך (לדוגמה: בני ברק)" oninput="applyFieldFilter()">
+      <button class="btn btn-warning btn-sm" onclick="bulkEditSelected()">✏️ ערוך שדה בנבחרים</button>
+      <button class="btn btn-ghost btn-sm" onclick="clearFieldFilter()">✕ נקה סינון</button>
+      <span id="flt-count" style="font-size:12px;color:var(--accent-2)"></span>
     </div>
 
     <!-- table -->
