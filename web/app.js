@@ -1767,25 +1767,36 @@ async function openSyncMgr() {
       </div>
     </label>`;
   const sec3 = `
-    <div class="section-hdr">🌐 התנגשויות בסנכרון מהאינטרנט</div>
-    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
-      כשסריקה מהאינטרנט מוצאת ערך שונה בשדה שכבר קיים, מה לעשות?
-    </p>
-    ${opt('ask', '🙋 לשאול אותי', 'ייפתח חלון פתרון התנגשויות בסיום הסריקה (ברירת מחדל)')}
-    ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
-    ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}
-
-    <div class="section-hdr" style="margin-top:22px">📥 התנגשויות בייבוא קובץ</div>
-    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
-      כשייבוא קובץ מכניס ערך שונה לשדה קיים, איך להכריע?
-    </p>
-    <label class="toggle" style="display:inline-flex;align-items:center;gap:8px">
-      <input type="checkbox" id="import-manual" ${importManual?'checked':''}>
-      <span class="toggle-slider"></span>
-    </label>
-    <span style="font-size:13px;margin-right:6px">פתרון ידני — שאל אותי לכל התנגשות</span>
-    <div style="font-size:11px;color:var(--subtext);margin-top:6px">
-      כבוי (ברירת מחדל) = הכרעה אוטומטית לפי דרגת אמינות. דלוק = ייפתח חלון לבחירה ידנית בכל התנגשות.
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+      <div>
+        <div class="section-hdr">🌐 התנגשויות בסנכרון מהאינטרנט</div>
+        <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
+          כשסריקה מהאינטרנט מוצאת ערך שונה בשדה שכבר קיים, מה לעשות?
+        </p>
+        ${opt('ask', '🙋 לשאול אותי', 'ייפתח חלון פתרון התנגשויות בסיום הסריקה (ברירת מחדל)')}
+        ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
+        ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}
+      </div>
+      <div>
+        <div class="section-hdr">📥 התנגשויות בייבוא קובץ</div>
+        <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
+          כשייבוא קובץ מכניס ערך שונה לשדה קיים, איך להכריע?
+        </p>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <label class="toggle">
+            <input type="checkbox" id="import-manual" ${importManual?'checked':''}>
+            <span class="toggle-slider"></span>
+          </label>
+          <span style="font-size:13px">פתרון ידני — שאל אותי לכל התנגשות</span>
+        </div>
+        <div style="font-size:11px;color:var(--subtext);margin-bottom:12px">
+          כבוי (ברירת מחדל) = הכרעה אוטומטית לפי דרגת אמינות. דלוק = ייפתח חלון לבחירה ידנית בכל התנגשות.
+        </div>
+        <div style="font-size:12px;color:var(--subtext);padding:10px;border:1px dashed var(--border-soft);border-radius:8px">
+          💡 את דרגות האמינות (הציונים) של כל מקור קובעים בלשונית
+          <b style="color:var(--accent-2);cursor:pointer" onclick="switchSyncTab('s4')">🎖️ מקורות</b>.
+        </div>
+      </div>
     </div>`;
 
   // ── סעיף 4: ניהול מקורות ("אבות") ──
@@ -2525,8 +2536,19 @@ async function openInternetSync() {
   `, [
     { label: 'בדוק פורום', cls: 'btn-ghost',   action: doForumCheck },
     { label: 'התחל סריקה', cls: 'btn-primary', action: doStartScrape },
+    { label: '🌍 סרוק הכל', cls: 'btn-warning', action: doStartScrapeAll },
     { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
   ], 'modal-lg');
+}
+
+async function doStartScrapeAll() {
+  if (!confirm('לסרוק את כל הפורומים ברצף? פורום שלא ניתן לסרוק יידלג אוטומטית.')) return;
+  const cookie = document.getElementById('sync-cookie')?.value.trim() || '';
+  const start = await api('start_scrape_all', cookie);
+  if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל', 'error'); return; }
+  const wrap = document.getElementById('sync-progress-wrap');
+  if (wrap) wrap.style.display = '';
+  startScrapeMonitor();
 }
 
 function closeSyncModal() {
@@ -2575,7 +2597,9 @@ function startScrapeMonitor() {
     const p = await api('get_scrape_progress');
     if (!p) return;
     const pct = p.total_pages ? Math.round((p.page / p.total_pages) * 100) : 0;
-    const label = `עמוד ${p.page}/${p.total_pages || '?'} · נוספו ${p.added} · עודכנו ${p.updated}`;
+    const forumPrefix = p.all_mode
+      ? `[${p.forum_index}/${p.forum_total}] ${p.forum||''} · ` : '';
+    const label = `${forumPrefix}עמוד ${p.page}/${p.total_pages || '?'} · נוספו ${p.added} · עודכנו ${p.updated}`;
 
     // עדכן באנר צף (תמיד)
     const bBar = document.getElementById('scrape-banner-bar');
@@ -2599,6 +2623,7 @@ function startScrapeMonitor() {
         let extra = '';
         if (p.auto_resolved) extra = ` · ${p.auto_resolved} התנגשויות נפתרו אוטומטית`;
         else if (p.conflicts) extra = ` · ${p.conflicts} התנגשויות`;
+        if (p.skipped && p.skipped.length) extra += ` · דולגו ${p.skipped.length} פורומים`;
         toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`, 'success');
       }
       await loadNicks(document.getElementById('search-input').value);

@@ -134,6 +134,33 @@ def _map_user(u):
     if pic:
         avatar = pic
 
+    # last online → תאריך
+    last_ts = u.get("lastonline") or u.get("lastonlineISO")
+    last_online = ""
+    if isinstance(last_ts, (int, float)):
+        try:
+            last_online = time.strftime("%Y-%m-%d", time.localtime(last_ts / 1000))
+        except Exception:
+            last_online = ""
+    elif isinstance(last_ts, str):
+        last_online = last_ts[:10]
+
+    # פרטים נוספים חופשיים — נאספים לשדה extra_info
+    extra_bits = []
+    loc = g("location")
+    if loc:      extra_bits.append(f"מיקום: {loc}")
+    web = g("website")
+    if web:      extra_bits.append(f"אתר: {web}")
+    about = g("aboutme")
+    if about:    extra_bits.append(f"אודות: {about}")
+    sig = g("signature")
+    if sig:      extra_bits.append(f"חתימה: {sig}")
+    pv = u.get("profileviews")
+    if pv:       extra_bits.append(f"צפיות בפרופיל: {pv}")
+    if last_online:
+        extra_bits.append(f"נראה לאחרונה: {last_online}")
+    extra_info = " · ".join(extra_bits)
+
     return {
         "full_name":    g("fullname"),
         "reputation":   g("reputation") or "",
@@ -145,6 +172,7 @@ def _map_user(u):
         "nick_color":   g("icon:bgColor") or "",
         "email":        g("email"),   # כמעט תמיד ריק ב-NodeBB ציבורי
         "forum_uid":    (str(u.get("uid")) if u.get("uid") else ""),
+        "extra_info":   extra_info,
     }
 
 

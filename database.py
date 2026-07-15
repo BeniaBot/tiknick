@@ -27,6 +27,7 @@ KNOWN_FORUMS = [
     {"name": "פורום לתורה",     "color": "#2ecc71", "url": "https://tora-forum.co.il/"},
     {"name": "פורום המכלול",    "color": "#f39c12", "url": "https://forum.hamichlol.org.il"},
     {"name": "פורום ארבע אמות", "color": "#673ab7", "url": "https://arba-amot.ovh/"},
+    {"name": "פורום גבאים",     "color": "#c0392b", "url": "https://forum-gabai.onrender.com/"},
 ]
 
 # כל שדות הניק וברירת המחדל שלהם לסנכרון (True = מסונכרן)

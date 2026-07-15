@@ -36,7 +36,7 @@ _scrape_cancel = threading.Event()
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.5"
+APP_VERSION = "0.7.6"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -225,6 +225,72 @@ class API:
 
     def get_scrape_progress(self):
         return dict(_scrape_state)
+
+    def start_scrape_all(self, cookie=""):
+        """סורק את כל הפורומים ברצף, עם דילוג אוטומטי על פורום שנכשל."""
+        if _scrape_state["running"]:
+            return {"ok": False, "error": "סריקה כבר רצה"}
+
+        forums = [f for f in db.get_forums() if (f.get("url") or "").strip()]
+        if not forums:
+            return {"ok": False, "error": "אין פורומים עם כתובת לסריקה"}
+
+        _scrape_cancel.clear()
+        _scrape_state.update({
+            "running": True, "done": False, "error": None,
+            "page": 0, "total_pages": 0,
+            "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
+            "forum": None, "cancelled": False, "auto_resolved": 0,
+            "all_mode": True, "forum_index": 0, "forum_total": len(forums),
+            "skipped": [],
+        })
+
+        def _progress(p):
+            _scrape_state.update({
+                "page": p.get("page", 0),
+                "total_pages": p.get("total_pages", 0),
+                "added": _scrape_state.get("added", 0),  # מצטבר לאורך כל הפורומים
+            })
+            _scrape_state["cur_added"] = p.get("added", 0)
+            _scrape_state["cur_updated"] = p.get("updated", 0)
+
+        def _run():
+            total_added = total_updated = total_conflicts = 0
+            for i, f in enumerate(forums):
+                if _scrape_cancel.is_set():
+                    _scrape_state["cancelled"] = True
+                    break
+                _scrape_state["forum"] = f["name"]
+                _scrape_state["forum_index"] = i + 1
+                _scrape_state["page"] = 0
+                _scrape_state["total_pages"] = 0
+                try:
+                    stats = scraper.scrape_forum(
+                        f["name"], f["url"], db,
+                        cookie=cookie or None,
+                        progress_cb=_progress,
+                        cancel_flag=_scrape_cancel,
+                    )
+                    total_added   += stats.get("added", 0)
+                    total_updated += stats.get("updated", 0)
+                    total_conflicts += stats.get("conflicts", 0)
+                    _scrape_state["added"]   = total_added
+                    _scrape_state["updated"] = total_updated
+                    _scrape_state["conflicts"] = total_conflicts
+                except Exception as e:
+                    # דילוג אוטומטי על פורום שנכשל
+                    _scrape_state["skipped"].append({"forum": f["name"], "error": str(e)})
+                    continue
+            # מדיניות התנגשות אוטומטית בסוף
+            policy = db.get_setting("conflict_policy", "ask")
+            if policy in ("new", "existing") and _scrape_state["conflicts"] > 0:
+                _scrape_state["auto_resolved"] = db.resolve_all_conflicts(policy)
+                _scrape_state["conflicts"] = 0
+            _scrape_state["running"] = False
+            _scrape_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "forum_total": len(forums)}
 
     def cancel_scrape(self):
         _scrape_cancel.set()
