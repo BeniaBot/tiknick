@@ -106,12 +106,21 @@ def check_forum(forum_url, cookie=None):
         base = _api_base(forum_url)
         data = _fetch_json(base + "/api/users", cookie=cookie)
     except ScrapeError as e:
-        return {"ok": False, "user_count": None, "title": None, "error": str(e)}
+        msg = str(e)
+        # זיהוי מקרה של דרישת התחברות
+        if any(x in msg for x in ("401", "403", "not-authori", "login", "unauthor")):
+            return {"ok": False, "user_count": None, "title": None,
+                    "error": "הפורום דורש התחברות לצפייה במשתמשים — הזן עוגיית express.sid (ראה '🍪 איך משיגים?')"}
+        return {"ok": False, "user_count": None, "title": None, "error": msg}
 
     # NodeBB מחזיר בד"כ מבנה עם users[] ולעיתים pagination/userCount
     if not isinstance(data, dict) or "users" not in data:
+        # אולי זו דרישת התחברות שהוחזרה כ-JSON/HTML
+        if isinstance(data, dict) and any(k in data for k in ("error", "status")):
+            return {"ok": False, "user_count": None, "title": None,
+                    "error": "הפורום דרש התחברות או שאין הרשאה — נסה עם עוגיית express.sid"}
         return {"ok": False, "user_count": None, "title": None,
-                "error": "התשובה אינה במבנה של NodeBB (אין רשימת users)"}
+                "error": "לא נראה שזה פורום NodeBB (אין רשימת משתמשים ב-API). ייתכן שהפורום בנוי על מערכת אחרת ולא ניתן לסריקה."}
 
     count = data.get("userCount")
     if count is None:

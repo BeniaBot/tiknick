@@ -2527,9 +2527,15 @@ let _scrapePoll = null;
 
 async function openInternetSync() {
   const forums = await api('get_scrapable_forums') || [];
-  const opts = forums.map(f =>
-    `<option value="${esc(f.name)}" data-url="${esc(f.url || '')}">${esc(f.name)}</option>`
-  ).join('');
+  const known = await api('get_known_forums') || [];
+  const flagOf = {};
+  known.forEach(k => { flagOf[k.name] = { needs_login: k.needs_login, scrapable: k.scrapable !== false }; });
+  const opts = forums.map(f => {
+    const fl = flagOf[f.name] || {};
+    const tag = fl.scrapable === false ? ' ⛔' : (fl.needs_login ? ' 🔒' : '');
+    return `<option value="${esc(f.name)}" data-url="${esc(f.url || '')}"
+             data-login="${fl.needs_login?'1':'0'}" data-scrapable="${fl.scrapable===false?'0':'1'}">${esc(f.name)}${tag}</option>`;
+  }).join('');
 
   openModal('🌐 סנכרון לאינטרנט', `
     <p style="color:var(--subtext);font-size:13px;line-height:1.6;margin-bottom:16px">
@@ -2539,7 +2545,8 @@ async function openInternetSync() {
 
     <div class="section-hdr">בחירת פורום</div>
     <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">פורום לסריקה</label>
-    <select id="sync-forum" class="form-select" style="width:100%;margin-bottom:12px">${opts}</select>
+    <select id="sync-forum" class="form-select" style="width:100%;margin-bottom:6px" onchange="onSyncForumChange()">${opts}</select>
+    <div id="sync-forum-hint" style="font-size:12px;margin-bottom:12px;min-height:16px"></div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px">
       <label style="font-size:12px;color:var(--subtext)">
@@ -2565,6 +2572,7 @@ async function openInternetSync() {
     { label: '🌍 סרוק הכל', cls: 'btn-warning', action: doStartScrapeAll },
     { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
   ], 'modal-lg');
+  onSyncForumChange();
 }
 
 async function doStartScrapeAll() {
@@ -2690,6 +2698,22 @@ function openChazonishnikHelp() {
 }
 
 function openChazonishnikHelpEnd() {}
+
+function onSyncForumChange() {
+  const sel = document.getElementById('sync-forum');
+  const opt = sel?.selectedOptions[0];
+  const hint = document.getElementById('sync-forum-hint');
+  if (!opt || !hint) return;
+  if (opt.dataset.scrapable === '0') {
+    hint.innerHTML = '⛔ פורום זה כנראה אינו בנוי על NodeBB ולא ניתן לסריקה אוטומטית.';
+    hint.style.color = 'var(--danger)';
+  } else if (opt.dataset.login === '1') {
+    hint.innerHTML = '🔒 פורום זה דורש התחברות — הזן עוגיית express.sid למטה (ראה "🍪 איך משיגים?").';
+    hint.style.color = 'var(--accent-2)';
+  } else {
+    hint.innerHTML = '';
+  }
+}
 
 async function skipCurrentForum() {
   await api('skip_current_forum');
