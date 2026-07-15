@@ -2829,34 +2829,78 @@ function openExt(url) {
   api('open_url', url);
 }
 
+let _chzPoll = null;
+
 async function runChazonishnik() {
   const username = document.getElementById('chz-user')?.value.trim();
   const cookie   = document.getElementById('chz-cookie')?.value.trim();
   if (!username) { toast('הזן שם משתמש', 'error'); return; }
   if (!cookie)   { toast('נדרשת עוגיית express.sid', 'error'); return; }
-  toast('מנתח פעילות… זה עשוי לקחת דקה', 'info');
-  const r = await api('run_chazonishnik', username, cookie);
-  if (r?.ok) {
-    toast('הניתוח הושלם ✓', 'success');
-    // הדוח נפתח בדפדפן ע"י הבקאנד; אם יש HTML גם נציג בתוכנה
-    if (r.html) showChazonishnikReport(r.html);
-  } else {
-    toast('שגיאה: ' + (r?.error || 'לא ניתן לנתח'), 'error');
-  }
+  const start = await api('run_chazonishnik', username, cookie);
+  if (!start?.ok) { toast('שגיאה: ' + (start?.error || ''), 'error'); return; }
+  showChazonishnikProgress(username);
 }
 
-function showChazonishnikReport(html) {
-  const overlay = document.getElementById('modal-overlay');
-  // הצג בתוך iframe בחלון מלא בתוכנה
-  openModal('📊 דוח פעילות', `
-    <iframe id="chz-frame" style="width:100%;height:70vh;border:none;border-radius:8px;background:#0f172a"></iframe>
+function showChazonishnikProgress(username) {
+  openModal('📊 מנתח פעילות…', `
+    <div style="text-align:center;padding:24px 16px">
+      <div style="font-size:40px;margin-bottom:14px">⏳</div>
+      <div id="chz-progress-text" style="font-size:14px;margin-bottom:8px">מתחיל…</div>
+      <div style="font-size:12px;color:var(--subtext)">מנתח את הפעילות של ${esc(username)} — זה עשוי לקחת עד דקה</div>
+      <div style="height:8px;background:var(--card2);border-radius:99px;overflow:hidden;margin-top:16px">
+        <div id="chz-bar" style="height:100%;width:20%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .4s"></div>
+      </div>
+    </div>
   `, [
-    { label: 'סגור', cls: 'btn-primary', action: closeModal },
+    { label: '✕ בטל', cls: 'btn-ghost', action: cancelChazonishnik },
+  ], 'modal-sm');
+
+  if (_chzPoll) clearInterval(_chzPoll);
+  _chzPoll = setInterval(async () => {
+    const p = await api('get_chazonishnik_progress');
+    if (!p) return;
+    const txt = document.getElementById('chz-progress-text');
+    const bar = document.getElementById('chz-bar');
+    if (txt) {
+      if (p.phase === 'scan') txt.textContent = `סורק פוסטים… נמצאו ${p.count}`;
+      else if (p.phase === 'analyze') txt.textContent = `מנתח… ${p.count}/${p.total}`;
+    }
+    if (bar && p.total) bar.style.width = Math.min(90, 20 + (p.count / p.total) * 70) + '%';
+
+    if (p.done || !p.running) {
+      clearInterval(_chzPoll); _chzPoll = null;
+      if (p.cancelled) { toast('הניתוח בוטל', 'info'); closeModal(); return; }
+      if (p.error) { toast('שגיאה: ' + p.error, 'error'); closeModal(); return; }
+      showChazonishnikReport(p.html, p.count);
+    }
+  }, 600);
+}
+
+async function cancelChazonishnik() {
+  await api('cancel_chazonishnik');
+  if (_chzPoll) { clearInterval(_chzPoll); _chzPoll = null; }
+  toast('מבטל…', 'info');
+  closeModal();
+}
+
+function showChazonishnikReport(html, postCount) {
+  openModal(`📊 דוח פעילות${postCount ? ` · ${postCount} פוסטים` : ''}`, `
+    <iframe id="chz-frame" style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
+  `, [
+    { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveChazonishnikReport(html) },
+    { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openChazonishnik },
+    { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
   setTimeout(() => {
     const frame = document.getElementById('chz-frame');
     if (frame) frame.srcdoc = html;
   }, 100);
+}
+
+async function saveChazonishnikReport(html) {
+  const r = await api('save_chazonishnik_report', html);
+  if (r?.ok) toast('הדוח נשמר ✓', 'success');
+  else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
 }
 
 function openStinknik() {

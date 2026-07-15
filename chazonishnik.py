@@ -33,15 +33,50 @@ def _get_json(url, cookie=None, timeout=15):
     return json.loads(raw)
 
 
-def _fetch_user(base, slug, cookie):
-    data = _get_json(f"{base}/api/user/{urllib.parse.quote(slug)}", cookie=cookie)
-    return data.get("uid"), data
+def _user_slug_variations(username):
+    """מחזיר וריאציות סבירות של slug — NodeBB משתמש במקפים במקום רווחים."""
+    u = username.strip()
+    variations = []
+    def add(v):
+        if v and v not in variations:
+            variations.append(v)
+    add(u.replace(" ", "-"))          # רווח → מקף (הנפוץ ב-NodeBB)
+    add(u.lower().replace(" ", "-"))  # אותיות קטנות
+    add(u)                            # כמו שהוא
+    add(u.replace(" ", ""))           # בלי רווחים
+    return variations
 
 
-def _scan_posts(base, slug, cookie, progress=None):
+def _fetch_user(base, username, cookie):
+    """מנסה כמה וריאציות עד שנמצא משתמש. מחזיר (uid, slug, data)."""
+    last_err = None
+    u = username.strip()
+    # קודם: חיפוש לפי username מדויק (מטפל ברווחים באופן טבעי)
+    try:
+        data = _get_json(f"{base}/api/user/username/{urllib.parse.quote(u)}", cookie=cookie)
+        if isinstance(data, dict) and (data.get("uid") or data.get("username")):
+            slug = data.get("userslug") or u.replace(" ", "-")
+            return data.get("uid"), slug, data
+    except Exception as e:
+        last_err = e
+    # אחר כך: וריאציות slug
+    for slug in _user_slug_variations(username):
+        try:
+            data = _get_json(f"{base}/api/user/{urllib.parse.quote(slug)}", cookie=cookie)
+            if isinstance(data, dict) and (data.get("uid") or data.get("username")):
+                return data.get("uid"), (data.get("userslug") or slug), data
+        except Exception as e:
+            last_err = e
+            continue
+    raise last_err or Exception("לא נמצא משתמש")
+
+
+def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None):
     all_posts = []
     page = 1
     while page <= MAX_PAGES:
+        if cancel_flag is not None and cancel_flag.is_set():
+            break
         url = f"{base}/api/user/{urllib.parse.quote(slug)}/posts?page={page}"
         try:
             data = _get_json(url, cookie=cookie)
@@ -90,15 +125,14 @@ def _fetch_detail(base, cookie, post):
         return None
 
 
-def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_path=None):
+def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_path=None, cancel_flag=None):
     """
     מריץ ניתוח מלא ומחזיר dict: {ok, html, path, posts, error}
     progress(dict) — קריאה אופציונלית לעדכוני התקדמות.
     """
     base = (base_url or DEFAULT_BASE).rstrip("/")
-    slug = username.strip()
     try:
-        my_uid, _ = _fetch_user(base, slug, cookie)
+        my_uid, slug, _ = _fetch_user(base, username, cookie)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return {"ok": False, "error": "נדרשת עוגייה תקינה (שגיאת הרשאה)"}
@@ -106,7 +140,9 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     except Exception as e:
         return {"ok": False, "error": f"לא ניתן למצוא משתמש: {e}"}
 
-    raw_posts = _scan_posts(base, slug, cookie, progress=progress)
+    raw_posts = _scan_posts(base, slug, cookie, progress=progress, cancel_flag=cancel_flag)
+    if cancel_flag is not None and cancel_flag.is_set():
+        return {"ok": False, "cancelled": True, "error": "בוטל"}
     if not raw_posts:
         return {"ok": False, "error": "לא נמצאו פוסטים (או שהמשתמש לא פעיל / העוגייה לא תקינה)"}
 
@@ -116,6 +152,10 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as ex:
         futs = {ex.submit(_fetch_detail, base, cookie, p): p for p in raw_posts}
         for fut in concurrent.futures.as_completed(futs):
+            if cancel_flag is not None and cancel_flag.is_set():
+                for f in futs:
+                    f.cancel()
+                return {"ok": False, "cancelled": True, "error": "בוטל"}
             r = fut.result()
             done += 1
             if progress and done % 15 == 0:

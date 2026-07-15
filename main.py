@@ -35,9 +35,25 @@ _scrape_state = {
 _scrape_cancel = threading.Event()
 _scrape_skip = threading.Event()
 
+# מצב Chazonishnik (ניתוח פעילות ברקע)
+_chz_state = {"running": False, "done": False, "error": None, "phase": "",
+              "page": 0, "count": 0, "analyzed": 0, "total": 0, "html": None,
+              "path": None, "cancelled": False}
+_chz_cancel = threading.Event()
+
+# ── מצב Chazonishnik (ניתוח פעילות ברקע) ──
+_chz_state = {"running": False, "done": False, "error": None,
+              "phase": "", "count": 0, "total": 0, "html": None, "path": None,
+              "cancelled": False}
+_chz_cancel = threading.Event()
+
+class _ChzCancelled(Exception):
+    """נזרק כדי לבטל ניתוח Chazonishnik שרץ."""
+    pass
+
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.7.12"
+APP_VERSION = "0.7.13"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
@@ -407,22 +423,82 @@ class API:
             return {"ok": False, "error": str(e)}
 
     def run_chazonishnik(self, username, cookie, base_url="https://mitmachim.top"):
-        """מריץ ניתוח פעילות משתמש (Chazonishnik) ומחזיר HTML; גם שומר ופותח בדפדפן."""
+        """מתחיל ניתוח פעילות ברקע. התקדמות דרך get_chazonishnik_progress."""
+        if _chz_state["running"]:
+            return {"ok": False, "error": "ניתוח כבר רץ"}
+        if not username or not username.strip():
+            return {"ok": False, "error": "הזן שם משתמש"}
+        if not cookie or not cookie.strip():
+            return {"ok": False, "error": "נדרשת עוגיית express.sid"}
+
+        _chz_cancel.clear()
+        _chz_state.update({"running": True, "done": False, "error": None,
+                           "phase": "scan", "count": 0, "total": 0,
+                           "html": None, "path": None, "cancelled": False})
+
+        def _progress(p):
+            _chz_state["phase"] = p.get("phase", "")
+            if p.get("phase") == "scan":
+                _chz_state["count"] = p.get("count", 0)
+            else:
+                _chz_state["count"] = p.get("done", 0)
+                _chz_state["total"] = p.get("total", 0)
+
+        def _run():
+            try:
+                import chazonishnik
+                out_dir = os.path.dirname(db.DB_PATH)
+                safe = "".join(c for c in username if c.isalnum() or c in "-_") or "user"
+                save_path = os.path.join(out_dir, f"chazonishnik_{safe}.html")
+                result = chazonishnik.analyze_user(
+                    username, cookie, base_url=base_url,
+                    progress=_progress, save_path=save_path, cancel_flag=_chz_cancel)
+                if result.get("cancelled"):
+                    _chz_state["cancelled"] = True
+                elif result.get("ok"):
+                    _chz_state["html"] = result.get("html")
+                    _chz_state["path"] = result.get("path")
+                    _chz_state["count"] = result.get("posts", 0)
+                else:
+                    _chz_state["error"] = result.get("error")
+            except Exception as e:
+                logging.exception("chazonishnik failed")
+                _chz_state["error"] = str(e)
+            finally:
+                _chz_state["running"] = False
+                _chz_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True}
+
+    def get_chazonishnik_progress(self):
+        return dict(_chz_state)
+
+    def cancel_chazonishnik(self):
+        _chz_cancel.set()
+        return {"ok": True}
+
+    def save_chazonishnik_report(self, html=None):
+        """שמירת הדוח כקובץ HTML במיקום לבחירת המשתמש (דיאלוג שמירה)."""
+        content = html or _chz_state.get("html")
+        if not content:
+            return {"ok": False, "error": "אין דוח לשמירה"}
         try:
-            import chazonishnik
-            out_dir = os.path.dirname(db.DB_PATH)
-            safe = "".join(c for c in username if c.isalnum() or c in "-_") or "user"
-            save_path = os.path.join(out_dir, f"chazonishnik_{safe}.html")
-            result = chazonishnik.analyze_user(
-                username, cookie, base_url=base_url, save_path=save_path)
-            if result.get("ok") and result.get("path"):
-                try:
-                    webbrowser.open("file://" + os.path.realpath(result["path"]))
-                except Exception:
-                    pass
-            return result
+            import webview
+            windows = webview.windows
+            result = windows[0].create_file_dialog(
+                webview.SAVE_DIALOG, save_filename="chazonishnik_report.html",
+                file_types=("HTML Files (*.html)",))
+            if not result:
+                return {"ok": False, "error": "בוטל"}
+            path = result if isinstance(result, str) else result[0]
+            if not path.lower().endswith(".html"):
+                path += ".html"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return {"ok": True, "path": path}
         except Exception as e:
-            logging.exception("run_chazonishnik failed")
+            logging.exception("save_chazonishnik_report failed")
             return {"ok": False, "error": str(e)}
 
     # ── בדיקת עדכונים מ-GitHub ──────────────────────────────────────
