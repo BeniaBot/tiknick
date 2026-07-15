@@ -1767,6 +1767,7 @@ async function openSyncMgr() {
       </div>
     </label>`;
   const sec3 = `
+    <div class="section-hdr">🌐 התנגשויות בסנכרון מהאינטרנט</div>
     <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
       כשסריקה מהאינטרנט מוצאת ערך שונה בשדה שכבר קיים, מה לעשות?
     </p>
@@ -1774,7 +1775,7 @@ async function openSyncMgr() {
     ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
     ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}
 
-    <div class="section-hdr" style="margin-top:22px">התנגשויות בייבוא קובץ</div>
+    <div class="section-hdr" style="margin-top:22px">📥 התנגשויות בייבוא קובץ</div>
     <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
       כשייבוא קובץ מכניס ערך שונה לשדה קיים, איך להכריע?
     </p>
@@ -1816,7 +1817,7 @@ async function openSyncMgr() {
     <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
       כל מידע משויך למקור ("אב"). בכל שדה — הערך מהמקור בעל האמינות הגבוהה מוצג.
       שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד.
-      "אבסולוטי" (רק ל"אני") = תמיד מנצח. את התנהגות הסריקה מנהלים בלשונית "התנגשויות אינטרנט".
+      "אבסולוטי" (רק ל"אני") = תמיד מנצח. את התנהגות הסריקה מנהלים בלשונית "התנגשויות".
     </p>
     <div class="sync-list">${srcRows}</div>`;
 
@@ -1824,7 +1825,7 @@ async function openSyncMgr() {
     <div class="tab-bar" style="display:flex;gap:6px;margin-bottom:16px;border-bottom:1px solid var(--border-soft);flex-wrap:wrap">
       <button class="tab-btn active" data-tab="s1" onclick="switchSyncTab('s1')">📄 עמודות בקובץ</button>
       <button class="tab-btn" data-tab="s2" onclick="switchSyncTab('s2')">🏛️ פורומים</button>
-      <button class="tab-btn" data-tab="s3" onclick="switchSyncTab('s3')">⚠️ התנגשויות אינטרנט</button>
+      <button class="tab-btn" data-tab="s3" onclick="switchSyncTab('s3')">⚠️ התנגשויות</button>
       <button class="tab-btn" data-tab="s4" onclick="switchSyncTab('s4')">🎖️ מקורות</button>
     </div>
     <div id="tab-s1" class="sync-tab">${sec1}</div>
