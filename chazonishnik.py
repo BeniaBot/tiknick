@@ -8,14 +8,23 @@ Chazonishnik — ניתוח פעילות משתמש בפורום NodeBB.
 import json
 import re
 import time
+import random
+import logging
 import urllib.request
 import urllib.parse
 import urllib.error
 import concurrent.futures
 from datetime import datetime
 
+# ניסיון להשתמש ב-SmartSession עם אנטי-זיהוי; אם המודול לא קיים — fallback ל-urllib רגיל
+try:
+    from anti_detect import SmartSession
+    _HAS_SMART = True
+except ImportError:
+    _HAS_SMART = False
+
 DEFAULT_BASE = "https://mitmachim.top"
-CONCURRENCY = 12
+CONCURRENCY = 4    # הורד מ-12 — 12 בקשות מקבילות זה דגל אדום לאנטי-בוט
 MAX_PAGES = 1500
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -25,6 +34,8 @@ def _get_json(url, cookie=None, timeout=15):
     req = urllib.request.Request(url)
     req.add_header("User-Agent", _UA)
     req.add_header("Accept", "application/json")
+    req.add_header("Accept-Language", "he,en-US;q=0.9,en;q=0.8")
+    req.add_header("Referer", url.split('/api')[0] if '/api' in url else url)
     if cookie:
         val = cookie if cookie.startswith("express.sid=") else f"express.sid={cookie}"
         req.add_header("Cookie", val)
@@ -80,7 +91,8 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None):
         url = f"{base}/api/user/{urllib.parse.quote(slug)}/posts?page={page}"
         try:
             data = _get_json(url, cookie=cookie)
-        except Exception:
+        except Exception as e:
+            logging.warning("חזונישניק: עמוד %d נכשל: %s", page, e)
             break
         posts = data.get("posts", []) if isinstance(data, dict) else []
         if not posts:
@@ -89,6 +101,8 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None):
         if progress:
             progress({"phase": "scan", "page": page, "count": len(all_posts)})
         page += 1
+        # השהיה אנושית בין עמודים כדי לא להיחסם כבוט
+        time.sleep(random.uniform(0.5, 1.5))
     uniq = {p.get("pid"): p for p in all_posts if p.get("pid")}
     return list(uniq.values())
 

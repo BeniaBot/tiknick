@@ -1,13 +1,13 @@
 # Tik-Nick — מפת פרויקט (project_map.md)
 
 > מסמך ארכיטקטורה תמציתי למודלי שפה ולמפתחים. בלי קוד מלא — רק מבנה, תפקידים וזרימת מידע.
-> נבנה מקריאה ישירה של קוד המקור ב-Project Knowledge (לא מהסיכום). גרסה בקוד: `APP_VERSION = "0.2.5"`.
+> נבנה מקריאה ישירה של קוד המקור. גרסה בקוד: `APP_VERSION = "0.8.0"`.
 > ריפו: `github.com/BeniaBot/tiknick`
 
 ---
 
 ## מהות בשורה אחת
-אפליקציית דסקטופ ל-Windows לניהול "ניקים" (שמות משתמש) בפורומים חרדיים. **PyWebView**: backend ב-Python + ממשק Web, נתונים ב-SQLite, נארז ל-EXE יחיד ב-PyInstaller.
+אפליקציית דסקטופ ל-Windows לניהול ומעקב אחר "ניקים" (שמות משתמש) בפורומים חרדיים. **PyWebView**: backend ב-Python + ממשק Web, נתונים ב-SQLite, נארז ל-EXE יחיד ב-PyInstaller.
 
 ## סכמת שכבות
 ```
@@ -30,35 +30,40 @@
                 │
    DB_PATH  →  ליד ה-EXE / %APPDATA%\TikNick\tiknick.db  (WAL, FK on)
 
-  שירות חיצוני יחיד בפועל:  api.github.com/repos/.../releases/latest  (בדיקת עדכונים)
+  שירותים חיצוניים:
+  - api.github.com/repos/.../releases/latest  (בדיקת עדכונים)
+  - פורומי NodeBB: /api/users, /api/user/{slug}, /api/user/{slug}/posts  (סריקה + חילוץ)
 ```
 
 ## תפקיד כל קובץ (לפי הקוד בפועל)
 
 ### ליבה (runtime)
 | קובץ | תפקיד | מתקשר עם |
-|------|--------|-----------|
-| `main.py` | נקודת כניסה. מגדיר DPI awareness (Windows), פותר נתיבי משאבים (`resource_path`/`data_dir`) לתמיכה גם בהרצה רגילה וגם ב-EXE, מבצע מיגרציה של DB ישן, יוצר חלון PyWebView בגודל 1400×820 וממרכז אותו (work-area + hwnd אמיתי, fallback ל-`window.move`). מגדיר `class API` שכל שיטותיה נחשפות ל-JS. כולל את `check_for_updates` (מושך releases/latest מ-GitHub, משווה גרסאות, מאתר נכס EXE). | ← `web/app.js` (דרך `window.pywebview.api`) · → `database.py` (כ-`db`) · → GitHub API |
-| `database.py` | כל שכבת ה-SQLite. מגדיר `KNOWN_FORUMS` (15 פורומים מובנים) ו-`ALL_NICK_FIELDS` (רשימת השדות + ברירת מחדל לסנכרון). יוצר 7 טבלאות, מריץ `_migrate()` להוספת עמודות חסרות ל-DB ישן, ומספק CRUD לניקים/פורומים/אנשי-קשר/התנגשויות/זהויות, הגדרות תצוגה, הגדרות סנכרון, וייצוא/ייבוא עם מיפוי פורומים וזיהוי התנגשויות. | ← `main.py` · → `tiknick.db` |
+|------|--------|-----------||
+| `main.py` | נקודת כניסה. DPI awareness, נתיבי משאבים, מיגרציית DB, חלון PyWebView 1400×820. `class API` חושף שיטות ל-JS. כולל בדיקת עדכונים, סריקה, Chazonishnik, Stinknik, Data Extractor. | ← `web/app.js` · → `database.py` · → GitHub API |
+| `database.py` | כל שכבת ה-SQLite. 15 פורומים מובנים, 7 טבלאות, CRUD, מיזוג/ייבוא, הגדרות. מנגנון `field_values` לייחוס מקורות ופתרון התנגשויות. | ← `main.py` · → `tiknick.db` |
+| `scraper.py` | סריקת רשימות משתמשים מפורומי NodeBB דרך ה-API הרשמי. מיפוי שדות, מיזוג למאגר, תמיכה בעוגיות. משתמש ב-SmartSession מ-`anti_detect.py` עם fallback ל-urllib. | ← `main.py` · → NodeBB API · → `anti_detect.py` |
+| `anti_detect.py` | מודול אנטי-זיהוי. SmartSession עוטף urllib עם: רוטציית 15 User-Agents, headers מלאים של דפדפן, השהיות אנושיות (0.8-2.5s), exponential backoff עם jitter, rate limiter (20/דקה), ניהול עוגיות, זיהוי חסימת Cloudflare. | ← `scraper.py`, `chazonishnik.py`, `stinknik.py`, `data_extractor.py` |
+| `data_extractor.py` | חילוץ מידע אישי מפוסטים: טלפונים ישראליים, מיילים, שמות, כתובות, טלגרם, WhatsApp. סורק את כל הפוסטים של משתמש, מחלץ regex, מייצר דוח HTML אינטראקטיבי עם ציוני ביטחון. | ← `main.py` · → NodeBB API · → `anti_detect.py` |
+| `chazonishnik.py` | ניתוח פעילות משתמש בפורום: פוסטים, לייקים, שעות/ימי פעילות, מעריצים. דוח HTML אינטראקטיבי. 4 חוטים מקבילים. | ← `main.py` · → NodeBB API |
+| `stinknik.py` | איתור פוסטים שקיבלו דיסלייקים (כולל מוסתרים). דוח HTML. | ← `main.py` · → NodeBB API |
 
 ### ממשק (`web/`)
 | קובץ | תפקיד |
 |------|--------|
-| `web/index.html` | מבנה ה-DOM: סרגל צד, טבלה/כרטיסים, מודאלים, שורת סטטוס, footer עם אינדיקטור עדכון. |
-| `web/style.css` | עיצוב מבוסס CSS variables: ערכות כהה/בהיר, 8 צבעי מבטא, צפיפות, מודאלים, טבלה, דיאלוג אודות בסגנון "olive", אינדיקטור עדכון. |
-| `web/app.js` | **כל** לוגיקת הצד-לקוח: state גלובלי (`S`), הגדרת עמודות (`COLS`), אתחול עם `waitForApi`, גשר `api()` גנרי, רינדור טבלה/כרטיסים, מיון, חיפוש חי (debounce 200ms), דיאלוג ניק (כולל אנשי-קשר/זהויות/התנגשויות), מנהל פורומים, הגדרות סנכרון, ייצוא/ייבוא + דיאלוג מיפוי פורומים, בדיקת עדכונים, ודיאלוג אודות. הכותרת בקובץ מסומנת עדיין `v0.1`. |
+| `web/index.html` | מבנה ה-DOM: סרגל צד (ניקים, קובץ, הגדרות, כלים, מתקדם), טבלה/כרטיסים, באנרים צפים (סריקה, Chazonishnik, Stinknik, Data Extractor), שורת סטטוס. |
+| `web/style.css` | עיצוב CSS variables: ערכות כהה/בהיר, 8 צבעי מבטא, צפיפות, מודאלים. |
+| `web/app.js` | כל לוגיקת צד-הלקוח: state, עמודות, גשר API, רינדור, מיון, חיפוש, דיאלוגים, Chazonishnik, Stinknik, Data Extractor, הגדרות תצוגה. |
 
 ### בנייה, הרצה והפצה
 | קובץ | תפקיד |
 |------|--------|
-| `TikNick.spec` | קונפיגורציית PyInstaller: single-file, windowed, אורז `web/` ו-`icon.ico`, `hiddenimports` לבקאנד של pywebview ב-Windows, UPX, אייקון + `version_info.txt`. |
-| `version_info.txt` | מטא-דאטה של גרסת ה-EXE (Windows). |
+| `TikNick.spec` | PyInstaller: single-file, windowed, אורז web/ ו-icon.ico. |
+| `version_info.txt` | מטא-דאטה של גרסת EXE (Windows). |
 | `build.bat` | סקריפט בנייה (PyInstaller → `dist\TikNick.exe`). |
-| `הפעל.bat` | הרצה מהמקור: מתקין pywebview שקט ואז `python main.py`. |
-| `upload_to_github.bat` | סקריפט העלאה חד-פעמי (מגדיר זהות git, init, add, commit, push). **שים לב:** ה-remote בקובץ מצביע ל-`b0554003794-alt/tiknick`, בעוד שאר הפרויקט משתמש ב-`BeniaBot/tiknick` — פער שכדאי ליישב. |
-| `README.md` | תיאור למשתמש. מציג עדיין תג גרסה `0.2` וכולל בקטע "מה יבוא" את Chazonishnik/Stinknik וסריקה אוטומטית. |
-| `.gitignore` | חוסם `tiknick.db*`, `*.log`, `__pycache__`, `build/`, `dist/`, קבצי OS. |
-| `icon.ico` | אייקון התג (ענבר). |
+| `הפעל.bat` | הרצה מהמקור: מתקין pywebview ואז `python main.py`. |
+| `upload_to_github.bat` | סקריפט העלאה. Remote: `BeniaBot/tiknick`. |
+| `.gitignore` | חוסם `tiknick.db*`, `*.log`, `__pycache__`, `build/`, `dist/`. |
 
 ## מודל הנתונים (7 טבלאות ב-SQLite)
 ```
@@ -83,15 +88,8 @@ sync_settings(field_key PRIMARY, synced)  ← איזה שדה מיוצא
 ```
 
 ## נקודות אינטגרציה מרכזיות
-- **גשר API**: כל method ב-`class API` זמין אוטומטית כ-`window.pywebview.api.<name>()`. הוספת יכולת = הוספת method שם + קריאה ב-app.js.
-- **מיון ברירת מחדל**: `has_info DESC, trust_level DESC, updated_at DESC` — ניקים עם מידע "מעניין" (שם אמיתי/טלפון/מייל/הערות/extra_info) עולים למעלה. הלוגיקה הזו נמצאת ב-SQL של `get_all_nicks`.
-- **ייבוא**: זרימת 2 שלבים — `load_import_file` (בדיקת פורומים לא-מוכרים) → `confirm_import(mapping)`. התנגשות ערך שונה בשדה קיים → נרשמת ב-`nick_conflicts`; שדה ריק → מתמלא שקט. ניק מיובא מוגבל ל-`trust_level ≤ 4`.
-- **בדיקת עדכונים**: תלויה בהתאמת `APP_VERSION`↔tag ב-GitHub (parse ל-3 חלקים, מתעלם מ-`v`).
-
----
-
-## אזהרות דיוק (פערים בין הקוד למסמכים)
-1. **`scraper.py` — לא נמצא ב-Project Knowledge.** גם אין תיקייה בשם "אינטרנט". הסיכום מציין ש"קיים", אך בקוד שנסרק אין קובץ סורק ואין קריאה אליו מ-`main.py`. הסריקה, Chazonishnik ו-Stinknik הם **תוכנית בלבד** בשלב זה. אם הקובץ קיים בדיסק אך לא הועלה ל-Knowledge — הוסף אותו ואבנה עבורו ערך.
-2. **חוסר עקביות בגרסה**: `APP_VERSION=0.2.5` בקוד, אך `app.js` מסומן `v0.1` ו-README מציג `0.2`. שווה ליישר (כלל הזהב חל רק על tag↔APP_VERSION, אבל הסימונים האחרים מבלבלים).
-3. **פער remote**: `upload_to_github.bat` דוחף ל-`b0554003794-alt/tiknick`, שאר הפרויקט ל-`BeniaBot/tiknick`.
-4. שדה **`trust_level`** (רמת אמינות, ברירת מחדל 5) לא הוזכר בסיכום אך הוא מרכזי למיון ולייבוא.
+- **גשר API**: כל method ב-`class API` זמין אוטומטית כ-`window.pywebview.api.<name>()`.
+- **מיון ברירת מחדל**: `has_info DESC, trust_level DESC, updated_at DESC` — ניקים עם מידע "מעניין" עולים למעלה.
+- **ייבוא**: 2 שלבים — `load_import_file` → `confirm_import(mapping)`. התנגשות → `nick_conflicts`. שדה ריק → מתמלא שקט. ניק מיובא מוגבל ל-`trust_level ≤ 4`.
+- **אנטי-זיהוי**: כל בקשות הרשת עוברות דרך `anti_detect.SmartSession` עם fallback ל-urllib רגיל.
+- **בדיקת עדכונים**: תלויה בהתאמת `APP_VERSION`↔tag ב-GitHub.

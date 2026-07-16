@@ -3179,6 +3179,104 @@ async function saveStinknikReport(html) {
   else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
 }
 
+// ══ DATA EXTRACTOR — חילוץ מידע מפוסטים ═══════════════════════════════
+let _extractPoll = null;
+
+async function openDataExtractor() {
+  const syncSettings = await api('get_setting', 'scrape_cookie', '');
+  const lastCookie = syncSettings || '';
+  openModal('🔍 חילוץ מידע מפוסטים', `
+    <div style="direction:rtl;display:flex;flex-direction:column;gap:16px">
+      <p style="color:var(--text-dim);margin:0;font-size:13px">
+        סורק את כל הפוסטים של משתמש ומחלץ מידע אישי: טלפונים, מיילים, שמות, כתובות, טלגרם ועוד.
+      </p>
+      <div>
+        <label style="font-weight:700;font-size:13px">שם משתמש</label>
+        <input id="ext-username" type="text" class="input" placeholder="שם המשתמש בפורום" dir="rtl"
+               style="width:100%;margin-top:4px">
+      </div>
+      <div>
+        <label style="font-weight:700;font-size:13px">כתובת פורום</label>
+        <input id="ext-base-url" type="text" class="input" value="https://mitmachim.top" dir="ltr"
+               style="width:100%;margin-top:4px">
+      </div>
+      <div>
+        <label style="font-weight:700;font-size:13px">עוגיית express.sid <span style="opacity:.5">(אופציונלי)</span></label>
+        <input id="ext-cookie" type="text" class="input" value="${esc(lastCookie)}" dir="ltr"
+               placeholder="s%3A..." style="width:100%;margin-top:4px">
+      </div>
+      <div id="ext-progress" style="display:none;text-align:center;padding:12px">
+        <div style="font-weight:700;font-size:14px" id="ext-progress-text">סורק...</div>
+      </div>
+    </div>`, [
+    { label: '🔍 התחל חילוץ', cls: 'btn-primary', action: startDataExtractor },
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+  ]);
+  setTimeout(() => document.getElementById('ext-username')?.focus(), 100);
+}
+
+async function startDataExtractor() {
+  const username = document.getElementById('ext-username')?.value?.trim();
+  const baseUrl = document.getElementById('ext-base-url')?.value?.trim();
+  const cookie = document.getElementById('ext-cookie')?.value?.trim();
+  if (!username) { toast('הזן שם משתמש', 'warning'); return; }
+
+  const r = await api('run_data_extractor', username, cookie || '', baseUrl || 'https://mitmachim.top');
+  if (!r?.ok) { toast(r?.error || 'שגיאה', 'error'); return; }
+
+  // שמור עוגייה אם הוזנה
+  if (cookie) await api('set_setting', 'scrape_cookie', cookie);
+
+  closeModal();
+  const banner = document.getElementById('extract-banner');
+  if (banner) banner.style.display = '';
+
+  _extractPoll = setInterval(async () => {
+    const p = await api('get_data_extractor_progress');
+    if (!p) return;
+    const label = p.phase === 'scan'
+      ? `סורק פוסטים… ${p.count}`
+      : `מחלץ מידע… ${p.count}/${p.total}`;
+    const bTxt = document.getElementById('extract-banner-text');
+    if (bTxt) bTxt.textContent = p.running ? label : 'מסיים…';
+    if (p.done || !p.running) {
+      clearInterval(_extractPoll); _extractPoll = null;
+      if (banner) banner.style.display = 'none';
+      if (p.cancelled) { toast('החילוץ בוטל', 'info'); return; }
+      if (p.error) { toast('שגיאה: ' + p.error, 'error'); return; }
+      if (p.html) { showExtractorReport(p.html, p.count); toast('החילוץ הושלם ✓', 'success'); }
+    }
+  }, 800);
+}
+
+async function cancelDataExtractor() {
+  await api('cancel_data_extractor');
+  if (_extractPoll) { clearInterval(_extractPoll); _extractPoll = null; }
+  const banner = document.getElementById('extract-banner');
+  if (banner) banner.style.display = 'none';
+  toast('מבטל…', 'info');
+}
+
+function showExtractorReport(html, postCount) {
+  openModal(`🔍 דוח חילוץ מידע${postCount ? ` · ${postCount} פוסטים נסרקו` : ''}`, `
+    <iframe id="extract-frame" style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
+  `, [
+    { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveExtractorReport(html) },
+    { label: '🔄 חילוץ נוסף', cls: 'btn-ghost', action: openDataExtractor },
+    { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg');
+  setTimeout(() => {
+    const frame = document.getElementById('extract-frame');
+    if (frame) frame.srcdoc = html;
+  }, 100);
+}
+
+async function saveExtractorReport(html) {
+  const r = await api('save_extractor_report', html);
+  if (r?.ok) toast('הדוח נשמר ✓', 'success');
+  else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
+}
+
 // ══ CARD RENDERING ════════════════════════════════════════════════════
 function renderCards() {
   const grid  = document.getElementById('cards-grid');

@@ -50,6 +50,12 @@ _stink_state = {"running": False, "done": False, "error": None,
                 "cancelled": False}
 _stink_cancel = threading.Event()
 
+# מצב חילוץ מידע (Data Extractor)
+_extract_state = {"running": False, "done": False, "error": None,
+                  "phase": "", "count": 0, "total": 0, "html": None,
+                  "findings": None, "cancelled": False}
+_extract_cancel = threading.Event()
+
 class _ChzCancelled(Exception):
     """נזרק כדי לבטל ניתוח Chazonishnik שרץ."""
     pass
@@ -204,7 +210,9 @@ class API:
             "running": True, "done": False, "error": None,
             "page": 0, "total_pages": 0,
             "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
-            "forum": forum_name, "cancelled": False,
+            "forum": forum_name, "cancelled": False, "auto_resolved": 0,
+            "all_mode": False, "selected_mode": False,
+            "forum_index": 0, "forum_total": 0, "skipped": [],
         })
 
         def _progress(p):
@@ -571,6 +579,87 @@ class API:
             return {"ok": True, "path": path}
         except Exception as e:
             logging.exception("save_chazonishnik_report failed")
+            return {"ok": False, "error": str(e)}
+
+    # ── Data Extractor — חילוץ מידע מפוסטים ─────────────────────────
+    def run_data_extractor(self, username, cookie="", base_url="https://mitmachim.top"):
+        """מתחיל חילוץ מידע מפוסטים ברקע. התקדמות דרך get_data_extractor_progress."""
+        if _extract_state["running"]:
+            return {"ok": False, "error": "חילוץ כבר רץ"}
+        if not username or not username.strip():
+            return {"ok": False, "error": "הזן שם משתמש"}
+
+        _extract_cancel.clear()
+        _extract_state.update({"running": True, "done": False, "error": None,
+                               "phase": "scan", "count": 0, "total": 0,
+                               "html": None, "findings": None, "cancelled": False})
+
+        def _progress(p):
+            _extract_state["phase"] = p.get("phase", "")
+            _extract_state["count"] = p.get("count", 0)
+            _extract_state["total"] = p.get("total", 0)
+
+        def _run():
+            try:
+                import data_extractor
+                result = data_extractor.analyze_user_posts(
+                    base_url or "https://mitmachim.top",
+                    username.strip(), cookie or None,
+                    progress=_progress, cancel_flag=_extract_cancel)
+                if result.get("cancelled"):
+                    _extract_state["cancelled"] = True
+                elif result.get("ok"):
+                    _extract_state["html"] = result.get("html")
+                    _extract_state["findings"] = result.get("findings")
+                    _extract_state["count"] = result.get("post_count", 0)
+                else:
+                    _extract_state["error"] = result.get("error")
+            except Exception as e:
+                logging.exception("data_extractor failed")
+                _extract_state["error"] = str(e)
+            finally:
+                _extract_state["running"] = False
+                _extract_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True}
+
+    def get_data_extractor_progress(self):
+        return dict(_extract_state)
+
+    def cancel_data_extractor(self):
+        _extract_cancel.set()
+        return {"ok": True}
+
+    def save_extractor_report(self, html=None):
+        """שמירת דוח חילוץ המידע כקובץ HTML."""
+        content = html or _extract_state.get("html")
+        if not content:
+            return {"ok": False, "error": "אין דוח לשמירה"}
+        try:
+            import webview
+            result = webview.windows[0].create_file_dialog(
+                webview.SAVE_DIALOG, save_filename="data_extractor_report.html",
+                file_types=("HTML Files (*.html)",))
+            if not result:
+                return {"ok": False, "error": "בוטל"}
+            path = result if isinstance(result, str) else result[0]
+            if not path.lower().endswith(".html"):
+                path += ".html"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(content)
+            return {"ok": True, "path": path}
+        except Exception as e:
+            logging.exception("save_extractor_report failed")
+            return {"ok": False, "error": str(e)}
+
+    def apply_extracted_data(self, nick_id, field, value):
+        """מחיל ממצא מחילוץ מידע על שדה של ניק במאגר."""
+        try:
+            nick_id = int(nick_id)
+            db.update_nick(nick_id, {field: value})
+            return {"ok": True}
+        except Exception as e:
             return {"ok": False, "error": str(e)}
 
     # ── בדיקת עדכונים מ-GitHub ──────────────────────────────────────

@@ -1,28 +1,37 @@
 # -*- coding: utf-8 -*-
 """
-scraper.py — סורק פורומי NodeBB עבור Tik-Nick.
+scraper.py - סורק פורומי NodeBB עבור Tik-Nick.
 
 מושך את רשימת המשתמשים המלאה של פורום NodeBB דרך ה-Read API הרשמי
 (/api/users, עם עימוד), ממפה כל משתמש לשדות של Tik-Nick, וממזג למאגר
 לפי מדיניות ההתנגשויות (מילוי שקט לשדות ריקים, רישום התנגשות לשדה קיים שונה).
 
 עקרונות:
-  • "מנומס" — השהיה בין בקשות, כיבוד Retry-After, User-Agent מזוהה.
-  • ניתן לביטול באמצע (cancel_flag).
-  • דיווח התקדמות דרך callback, כדי שהממשק יראה מד התקדמות חי.
-  • שולף רק מידע ציבורי שה-API מחזיר (טלפון/מייל בד"כ מוסתרים ב-NodeBB).
+  - "מנומס" - השהיה בין בקשות, כיבוד Retry-After, User-Agent מזוהה.
+  - ניתן לביטול באמצע (cancel_flag).
+  - דיווח התקדמות דרך callback, כדי שהממשק יראה מד התקדמות חי.
+  - שולף רק מידע ציבורי שה-API מחזיר (טלפון/מייל בד"כ מוסתרים ב-NodeBB).
 """
 
 import json
 import time
+import random
 import urllib.request
 import urllib.parse
 import urllib.error
 
+# ניסיון להשתמש ב-SmartSession עם אנטי-זיהוי; אם המודול לא קיים - fallback ל-urllib רגיל
+try:
+    from anti_detect import SmartSession, AntiDetectError, CloudflareBlockError
+    _HAS_SMART = True
+except ImportError:
+    _HAS_SMART = False
+
 USER_AGENT = "Tik-Nick/1.0 (+https://github.com/BeniaBot/tiknick)"
-PAGE_DELAY_SEC = 0.6          # השהיה בין עמודים — לא להעמיס על השרת
+PAGE_DELAY_MIN = 0.8          # השהיה מינימלית בין עמודים
+PAGE_DELAY_MAX = 2.5          # השהיה מקסימלית בין עמודים
 REQUEST_TIMEOUT = 20
-MAX_RETRIES = 3
+MAX_RETRIES = 5
 
 
 class ScrapeError(Exception):
@@ -39,10 +48,47 @@ def _api_base(forum_url):
     return url
 
 
+# סשן חכם לפורום - נוצר בפעם הראשונה שמשתמשים ב-scrape_forum
+_active_session = None
+
+def _get_session(base_url):
+    """מחזיר SmartSession קיים או יוצר חדש (עם fallback ל-None אם אין מודול)."""
+    global _active_session
+    if _HAS_SMART:
+        if _active_session is None or not hasattr(_active_session, 'base_url') or _active_session.base_url != base_url:
+            _active_session = SmartSession(base_url, max_requests_per_min=20)
+        return _active_session
+    return None
+
+def _human_delay():
+    """השהיה אנושית (עם פיצוצים אקראיים כמו גלישה אמיתית)."""
+    if random.random() < 0.2:
+        # פיצוץ מהיר - כמו לחיצה אנושית מהירה
+        time.sleep(random.uniform(0.3, 0.7))
+    else:
+        time.sleep(random.uniform(PAGE_DELAY_MIN, PAGE_DELAY_MAX))
+
+
 def _fetch_json(url, cookie=None):
     """בקשת GET אחת שמחזירה JSON, עם ניסיונות חוזרים וכיבוד Retry-After.
-    cookie — מחרוזת עוגייה אופציונלית (למשל 'express.sid=...') לפורומים
+    משתמש ב-SmartSession אם זמין, אחרת נופל ל-urllib רגיל.
+    cookie - מחרוזת עוגייה אופציונלית (למשל 'express.sid=...') לפורומים
     שדורשים התחברות כדי לצפות ברשימת המשתמשים."""
+    # ניסיון להשתמש ב-SmartSession (אנטי-זיהוי) אם זמין
+    if _HAS_SMART:
+        try:
+            session = _get_session(url.split('/api')[0] if '/api' in url else url.rsplit('/', 1)[0])
+            if session:
+                path = url.replace(session.base_url, '') if url.startswith(session.base_url) else url
+                return session.get_json(path, cookie=cookie, timeout=REQUEST_TIMEOUT)
+        except CloudflareBlockError:
+            raise ScrapeError("הפורום חסום על ידי Cloudflare - נסה שוב מאוחר יותר")
+        except AntiDetectError as e:
+            raise ScrapeError(str(e))
+        except Exception:
+            pass  # נופל ל-urllib רגיל
+
+    # fallback: urllib רגיל (ללא אנטי-זיהוי)
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -52,32 +98,41 @@ def _fetch_json(url, cookie=None):
         try:
             with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
+                # זיהוי דף חסימת Cloudflare
+                if '<title>Just a moment</title>' in raw or 'cf-challenge' in raw:
+                    raise ScrapeError("הפורום חסום על ידי Cloudflare - נסה שוב מאוחר יותר")
                 return json.loads(raw)
         except urllib.error.HTTPError as e:
             if e.code == 429:  # rate limited
                 retry_after = e.headers.get("Retry-After")
                 wait = int(retry_after) if (retry_after and retry_after.isdigit()) else attempt * 5
-                time.sleep(min(wait, 30))
-                last_err = ScrapeError("הפורום מגביל קצב בקשות (429) — האטתי")
+                jitter = random.uniform(0, 2)
+                time.sleep(min(wait + jitter, 60))
+                last_err = ScrapeError("הפורום מגביל קצב בקשות (429) - האטתי")
+                continue
+            if e.code == 503:  # לעיתים Cloudflare challenge
+                jitter = random.uniform(0, 3)
+                time.sleep(min(attempt * 3 + jitter, 30))
+                last_err = ScrapeError("השרת החזיר 503 - ייתכן חסימת Cloudflare")
                 continue
             if e.code in (403, 401):
                 raise ScrapeError("אין הרשאה לצפות במשתמשים בפורום זה (ייתכן שנדרשת התחברות)")
             if e.code == 404:
-                raise ScrapeError("נתיב ה-API לא נמצא — ייתכן שאין תמיכת API בפורום זה")
+                raise ScrapeError("נתיב ה-API לא נמצא - ייתכן שאין תמיכת API בפורום זה")
             last_err = ScrapeError(f"שגיאת שרת {e.code}")
-            time.sleep(attempt * 2)
+            time.sleep(attempt * 2 + random.uniform(0, 1))
         except urllib.error.URLError as e:
             last_err = ScrapeError(f"בעיית רשת: {e.reason}")
-            time.sleep(attempt * 2)
+            time.sleep(attempt * 2 + random.uniform(0, 1))
         except json.JSONDecodeError:
-            raise ScrapeError("התקבלה תשובה שאינה JSON — ככל הנראה אין API בכתובת זו")
+            raise ScrapeError("התקבלה תשובה שאינה JSON - ככל הנראה אין API בכתובת זו")
     raise last_err or ScrapeError("הבקשה נכשלה")
 
 
 def scrape_single_user(forum_url, username, cookie=None):
     """
     שולף משתמש בודד מ-NodeBB לפי שם משתמש. מנסה קודם את ה-endpoint הנפוץ,
-    ורק אם נכשל — חלופה. מחזיר dict ממופה או None.
+    ורק אם נכשל - חלופה. מחזיר dict ממופה או None.
     """
     import urllib.parse
     try:
@@ -110,7 +165,7 @@ def check_forum(forum_url, cookie=None):
         # זיהוי מקרה של דרישת התחברות
         if any(x in msg for x in ("401", "403", "not-authori", "login", "unauthor")):
             return {"ok": False, "user_count": None, "title": None,
-                    "error": "הפורום דורש התחברות לצפייה במשתמשים — הזן עוגיית express.sid (ראה '🍪 איך משיגים?')"}
+                    "error": "הפורום דורש התחברות לצפייה במשתמשים - הזן עוגיית express.sid (ראה 'איך משיגים?')"}
         return {"ok": False, "user_count": None, "title": None, "error": msg}
 
     # NodeBB מחזיר בד"כ מבנה עם users[] ולעיתים pagination/userCount
@@ -118,7 +173,7 @@ def check_forum(forum_url, cookie=None):
         # אולי זו דרישת התחברות שהוחזרה כ-JSON/HTML
         if isinstance(data, dict) and any(k in data for k in ("error", "status")):
             return {"ok": False, "user_count": None, "title": None,
-                    "error": "הפורום דרש התחברות או שאין הרשאה — נסה עם עוגיית express.sid"}
+                    "error": "הפורום דרש התחברות או שאין הרשאה - נסה עם עוגיית express.sid"}
         return {"ok": False, "user_count": None, "title": None,
                 "error": "לא נראה שזה פורום NodeBB (אין רשימת משתמשים ב-API). ייתכן שהפורום בנוי על מערכת אחרת ולא ניתן לסריקה."}
 
@@ -165,7 +220,7 @@ def _map_user(u):
     if pic:
         avatar = pic
 
-    # last online → תאריך
+    # last online -> תאריך
     last_ts = u.get("lastonline") or u.get("lastonlineISO")
     last_online = ""
     if isinstance(last_ts, (int, float)):
@@ -176,7 +231,7 @@ def _map_user(u):
     elif isinstance(last_ts, str):
         last_online = last_ts[:10]
 
-    # פרטים נוספים חופשיים — נאספים לשדה extra_info
+    # פרטים נוספים חופשיים - נאספים לשדה extra_info
     extra_bits = []
     loc = g("location")
     if loc:      extra_bits.append(f"מיקום: {loc}")
@@ -190,7 +245,7 @@ def _map_user(u):
     if pv:       extra_bits.append(f"צפיות בפרופיל: {pv}")
     if last_online:
         extra_bits.append(f"נראה לאחרונה: {last_online}")
-    extra_info = " · ".join(extra_bits)
+    extra_info = " | ".join(extra_bits)
 
     return {
         "full_name":    g("fullname"),
@@ -212,12 +267,12 @@ def scrape_forum(forum_name, forum_url, db, cookie=None,
     """
     סורק את כל המשתמשים בפורום וממזג למאגר.
 
-    forum_name  — שם הפורום כפי שיישמר בשדה forum של הניקים
-    forum_url   — כתובת הבסיס של הפורום
-    db          — מודול database (מוזרק, כדי לא ליצור תלות מעגלית)
-    progress_cb — פונקציה(dict) לעדכון התקדמות: {page, total_pages, added, updated, conflicts, done}
-    cancel_flag — אובייקט עם .is_set() (למשל threading.Event) לביטול
-    max_pages   — הגבלת עמודים (לבדיקות); None = הכל
+    forum_name  - שם הפורום כפי שיישמר בשדה forum של הניקים
+    forum_url   - כתובת הבסיס של הפורום
+    db          - מודול database (מוזרק, כדי לא ליצור תלות מעגלית)
+    progress_cb - פונקציה(dict) לעדכון התקדמות: {page, total_pages, added, updated, conflicts, done}
+    cancel_flag - אובייקט עם .is_set() (למשל threading.Event) לביטול
+    max_pages   - הגבלת עמודים (לבדיקות); None = הכל
 
     מחזיר סיכום: {"added", "updated", "unchanged", "conflicts", "pages", "cancelled"}
     """
@@ -225,10 +280,10 @@ def scrape_forum(forum_name, forum_url, db, cookie=None,
     stats = {"added": 0, "updated": 0, "unchanged": 0,
              "conflicts": 0, "pages": 0, "cancelled": False}
 
-    # עמוד ראשון — כדי לדעת כמה עמודים יש
+    # עמוד ראשון - כדי לדעת כמה עמודים יש
     first = _fetch_json(base + "/api/users", cookie=cookie)
     if not isinstance(first, dict) or "users" not in first:
-        raise ScrapeError("מבנה תשובה לא צפוי — ודא שזה פורום NodeBB")
+        raise ScrapeError("מבנה תשובה לא צפוי - ודא שזה פורום NodeBB")
 
     pagination = first.get("pagination") or {}
     total_pages = pagination.get("pageCount") or 1
@@ -259,11 +314,11 @@ def scrape_forum(forum_name, forum_url, db, cookie=None,
         if skip_flag is not None and skip_flag.is_set():
             stats["skipped"] = True
             break
-        time.sleep(PAGE_DELAY_SEC)
+        _human_delay()
         try:
             data = _fetch_json(base + f"/api/users?page={page}", cookie=cookie)
-        except ScrapeError:
-            # עמוד בודד נכשל — ממשיכים הלאה במקום לקרוס
+        except (ScrapeError, json.JSONDecodeError):
+            # עמוד בודד נכשל (שגיאת רשת או תשובה לא-JSON כמו דף Cloudflare) - ממשיכים הלאה
             continue
         handle_users(data.get("users", []) if isinstance(data, dict) else [])
         stats["pages"] = page

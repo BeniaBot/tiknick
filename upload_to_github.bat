@@ -15,9 +15,9 @@ if exist .git rmdir /s /q .git
 rem --- init and add ONLY the right files (.gitignore protects the rest) ---
 git init
 git add .
-git commit -m "Tik-Nick v0.1 initial release"
+git commit -m "Tik-Nick update"
 git branch -M main
-git remote add origin https://github.com/b0554003794-alt/tiknick.git
+git remote add origin https://github.com/BeniaBot/tiknick.git
 echo.
 echo ============================================
 echo   Pushing to GitHub...
@@ -26,6 +26,6 @@ echo ============================================
 git push -u origin main
 echo.
 echo ============================================
-echo   Done! Check: github.com/b0554003794-alt/tiknick
+echo   Done! Check: github.com/BeniaBot/tiknick
 echo ============================================
 pause
