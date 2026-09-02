@@ -29,6 +29,11 @@ class ScrapeError(Exception):
     pass
 
 
+class AuthRequired(ScrapeError):
+    """הפורום החזיר 401/403 — נדרשת עוגיית התחברות."""
+    pass
+
+
 def _api_base(forum_url):
     """הופך URL של פורום ל-base של ה-API (מוסיף /api, מנקה סלאש כפול)"""
     url = (forum_url or "").strip().rstrip("/")
@@ -61,7 +66,7 @@ def _fetch_json(url, cookie=None):
                 last_err = ScrapeError("הפורום מגביל קצב בקשות (429) — האטתי")
                 continue
             if e.code in (403, 401):
-                raise ScrapeError("אין הרשאה לצפות במשתמשים בפורום זה (ייתכן שנדרשת התחברות)")
+                raise AuthRequired("אין הרשאה לצפות במשתמשים בפורום זה (ייתכן שנדרשת התחברות)")
             if e.code == 404:
                 raise ScrapeError("נתיב ה-API לא נמצא — ייתכן שאין תמיכת API בפורום זה")
             last_err = ScrapeError(f"שגיאת שרת {e.code}")
@@ -74,16 +79,25 @@ def _fetch_json(url, cookie=None):
     raise last_err or ScrapeError("הבקשה נכשלה")
 
 
-def scrape_single_user(forum_url, username, cookie=None):
+def scrape_single_user(forum_url, username, cookie=None, platform=None):
     """
-    שולף משתמש בודד מ-NodeBB לפי שם משתמש. מנסה קודם את ה-endpoint הנפוץ,
-    ורק אם נכשל — חלופה. מחזיר dict ממופה או None.
+    שולף משתמש בודד לפי שם משתמש (NodeBB או Discourse). מחזיר dict ממופה או None.
     """
-    import urllib.parse
     try:
         base = _api_base(forum_url)
     except ScrapeError:
         return None
+    plat = platform or detect_platform(forum_url, cookie)
+    if plat == "discourse":
+        try:
+            data = _fetch_json(base + f"/u/{urllib.parse.quote(username)}.json", cookie=cookie)
+            u = (data.get("user") if isinstance(data, dict) else None) or {}
+            if u.get("username") or u.get("id"):
+                return _map_discourse_user(u, base)
+        except ScrapeError:
+            return None
+        return None
+    # NodeBB (ברירת מחדל)
     slug = urllib.parse.quote(username.lower().replace(" ", "-"))
     endpoints = [f"/api/user/{slug}", f"/api/user/username/{urllib.parse.quote(username)}"]
     for path in endpoints:
@@ -96,41 +110,90 @@ def scrape_single_user(forum_url, username, cookie=None):
     return None
 
 
-def check_forum(forum_url, cookie=None):
-    """
-    בדיקה מקדימה: מאמת שהכתובת היא פורום NodeBB עם API פעיל,
-    ומחזיר כמה משתמשים בערך יש (אם ה-API חושף זאת).
-    מחזיר dict: {"ok": bool, "user_count": int|None, "title": str|None, "error": str|None}
-    """
-    try:
-        base = _api_base(forum_url)
-        data = _fetch_json(base + "/api/users", cookie=cookie)
-    except ScrapeError as e:
-        msg = str(e)
-        # זיהוי מקרה של דרישת התחברות
-        if any(x in msg for x in ("401", "403", "not-authori", "login", "unauthor")):
-            return {"ok": False, "user_count": None, "title": None,
-                    "error": "הפורום דורש התחברות לצפייה במשתמשים — הזן עוגיית express.sid (ראה '🍪 איך משיגים?')"}
-        return {"ok": False, "user_count": None, "title": None, "error": msg}
-
-    # NodeBB מחזיר בד"כ מבנה עם users[] ולעיתים pagination/userCount
+def _try_nodebb(base, cookie):
+    """מחזיר (ok, user_count, title) אם זה NodeBB עם רשימת משתמשים, אחרת None. מרים AuthRequired."""
+    data = _fetch_json(base + "/api/users", cookie=cookie)
     if not isinstance(data, dict) or "users" not in data:
-        # אולי זו דרישת התחברות שהוחזרה כ-JSON/HTML
-        if isinstance(data, dict) and any(k in data for k in ("error", "status")):
-            return {"ok": False, "user_count": None, "title": None,
-                    "error": "הפורום דרש התחברות או שאין הרשאה — נסה עם עוגיית express.sid"}
-        return {"ok": False, "user_count": None, "title": None,
-                "error": "לא נראה שזה פורום NodeBB (אין רשימת משתמשים ב-API). ייתכן שהפורום בנוי על מערכת אחרת ולא ניתן לסריקה."}
-
+        return None
     count = data.get("userCount")
     if count is None:
         pag = data.get("pagination") or {}
-        # לפעמים אפשר להעריך לפי מספר עמודים * גודל עמוד
         pages = pag.get("pageCount")
         if pages:
             count = pages * max(1, len(data.get("users", [])))
-    return {"ok": True, "user_count": count,
-            "title": data.get("title") or None, "error": None}
+    return (True, count, data.get("title") or None)
+
+
+def _try_discourse(base, cookie):
+    """מחזיר (ok, user_count, title) אם זה Discourse עם ספריית משתמשים, אחרת None."""
+    data = _fetch_json(base + "/directory_items.json?period=all&order=post_count&page=0",
+                       cookie=cookie)
+    if not isinstance(data, dict) or "directory_items" not in data:
+        return None
+    return (True, data.get("total_rows_directory_items"), None)
+
+
+def detect_platform(forum_url, cookie=None):
+    """מזהה את פלטפורמת הפורום: 'nodebb' | 'discourse' | 'unknown'."""
+    base = _api_base(forum_url)
+    nodebb_auth = False   # /api/users החזיר 401/403 — סימן ל-NodeBB שדורש התחברות
+    try:
+        if _try_nodebb(base, cookie):
+            return "nodebb"
+    except AuthRequired:
+        nodebb_auth = True   # לא מסיקים מיד — קודם בודקים אם זה בכלל Discourse
+    except ScrapeError:
+        pass
+    try:
+        if _try_discourse(base, cookie):
+            return "discourse"
+    except AuthRequired:
+        return "discourse"
+    except ScrapeError:
+        pass
+    # אם רק ה-NodeBB probe נחסם בהרשאה — סביר שזה NodeBB מאחורי התחברות
+    return "nodebb" if nodebb_auth else "unknown"
+
+
+def check_forum(forum_url, cookie=None):
+    """
+    בדיקה מקדימה: מזהה את פלטפורמת הפורום (NodeBB/Discourse) ואם יש API פעיל
+    לרשימת משתמשים, ומחזיר הערכת מספר המשתמשים.
+    מחזיר dict: {"ok", "user_count", "title", "platform", "error"}
+    """
+    try:
+        base = _api_base(forum_url)
+    except ScrapeError as e:
+        return {"ok": False, "user_count": None, "title": None, "platform": "unknown", "error": str(e)}
+
+    # NodeBB
+    try:
+        res = _try_nodebb(base, cookie)
+        if res:
+            ok, count, title = res
+            return {"ok": True, "user_count": count, "title": title,
+                    "platform": "nodebb", "error": None}
+    except AuthRequired:
+        return {"ok": False, "user_count": None, "title": None, "platform": "nodebb",
+                "error": "הפורום דורש התחברות לצפייה במשתמשים — הזן עוגיית express.sid (ראה '🍪 איך משיגים?')"}
+    except ScrapeError:
+        pass
+
+    # Discourse
+    try:
+        res = _try_discourse(base, cookie)
+        if res:
+            ok, count, title = res
+            return {"ok": True, "user_count": count, "title": title,
+                    "platform": "discourse", "error": None}
+    except AuthRequired:
+        return {"ok": False, "user_count": None, "title": None, "platform": "discourse",
+                "error": "הפורום דורש התחברות לצפייה במשתמשים — הזן עוגייה מתאימה"}
+    except ScrapeError:
+        pass
+
+    return {"ok": False, "user_count": None, "title": None, "platform": "unknown",
+            "error": "לא זוהתה מערכת פורום נתמכת (NodeBB/Discourse) עם רשימת משתמשים ציבורית בכתובת זו."}
 
 
 def _map_user(u):
@@ -207,25 +270,91 @@ def _map_user(u):
     }
 
 
-def scrape_forum(forum_name, forum_url, db, cookie=None,
-                 progress_cb=None, cancel_flag=None, max_pages=None, skip_flag=None):
+def _map_discourse_user(u, base):
+    """ממפה משתמש Discourse (מ-/u/{name}.json או מספריית המשתמשים) לשדות Tik-Nick."""
+    avatar = ""
+    tmpl = u.get("avatar_template") or ""
+    if tmpl:
+        pic = tmpl.replace("{size}", "120")
+        avatar = (base + pic) if pic.startswith("/") else pic
+
+    join_date = ""
+    created = u.get("created_at") or ""
+    if isinstance(created, str) and len(created) >= 10:
+        join_date = created[:10]
+
+    extra_bits = []
+    loc = u.get("location")
+    if loc:      extra_bits.append(f"מיקום: {loc}")
+    web = u.get("website_name") or u.get("website")
+    if web:      extra_bits.append(f"אתר: {web}")
+    bio = (u.get("bio_raw") or "").strip()
+    if bio:      extra_bits.append(f"אודות: {bio[:200]}")
+
+    grp = ""
+    groups = u.get("groups")
+    if isinstance(groups, list):
+        names = [g.get("name") for g in groups if isinstance(g, dict) and g.get("name")
+                 and not str(g.get("name")).startswith("trust_level_")]
+        grp = ", ".join(names)
+
+    return {
+        "full_name":   u.get("name") or "",
+        "reputation":  str(u.get("likes_received", "") or ""),
+        "post_count":  str(u.get("post_count", "") or ""),
+        "groups":      grp,
+        "status":      "מורחק" if (u.get("suspended_till") or u.get("silenced")) else "",
+        "join_date":   join_date,
+        "avatar_url":  avatar,
+        "email":       u.get("email") or "",
+        "forum_uid":   str(u.get("id") or ""),
+        "extra_info":  " · ".join(extra_bits),
+    }
+
+
+def _map_discourse_dir_item(item, base):
+    """ממפה פריט מספריית המשתמשים של Discourse (directory_items)."""
+    u = item.get("user") or {}
+    mapped = _map_discourse_user(u, base)
+    # ספריית המשתמשים כוללת סטטיסטיקות עשירות יותר מאשר אובייקט המשתמש הבסיסי
+    if item.get("likes_received") is not None:
+        mapped["reputation"] = str(item.get("likes_received") or "")
+    if item.get("post_count") is not None:
+        mapped["post_count"] = str(item.get("post_count") or "")
+    return mapped
+
+
+def scrape_forum(forum_name, forum_url, db, cookie=None, progress_cb=None,
+                 cancel_flag=None, max_pages=None, skip_flag=None, platform=None):
     """
-    סורק את כל המשתמשים בפורום וממזג למאגר.
+    סורק את כל המשתמשים בפורום וממזג למאגר. מנתב לפי פלטפורמה (NodeBB/Discourse).
 
-    forum_name  — שם הפורום כפי שיישמר בשדה forum של הניקים
-    forum_url   — כתובת הבסיס של הפורום
-    db          — מודול database (מוזרק, כדי לא ליצור תלות מעגלית)
-    progress_cb — פונקציה(dict) לעדכון התקדמות: {page, total_pages, added, updated, conflicts, done}
-    cancel_flag — אובייקט עם .is_set() (למשל threading.Event) לביטול
-    max_pages   — הגבלת עמודים (לבדיקות); None = הכל
-
-    מחזיר סיכום: {"added", "updated", "unchanged", "conflicts", "pages", "cancelled"}
+    platform    — 'nodebb' | 'discourse' | None (זיהוי אוטומטי)
+    max_pages   — הגבלת עמודים (None = הכל)
+    מחזיר סיכום: {"added","updated","unchanged","pages","cancelled"}
     """
     base = _api_base(forum_url)
-    stats = {"added": 0, "updated": 0, "unchanged": 0,
-             "conflicts": 0, "pages": 0, "cancelled": False}
+    plat = platform or detect_platform(forum_url, cookie)
+    if plat == "nodebb":
+        return _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
+                              cancel_flag, max_pages, skip_flag)
+    if plat == "discourse":
+        return _scrape_discourse(forum_name, base, db, cookie, progress_cb,
+                                 cancel_flag, max_pages, skip_flag)
+    # xenforo/phpbb/custom/unknown — אין API ציבורי לרשימת משתמשים
+    names = {"xenforo": "XenForo", "phpbb": "phpBB", "custom": "מערכת ייחודית"}
+    label = names.get(plat, "")
+    raise ScrapeError(
+        (f"פלטפורמת הפורום ({label}) אינה תומכת בסריקה אוטומטית של רשימת המשתמשים."
+         if label else
+         "לא זוהתה מערכת פורום נתמכת (NodeBB/Discourse) בכתובת זו.")
+        + " עדיין אפשר להוסיף ולנהל ניקים ידנית ולפתוח פרופילים.")
 
-    # עמוד ראשון — כדי לדעת כמה עמודים יש
+
+def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
+                   cancel_flag, max_pages, skip_flag):
+    stats = {"added": 0, "updated": 0, "unchanged": 0, "pages": 0, "cancelled": False}
+
     first = _fetch_json(base + "/api/users", cookie=cookie)
     if not isinstance(first, dict) or "users" not in first:
         raise ScrapeError("מבנה תשובה לא צפוי — ודא שזה פורום NodeBB")
@@ -236,16 +365,15 @@ def scrape_forum(forum_name, forum_url, db, cookie=None,
         total_pages = min(total_pages, max_pages)
 
     def handle_users(users):
-        for u in users:
-            uname = (u.get("username") or "").strip()
-            if not uname:
-                continue
-            mapped = _map_user(u)
-            action, _nid, conf = db.merge_scraped_nick(
-                forum_name, uname, mapped, source_label=f"NodeBB:{forum_name}")
-            key = "added" if action == "created" else action
-            stats[key] = stats.get(key, 0) + 1
-            stats["conflicts"] += conf
+        # ממפים את כל העמוד ואז ממזגים בטרנזקציית DB אחת — מהיר בסדרי גודל
+        pairs = [((u.get("username") or "").strip(), _map_user(u))
+                 for u in users if (u.get("username") or "").strip()]
+        if not pairs:
+            return
+        page_stats = db.merge_scraped_users(
+            forum_name, pairs, source_label=f"NodeBB:{forum_name}")
+        for key in ("added", "updated", "unchanged"):
+            stats[key] += page_stats.get(key, 0)
 
     handle_users(first.get("users", []))
     stats["pages"] = 1
@@ -263,7 +391,6 @@ def scrape_forum(forum_name, forum_url, db, cookie=None,
         try:
             data = _fetch_json(base + f"/api/users?page={page}", cookie=cookie)
         except ScrapeError:
-            # עמוד בודד נכשל — ממשיכים הלאה במקום לקרוס
             continue
         handle_users(data.get("users", []) if isinstance(data, dict) else [])
         stats["pages"] = page
@@ -272,4 +399,73 @@ def scrape_forum(forum_name, forum_url, db, cookie=None,
 
     if progress_cb:
         progress_cb({"page": stats["pages"], "total_pages": total_pages, **stats, "done": True})
+    return stats
+
+
+def _scrape_discourse(forum_name, base, db, cookie, progress_cb,
+                      cancel_flag, max_pages, skip_flag):
+    """סורק את ספריית המשתמשים של Discourse (directory_items, עימוד 0-בסיס)."""
+    stats = {"added": 0, "updated": 0, "unchanged": 0, "pages": 0, "cancelled": False}
+
+    # עמוד ראשון כדי להעריך מספר עמודים
+    first = _fetch_json(
+        base + "/directory_items.json?period=all&order=post_count&page=0", cookie=cookie)
+    if not isinstance(first, dict) or "directory_items" not in first:
+        raise ScrapeError("מבנה תשובה לא צפוי — ודא שזה פורום Discourse")
+
+    items0 = first.get("directory_items", [])
+    per_page = max(1, len(items0))
+    total_rows = first.get("total_rows_directory_items") or 0
+    total_pages = max(1, -(-total_rows // per_page)) if total_rows else 1
+    if max_pages:
+        total_pages = min(total_pages, max_pages)
+
+    def handle_items(items):
+        pairs = [((it.get("user") or {}).get("username", "").strip(),
+                  _map_discourse_dir_item(it, base))
+                 for it in items if (it.get("user") or {}).get("username")]
+        pairs = [(u, m) for u, m in pairs if u]
+        if not pairs:
+            return
+        page_stats = db.merge_scraped_users(
+            forum_name, pairs, source_label=f"Discourse:{forum_name}")
+        for key in ("added", "updated", "unchanged"):
+            stats[key] += page_stats.get(key, 0)
+
+    handle_items(items0)
+    stats["pages"] = 1
+    if progress_cb:
+        progress_cb({"page": 1, "total_pages": total_pages, **stats, "done": False})
+
+    # עימוד 0-בסיס; ממשיכים עד עמוד ריק (total_pages משמש רק להערכת ההתקדמות)
+    page = 1
+    while items0:
+        if max_pages and page >= max_pages:
+            break
+        if cancel_flag is not None and cancel_flag.is_set():
+            stats["cancelled"] = True
+            break
+        if skip_flag is not None and skip_flag.is_set():
+            stats["skipped"] = True
+            break
+        time.sleep(PAGE_DELAY_SEC)
+        try:
+            data = _fetch_json(
+                base + f"/directory_items.json?period=all&order=post_count&page={page}",
+                cookie=cookie)
+        except ScrapeError:
+            break   # כשל רשת — עוצרים במקום ללולאה אינסופית
+        items = data.get("directory_items", []) if isinstance(data, dict) else []
+        if not items:
+            break
+        handle_items(items)
+        page += 1
+        stats["pages"] = page
+        if progress_cb:
+            progress_cb({"page": page, "total_pages": max(total_pages, page),
+                         **stats, "done": False})
+
+    if progress_cb:
+        progress_cb({"page": stats["pages"], "total_pages": max(total_pages, stats["pages"]),
+                     **stats, "done": True})
     return stats

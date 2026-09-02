@@ -6,7 +6,9 @@ Chazonishnik — ניתוח פעילות משתמש בפורום NodeBB.
 משתמש ב-urllib בלבד (ללא תלות ב-requests) כדי לא להוסיף תלויות.
 """
 import json
+import os
 import re
+import sys
 import time
 import urllib.request
 import urllib.parse
@@ -71,7 +73,7 @@ def _fetch_user(base, username, cookie):
     raise last_err or Exception("לא נמצא משתמש")
 
 
-def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None):
+def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=None):
     all_posts = []
     page = 1
     while page <= MAX_PAGES:
@@ -88,9 +90,14 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None):
         all_posts.extend(posts)
         if progress:
             progress({"phase": "scan", "page": page, "count": len(all_posts)})
+        if max_posts and len(all_posts) >= max_posts:
+            break
         page += 1
     uniq = {p.get("pid"): p for p in all_posts if p.get("pid")}
-    return list(uniq.values())
+    posts = list(uniq.values())
+    if max_posts and len(posts) > max_posts:
+        posts = posts[:max_posts]
+    return posts
 
 
 _DAYS_HE = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
@@ -125,10 +132,12 @@ def _fetch_detail(base, cookie, post):
         return None
 
 
-def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_path=None, cancel_flag=None):
+def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_path=None,
+                 cancel_flag=None, max_posts=None):
     """
     מריץ ניתוח מלא ומחזיר dict: {ok, html, path, posts, error}
     progress(dict) — קריאה אופציונלית לעדכוני התקדמות.
+    max_posts — הגבלת מספר הפוסטים הנסרקים (None = הכל).
     """
     base = (base_url or DEFAULT_BASE).rstrip("/")
     try:
@@ -140,7 +149,8 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     except Exception as e:
         return {"ok": False, "error": f"לא ניתן למצוא משתמש: {e}"}
 
-    raw_posts = _scan_posts(base, slug, cookie, progress=progress, cancel_flag=cancel_flag)
+    raw_posts = _scan_posts(base, slug, cookie, progress=progress,
+                            cancel_flag=cancel_flag, max_posts=max_posts)
     if cancel_flag is not None and cancel_flag.is_set():
         return {"ok": False, "cancelled": True, "error": "בוטל"}
     if not raw_posts:
@@ -178,11 +188,28 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     return {"ok": True, "html": html, "path": path, "posts": len(processed)}
 
 
+def _chartjs_tag():
+    """
+    Chart.js מוטמע בדוח כך שהקובץ השמור עובד גם בלי אינטרנט.
+    הספרייה ארוזה ב-web/chart.umd.min.js (נכללת ב-EXE יחד עם שאר web/);
+    אם הקובץ חסר משום מה — נופלים חזרה ל-CDN.
+    """
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(base, "web", "chart.umd.min.js")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return "<script>" + f.read() + "</script>"
+    except Exception:
+        return ('<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/'
+                'dist/chart.umd.min.js"></script>')
+
+
 def _build_html(user_slug, base_url, my_uid, posts_data):
     json_data = json.dumps(posts_data, ensure_ascii=False)
     my_uid_json = json.dumps(my_uid)
     base_url_json = json.dumps(base_url)
-    return HTML_TEMPLATE.replace("__USER__", user_slug) \
+    return HTML_TEMPLATE.replace("__CHARTJS__", _chartjs_tag()) \
+        .replace("__USER__", user_slug) \
         .replace("__JSON_DATA__", json_data) \
         .replace("__MY_UID__", my_uid_json) \
         .replace("__BASE_URL__", base_url_json)
@@ -193,7 +220,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <title>ניתוח פעילות: __USER__</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+__CHARTJS__
 <style>
 :root{--bg:#0f172a;--card-bg:#1e293b;--accent:#38bdf8;--text-main:#f1f5f9;--text-dim:#94a3b8}
 body{background:var(--bg);color:var(--text-main);font-family:'Assistant',Arial,sans-serif;margin:0;padding:20px;overflow-x:hidden}

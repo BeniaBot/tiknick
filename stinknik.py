@@ -40,21 +40,35 @@ def _slug_from_input(user_input):
 def _resolve_slug(base, user_input, cookie=None):
     """מנסה למצוא את ה-userslug הקנוני; תומך בשם עם רווחים."""
     raw = _slug_from_input(user_input)
-    candidates = [raw, raw.replace(" ", "-"), raw.lower().replace(" ", "-")]
-    # קודם ננסה חיפוש לפי username מדויק
+    # וריאציות סלאג סבירות (NodeBB ממיר רווחים למקפים)
+    candidates = []
+    for c in (raw, raw.replace(" ", "-"), raw.lower().replace(" ", "-")):
+        if c and c not in candidates:
+            candidates.append(c)
+    # קודם: חיפוש לפי username מדויק (מטפל ברווחים באופן טבעי)
     try:
         data = _get_json(f"{base}/api/user/username/{urllib.parse.quote(raw)}", cookie=cookie)
         if isinstance(data, dict) and data.get("userslug"):
             return data["userslug"]
     except Exception:
         pass
-    return candidates[0]
+    # אחר כך: נסה כל וריאציית סלאג עד שאחת נפתרת
+    for slug in candidates:
+        try:
+            data = _get_json(f"{base}/api/user/{urllib.parse.quote(slug)}", cookie=cookie)
+            if isinstance(data, dict) and (data.get("userslug") or data.get("uid")):
+                return data.get("userslug") or slug
+        except Exception:
+            continue
+    # ברירת מחדל: הצורה עם מקפים (הנפוצה ב-NodeBB) ולא הגולמית
+    return candidates[1] if len(candidates) > 1 else raw
 
 
 def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
-                     progress=None, cancel_flag=None):
+                     progress=None, cancel_flag=None, max_posts=None):
     """
     סורק את כל הפוסטים של המשתמש ואוסף את אלה שקיבלו דיסלייקים.
+    max_posts — הגבלת מספר הפוסטים הנסרקים (None = הכל).
     מחזיר dict: {ok, html, disliked, checked, up, down, rep, error, cancelled}
     """
     base = (base_url or DEFAULT_BASE).rstrip("/")
@@ -67,6 +81,8 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
     disliked = []
 
     while page <= MAX_PAGES:
+        if max_posts and checked >= max_posts:
+            break
         if cancel_flag is not None and cancel_flag.is_set():
             return {"ok": False, "cancelled": True, "error": "בוטל"}
         try:

@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo ============================================
-echo   Building Tik-Nick.exe  (v0.1)
+echo   Building Tik-Nick.exe
 echo ============================================
 echo.
 echo [1/3] Installing build tools (one-time)...

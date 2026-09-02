@@ -1,4 +1,4 @@
-/* Tik-Nick v0.1 — app.js */
+/* Tik-Nick — app.js (הגרסה נקבעת ב-main.py בלבד: APP_VERSION) */
 'use strict';
 
 // ══ STATE ═══════════════════════════════════════════════════════════
@@ -82,6 +82,11 @@ window.addEventListener('load', async () => {
 });
 
 async function _origInit() {
+  // גרסה ב-footer מיד מההפעלה (לא תלוי בבדיקת עדכונים / אינטרנט)
+  api('get_app_version').then(v => {
+    const el = document.getElementById('footer-version');
+    if (el && v?.version) el.textContent = `v${v.version} | Tik-Nick`;
+  });
   await applyDisplaySettings();
   buildTableHeader();
   await loadForums();
@@ -826,12 +831,21 @@ function renderOpenBtn(td, n) {
   td.appendChild(btn);
 }
 
-function buildProfileUrl(baseUrl, username) {
-  // הסר / מסופי כתובת הבסיס
-  let base = baseUrl.replace(/\/+$/, '');
-  // המר רווחים למקפים (מבנה NodeBB: /user/שם-משתמש)
-  const slug = username.trim().replace(/\s+/g, '-');
-  return `${base}/user/${encodeURIComponent(slug)}`;
+function buildProfileUrl(forum, username) {
+  const base = (forum.url || '').replace(/\/+$/, '');
+  const uname = (username || '').trim();
+  // תבנית מפורשת (למשל phpBB: /memberlist.php?...&un={user})
+  if (forum.profile_pattern) {
+    return base + forum.profile_pattern.replace('{user}', encodeURIComponent(uname));
+  }
+  const plat = forum.platform || 'nodebb';
+  if (plat === 'discourse') return `${base}/u/${encodeURIComponent(uname)}`;
+  if (plat === 'nodebb') {
+    const slug = uname.replace(/\s+/g, '-');   // NodeBB: /user/שם-משתמש
+    return `${base}/user/${encodeURIComponent(slug)}`;
+  }
+  // פלטפורמה ללא תבנית ידועה — פתח את הפורום עצמו
+  return base || '#';
 }
 
 function openNickProfile(n) {
@@ -849,7 +863,7 @@ function openNickProfile(n) {
     toast(`לא הוגדר קישור לפורום "${n.forum}" — ניתן להוסיפו בניהול פורומים`, 'info');
     return;
   }
-  const profileUrl = buildProfileUrl(forum.url, n.username);
+  const profileUrl = buildProfileUrl(forum, n.username);
   api('open_url', profileUrl);
 }
 
@@ -1055,8 +1069,8 @@ async function openNickDialog(nickId = null) {
       <div class="avatar-upload" id="avatar-upload-box">
         <div class="avatar-preview" id="avatar-preview">
           ${nick?.avatar_image
-            ? `<img src="${nick.avatar_image}" alt="">`
-            : `<span class="avatar-initial" style="background:${nick?.nick_color||'var(--accent)'}">${esc((nick?.username||'?').charAt(0).toUpperCase())}</span>`}
+            ? `<img src="${esc(nick.avatar_image)}" alt="">`
+            : `<span class="avatar-initial" style="background:${esc(nick?.nick_color||'var(--accent)')}">${esc((nick?.username||'?').charAt(0).toUpperCase())}</span>`}
         </div>
         <div class="avatar-controls">
           <input type="file" id="avatar-file" accept="image/*" style="display:none"
@@ -1494,6 +1508,129 @@ function openIdentityDialog(nickId) {
   openNickDialog(nickId); // opens full dialog, identity section is there
 }
 
+// ══ USER LOOKUP — תצוגת משתמש מאוחדת (כל הזהויות המקושרות) ═══════════════
+let _lookupTimer = null;
+
+function openUserLookup() {
+  openModal('🔎 תצוגת משתמש', `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
+      הקלד שם משתמש או שם אמיתי — התצוגה תרכז את כל המידע על אותו אדם, כולל מכל הזהויות המקושרות אליו בפורומים השונים.
+    </p>
+    <div class="search-wrap" style="max-width:none;margin-bottom:10px">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="lookup-input" placeholder="שם משתמש / שם אמיתי..." autocomplete="off"
+             oninput="onLookupInput(this.value)">
+    </div>
+    <div id="lookup-results" style="max-height:150px;overflow-y:auto;margin-bottom:6px"></div>
+    <div id="lookup-profile"></div>
+  `, [
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg');
+  setTimeout(() => document.getElementById('lookup-input')?.focus(), 60);
+}
+
+function onLookupInput(val) {
+  clearTimeout(_lookupTimer);
+  _lookupTimer = setTimeout(() => lookupSearch(val), 200);
+}
+
+async function lookupSearch(query) {
+  const box = document.getElementById('lookup-results');
+  if (!box) return;
+  if (!query.trim()) { box.innerHTML = ''; return; }
+  const rows = await api('lookup_nicks', query, 12) || [];
+  if (!rows.length) {
+    box.innerHTML = '<div style="padding:10px;color:var(--subtext);font-size:13px">לא נמצאו ניקים</div>';
+    return;
+  }
+  box.innerHTML = rows.map(n => `
+    <div class="search-result-item" onclick="showMergedProfile(${n.id})">
+      <span style="color:${S.forumColors[n.forum] || '#8b90a0'}">[${esc(n.forum)}]</span>
+      <span style="font-weight:600;margin-right:6px">${esc(n.username)}</span>
+      ${n.real_name ? `<span style="color:var(--subtext);font-size:12px;margin-right:6px">· ${esc(n.real_name)}</span>` : ''}
+    </div>`).join('');
+}
+
+async function showMergedProfile(nickId) {
+  const box = document.getElementById('lookup-profile');
+  const results = document.getElementById('lookup-results');
+  if (results) results.innerHTML = '';
+  if (box) box.innerHTML = '<div style="padding:14px;color:var(--subtext)">טוען…</div>';
+  const p = await api('get_merged_profile', nickId);
+  if (!p) { if (box) box.innerHTML = '<div style="padding:14px;color:var(--danger)">לא נמצא</div>'; return; }
+  if (box) box.innerHTML = renderMergedProfile(p);
+}
+
+function renderMergedProfile(p) {
+  const members = p.members || [];
+  const primary = members[0] || {};
+  const initial = esc((primary.username || '?').charAt(0).toUpperCase());
+  // nick_color/avatar_image מגיעים מהפורום (לא בטוחים) — חובה esc בתוך innerHTML
+  const avatarBg = esc(primary.nick_color || S.forumColors[primary.forum] || 'var(--accent)');
+  const avatarHtml = primary.avatar_image
+    ? `<img src="${esc(primary.avatar_image)}" style="width:100%;height:100%;object-fit:cover">`
+    : `<span style="width:100%;height:100%;display:grid;place-items:center;font-size:22px;font-weight:800;color:#fff;background:${avatarBg}">${initial}</span>`;
+
+  // צ'יפים לכל זהות (עם פתיחת פרופיל)
+  const memberChips = members.map(m => `
+    <span class="lookup-chip" onclick='openMergedMember(${m.id})' title="פתח לעריכה"
+          style="display:inline-flex;align-items:center;gap:5px;background:var(--card2);
+                 border:1px solid var(--border-soft);border-radius:999px;padding:4px 11px;
+                 font-size:12px;cursor:pointer;margin:0 0 6px 6px">
+      <span style="width:8px;height:8px;border-radius:50%;background:${S.forumColors[m.forum] || '#8b90a0'}"></span>
+      <b>${esc(m.username)}</b>
+      <span style="color:var(--subtext)">${esc(m.forum)}</span>
+    </span>`).join('');
+
+  // שדות מאוחדים
+  const fieldRows = (p.fields || []).map(f => {
+    const vals = f.values.map(v => {
+      const attribution = members.length > 1
+        ? `<span style="color:var(--subtext);font-size:11px"> — ${esc(v.username)} [${esc(v.forum)}]</span>` : '';
+      const disp = String(v.value).includes('@') ? renderTaggedText(v.value) : esc(v.value);
+      return `<div style="padding:2px 0">${disp}${attribution}</div>`;
+    }).join('');
+    return `
+      <div style="display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--border-soft)">
+        <div style="min-width:110px;color:var(--subtext);font-size:12px;font-weight:700">${esc(f.label)}</div>
+        <div style="flex:1;font-size:13.5px">${vals}</div>
+      </div>`;
+  }).join('');
+
+  const contactsHtml = (p.contacts || []).length ? `
+    <div class="section-hdr" style="margin-top:16px">📞 אנשי קשר</div>
+    ${p.contacts.map(c => `
+      <div style="display:flex;gap:8px;align-items:center;font-size:13px;padding:4px 0">
+        <span>${c.type === 'phone' ? '📞' : '📧'}</span>
+        <b>${esc(c.value)}</b>
+        ${c.label ? `<span style="color:var(--subtext);font-size:11px">${esc(c.label)}</span>` : ''}
+        ${c.is_private ? '<span title="סודי">🔒</span>' : ''}
+        <span style="color:var(--subtext);font-size:11px;margin-right:auto">${esc(c.username)} [${esc(c.forum)}]</span>
+      </div>`).join('')}` : '';
+
+  return `
+    <div style="border:1px solid var(--border-soft);border-radius:14px;padding:16px;background:var(--card)">
+      <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
+        <div style="width:56px;height:56px;border-radius:16px;overflow:hidden;box-shadow:var(--shadow-sm);flex-shrink:0">${avatarHtml}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:18px;font-weight:800">${esc(primary.username || '')}</div>
+          <div style="font-size:12px;color:var(--subtext)">
+            ${members.length > 1 ? `${members.length} זהויות מקושרות` : 'זהות אחת'}
+          </div>
+        </div>
+      </div>
+      <div style="margin-bottom:6px">${memberChips}</div>
+      ${fieldRows ? `<div style="margin-top:6px">${fieldRows}</div>`
+                  : '<div style="color:var(--subtext);font-size:13px;padding:8px 0">אין פרטים מלאים לניק זה</div>'}
+      ${contactsHtml}
+    </div>`;
+}
+
+function openMergedMember(nickId) {
+  closeModal();
+  openNickDialog(nickId);
+}
+
 // ══ FORUM MANAGER ════════════════════════════════════════════════════
 async function openForumMgr() {
   await loadForums();
@@ -1769,7 +1906,6 @@ async function applyFieldFilter() {
   _fieldFilterActive = true;
   S.nicks = results;
   S.total = results.length;
-  S.offset = results.length;
   S.multiSelected.clear();
   sortNicks();
   renderTable();
@@ -1855,7 +1991,6 @@ async function openSyncMgr() {
   const fields   = await api('get_all_nick_fields');
   const sync     = await api('get_sync_settings');
   const forumIo  = await api('get_forum_io_flags') || {};
-  const policy   = await api('get_conflict_policy') || 'ask';
   const importManual = (await api('get_setting', 'import_manual_conflicts', '0')) === '1';
   const myTrust  = await api('get_my_trust') ?? 10;
   const sources  = await api('get_sources') || [];
@@ -1899,56 +2034,35 @@ async function openSyncMgr() {
         </div>`).join('') : '<div style="color:var(--subtext);padding:14px">אין פורומים מוגדרים</div>'}
     </div>`;
 
-  // ── סעיף 3: מדיניות התנגשות בסנכרון מהאינטרנט ──
-  const opt = (val, label, desc) => `
-    <label class="policy-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--border-soft);border-radius:10px;margin-bottom:10px;cursor:pointer">
-      <input type="radio" name="cpolicy" value="${val}" ${policy===val?'checked':''} style="margin-top:3px">
-      <div>
-        <div style="font-weight:700;font-size:13.5px">${label}</div>
-        <div style="font-size:12px;color:var(--subtext);margin-top:2px">${desc}</div>
-      </div>
-    </label>`;
+  // ── סעיף 3: התנגשויות בייבוא קובץ ──
+  // (התנגשויות בסריקה מהאינטרנט נפתרות אוטומטית ע"י מנוע המקורות לפי אמינות —
+  //  אין עוד מדיניות נפרדת לסריקה.)
   const sec3 = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:stretch">
-      <div style="display:flex;flex-direction:column;border:1px solid var(--border-soft);border-radius:12px;overflow:hidden">
-        <div style="background:var(--card2);padding:12px 16px;font-weight:800;font-size:14px;
-             border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:8px">
-          <span>🌐</span> התנגשויות בסנכרון מהאינטרנט
-        </div>
-        <div style="padding:16px;flex:1">
-          <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
-            כשסריקה מהאינטרנט מוצאת ערך שונה בשדה שכבר קיים, מה לעשות?
-          </p>
-          ${opt('ask', '🙋 לשאול אותי', 'ייפתח חלון פתרון התנגשויות בסיום הסריקה (ברירת מחדל)')}
-          ${opt('existing', '🛡️ תמיד לשמור את הקיים', 'המידע הקיים לא ישתנה; הערך הסרוק יידחה אוטומטית')}
-          ${opt('new', '🔄 תמיד להעדיף את החדש', 'הערך שנסרק מהפורום ידרוס את הקיים אוטומטית')}
-        </div>
+    <div style="display:flex;flex-direction:column;border:1px solid var(--border-soft);border-radius:12px;overflow:hidden">
+      <div style="background:var(--card2);padding:12px 16px;font-weight:800;font-size:14px;
+           border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:8px">
+        <span>📥</span> התנגשויות בייבוא קובץ
       </div>
-      <div style="display:flex;flex-direction:column;border:1px solid var(--border-soft);border-radius:12px;overflow:hidden">
-        <div style="background:var(--card2);padding:12px 16px;font-weight:800;font-size:14px;
-             border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:8px">
-          <span>📥</span> התנגשויות בייבוא קובץ
+      <div style="padding:16px">
+        <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
+          כשייבוא קובץ מכניס ערך שונה לשדה קיים, איך להכריע?
+        </p>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <label class="toggle">
+            <input type="checkbox" id="import-manual" ${importManual?'checked':''}>
+            <span class="toggle-slider"></span>
+          </label>
+          <span style="font-size:13px;font-weight:600">פתרון ידני — שאל אותי לכל התנגשות</span>
         </div>
-        <div style="padding:16px;flex:1;display:flex;flex-direction:column">
-          <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
-            כשייבוא קובץ מכניס ערך שונה לשדה קיים, איך להכריע?
-          </p>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <label class="toggle">
-              <input type="checkbox" id="import-manual" ${importManual?'checked':''}>
-              <span class="toggle-slider"></span>
-            </label>
-            <span style="font-size:13px;font-weight:600">פתרון ידני — שאל אותי לכל התנגשות</span>
-          </div>
-          <div style="font-size:11.5px;color:var(--subtext);margin-bottom:auto;line-height:1.6">
-            כבוי (ברירת מחדל) = הכרעה אוטומטית לפי דרגת אמינות.<br>
-            דלוק = ייפתח חלון לבחירה ידנית בכל התנגשות.
-          </div>
-          <div style="font-size:12px;color:var(--subtext);padding:12px;margin-top:14px;
-               background:var(--card2);border-radius:8px;line-height:1.6">
-            💡 את דרגות האמינות (הציונים) של כל מקור קובעים בלשונית
-            <b style="color:var(--accent-2);cursor:pointer;white-space:nowrap" onclick="switchSyncTab('s4')">🎖️&nbsp;מקורות</b>.
-          </div>
+        <div style="font-size:11.5px;color:var(--subtext);line-height:1.6">
+          כבוי (ברירת מחדל) = הכרעה אוטומטית לפי דרגת אמינות.<br>
+          דלוק = ייפתח חלון לבחירה ידנית בכל התנגשות.
+        </div>
+        <div style="font-size:12px;color:var(--subtext);padding:12px;margin-top:14px;
+             background:var(--card2);border-radius:8px;line-height:1.6">
+          💡 כך גם עובדת הסריקה מהאינטרנט: ערך סותר נשמר לצד הקיים ומסומן ב-❗,
+          והמנצח נקבע לפי דרגות האמינות שקובעים בלשונית
+          <b style="color:var(--accent-2);cursor:pointer;white-space:nowrap" onclick="switchSyncTab('s4')">🎖️&nbsp;מקורות</b>.
         </div>
       </div>
     </div>`;
@@ -2025,8 +2139,6 @@ async function openSyncMgr() {
         if (el) await api('set_forum_io_flag', el.dataset.forum, el.checked);
       }
       // סעיף 3
-      const chosen = document.querySelector('input[name="cpolicy"]:checked');
-      if (chosen) await api('set_conflict_policy', chosen.value);
       const im = document.getElementById('import-manual');
       if (im) await api('set_setting', 'import_manual_conflicts', im.checked ? '1' : '0');
       toast('הגדרות סנכרון נשמרו ✓', 'success');
@@ -2038,9 +2150,33 @@ async function openSyncMgr() {
 
 // ══ EXPORT / IMPORT ════════════════════════════════════════════════════
 async function exportData() {
-  const res = await api('export_data');
-  if (res?.ok) toast(`יוצאו ${res.count} ניקים ✓`, 'success');
-  else if (res?.error !== 'בוטל') toast('שגיאה בייצוא', 'error');
+  const counts = await api('get_export_counts') || { all: 0, has_info: 0, my_info: 0 };
+  const opt = (mode, icon, title, desc, count) => `
+    <label class="policy-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--border-soft);border-radius:10px;margin-bottom:10px;cursor:pointer">
+      <input type="radio" name="expmode" value="${mode}" ${mode === 'all' ? 'checked' : ''} style="margin-top:3px">
+      <div style="flex:1">
+        <div style="font-weight:700;font-size:13.5px">${icon} ${title}
+          <span style="float:left;color:var(--accent-2);font-weight:800">${count}</span></div>
+        <div style="font-size:12px;color:var(--subtext);margin-top:2px">${desc}</div>
+      </div>
+    </label>`;
+  openModal('📤 ייצוא נתונים', `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
+      בחר אילו ניקים לייצא. חלים גם כללי הסנכרון (אילו שדות ופורומים כלולים).
+    </p>
+    ${opt('all', '📦', 'כל הניקים', 'ייצוא מלא של כל המאגר', counts.all)}
+    ${opt('has_info', '✓', 'רק ניקים עם מידע', 'ניקים עם שם אמיתי / טלפון / מייל / הערות / אנשי קשר / זהות', counts.has_info)}
+    ${opt('my_info', '👤', 'רק מידע שהוספתי בעצמי', 'ניקים שיש בהם ערך שאני הזנתי (מקור "אני") או אנשי קשר / הערות אישיות', counts.my_info)}
+  `, [
+    { label: '📤 ייצא', cls: 'btn-primary', action: async () => {
+      const mode = document.querySelector('input[name="expmode"]:checked')?.value || 'all';
+      closeModal();
+      const res = await api('export_data', mode);
+      if (res?.ok) toast(`יוצאו ${res.count} ניקים ✓`, 'success');
+      else if (res?.error !== 'בוטל') toast('שגיאה בייצוא', 'error');
+    }},
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
 }
 
 let _pendingImportMeta = { name: '', notes: '', trust: 10 };
@@ -2657,22 +2793,28 @@ function updateThemeToggleIcon() {
 // ══ סנכרון לאינטרנט (סריקת פורומי NodeBB) ═══════════════════════════════
 let _scrapePoll = null;
 
+const PLATFORM_LABELS = { nodebb: 'NodeBB', discourse: 'Discourse',
+  xenforo: 'XenForo', phpbb: 'phpBB', custom: 'מערכת ייחודית' };
+const SCRAPABLE_PLATFORMS = new Set(['nodebb', 'discourse']);
+
 async function openInternetSync() {
   const forums = await api('get_scrapable_forums') || [];
   const known = await api('get_known_forums') || [];
-  const flagOf = {};
-  known.forEach(k => { flagOf[k.name] = { needs_login: k.needs_login, scrapable: k.scrapable !== false }; });
+  const loginOf = {};
+  known.forEach(k => { loginOf[k.name] = !!k.needs_login; });
   const opts = forums.map(f => {
-    const fl = flagOf[f.name] || {};
-    const tag = fl.scrapable === false ? ' ⛔' : (fl.needs_login ? ' 🔒' : '');
+    const plat = f.platform || 'nodebb';
+    const needsLogin = loginOf[f.name];
+    const scrapable = SCRAPABLE_PLATFORMS.has(plat);
+    const tag = !scrapable ? ' ⛔' : (needsLogin ? ' 🔒' : '');
     return `<option value="${esc(f.name)}" data-url="${esc(f.url || '')}"
-             data-login="${fl.needs_login?'1':'0'}" data-scrapable="${fl.scrapable===false?'0':'1'}">${esc(f.name)}${tag}</option>`;
+             data-platform="${esc(plat)}" data-login="${needsLogin?'1':'0'}">${esc(f.name)}${tag}</option>`;
   }).join('');
 
   openModal('🌐 סנכרון לאינטרנט', `
     <p style="color:var(--subtext);font-size:13px;line-height:1.6;margin-bottom:16px">
-      סורק את רשימת המשתמשים של פורום NodeBB דרך ה-API הרשמי, ומוסיף/מעדכן ניקים
-      אוטומטית. שדות ריקים מתמלאים בשקט; ערך שונה בשדה קיים נרשם כהתנגשות לפתרון.
+      סורק את רשימת המשתמשים של פורום (NodeBB או Discourse) דרך ה-API הרשמי, ומוסיף/מעדכן
+      ניקים אוטומטית. שדות ריקים מתמלאים; ערך סרוק סותר נשמר לצד הקיים ומוכרע לפי אמינות.
     </p>
 
     <div class="section-hdr">בחירת פורום</div>
@@ -2682,13 +2824,20 @@ async function openInternetSync() {
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px">
       <label style="font-size:12px;color:var(--subtext)">
-        עוגיית התחברות (express.sid) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה)
+        עוגיית התחברות (express.sid) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה). נשמרת לפעם הבאה.
       </label>
       <button class="btn btn-ghost btn-sm" style="white-space:nowrap;flex-shrink:0"
               onclick="openChazonishnikHelp()" title="איך משיגים עוגיות?">🍪 איך משיגים?</button>
     </div>
     <input id="sync-cookie" class="form-input" style="width:100%;margin-bottom:12px" dir="ltr"
            placeholder="express.sid=s%3A...  (השאר ריק אם הפורום ציבורי)">
+
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+      <label style="font-size:12px;color:var(--subtext);white-space:nowrap">הגבל עמודים (אופציונלי):</label>
+      <input id="sync-maxpages" type="number" min="1" class="form-input" style="width:120px"
+             placeholder="הכל" title="כמה עמודי משתמשים לסרוק לכל היותר (ריק = הכל)">
+      <span style="font-size:11px;color:var(--subtext)">~50 משתמשים בעמוד</span>
+    </div>
 
     <div id="sync-check-result" style="font-size:13px;margin-bottom:12px;min-height:20px"></div>
 
@@ -2707,10 +2856,21 @@ async function openInternetSync() {
   onSyncForumChange();
 }
 
+// טוען את העוגייה השמורה לפורום הנבחר לתוך שדה העוגייה
+async function syncPrefillCookie() {
+  const sel = document.getElementById('sync-forum');
+  const url = sel?.selectedOptions[0]?.dataset.url || '';
+  const input = document.getElementById('sync-cookie');
+  if (!input || !url) return;
+  const saved = await api('get_saved_cookie', url);
+  input.value = saved || '';
+}
+
 async function doStartScrapeAll() {
   if (!confirm('לסרוק את כל הפורומים ברצף? פורום שלא ניתן לסרוק יידלג אוטומטית.')) return;
   const cookie = document.getElementById('sync-cookie')?.value.trim() || '';
-  const start = await api('start_scrape_all', cookie);
+  const maxPages = parseInt(document.getElementById('sync-maxpages')?.value) || null;
+  const start = await api('start_scrape_all', cookie, maxPages);
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל', 'error'); return; }
   const wrap = document.getElementById('sync-progress-wrap');
   if (wrap) wrap.style.display = '';
@@ -2730,8 +2890,12 @@ async function doForumCheck() {
   box.innerHTML = '<span style="color:var(--subtext)">בודק…</span>';
   const r = await api('check_forum', url, cookie);
   if (r && r.ok) {
+    const platName = PLATFORM_LABELS[r.platform] || r.platform || 'פורום';
     const cnt = r.user_count != null ? `~${r.user_count} משתמשים` : 'זמין';
-    box.innerHTML = `<span style="color:var(--success)">✓ פורום NodeBB תקין (${esc(String(cnt))})</span>`;
+    box.innerHTML = `<span style="color:var(--success)">✓ ${esc(platName)} תקין (${esc(String(cnt))})</span>`;
+    // עדכן את סימון הפלטפורמה באופציה הנבחרת (נשמר גם בצד השרת)
+    if (sel.selectedOptions[0] && r.platform) sel.selectedOptions[0].dataset.platform = r.platform;
+    updateSyncHint();   // רק הרמז — לא לדרוס את העוגייה שהוקלדה זה עתה
   } else {
     box.innerHTML = `<span style="color:var(--danger)">✕ ${esc(r?.error || 'בדיקה נכשלה')}</span>`;
   }
@@ -2740,11 +2904,18 @@ async function doForumCheck() {
 async function doStartScrape() {
   const sel = document.getElementById('sync-forum');
   const name = sel.value;
-  const url  = sel.selectedOptions[0]?.dataset.url || '';
+  const opt  = sel.selectedOptions[0];
+  const url  = opt?.dataset.url || '';
+  const plat = opt?.dataset.platform || 'nodebb';
   const cookie = document.getElementById('sync-cookie').value.trim();
+  const maxPages = parseInt(document.getElementById('sync-maxpages')?.value) || null;
   if (!url) { toast('לפורום זה אין כתובת URL', 'error'); return; }
+  if (!SCRAPABLE_PLATFORMS.has(plat)) {
+    toast(`פלטפורמת ${PLATFORM_LABELS[plat] || plat} אינה נתמכת לסריקה אוטומטית`, 'error');
+    return;
+  }
 
-  const start = await api('start_scrape', name, url, cookie, null);
+  const start = await api('start_scrape', name, url, cookie, maxPages);
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל סריקה', 'error'); return; }
 
   const wrap = document.getElementById('sync-progress-wrap');
@@ -2754,12 +2925,21 @@ async function doStartScrape() {
   startScrapeMonitor();
 }
 
+// משאיר את הדפדפן לצייר (מסתיר באנר וכו') לפני עבודה כבדה סינכרונית
+function _yieldPaint() {
+  return new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+}
+
 function startScrapeMonitor() {
   if (_scrapePoll) clearInterval(_scrapePoll);
   const banner = document.getElementById('scrape-banner');
   if (banner) banner.style.display = '';
 
+  let busy = false;   // מונע הצטברות של polls איטיים חופפים
   _scrapePoll = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
     const p = await api('get_scrape_progress');
     if (!p) return;
     const pct = p.total_pages ? Math.round((p.page / p.total_pages) * 100) : 0;
@@ -2779,7 +2959,7 @@ function startScrapeMonitor() {
     const mBar = document.getElementById('sync-bar');
     const mTxt = document.getElementById('sync-progress-text');
     if (mBar) mBar.style.width = pct + '%';
-    if (mTxt) mTxt.textContent = label + ` · התנגשויות ${p.conflicts}`;
+    if (mTxt) mTxt.textContent = label;
 
     if (p.done || !p.running) {
       clearInterval(_scrapePoll); _scrapePoll = null;
@@ -2789,20 +2969,13 @@ function startScrapeMonitor() {
       } else {
         const msg = p.cancelled ? 'הסריקה בוטלה' : 'הסריקה הושלמה';
         let extra = '';
-        if (p.auto_resolved) extra = ` · ${p.auto_resolved} התנגשויות נפתרו אוטומטית`;
-        else if (p.conflicts) extra = ` · ${p.conflicts} התנגשויות`;
-        if (p.skipped && p.skipped.length) extra += ` · דולגו ${p.skipped.length} פורומים`;
+        if (p.skipped && p.skipped.length) extra = ` · דולגו ${p.skipped.length} פורומים`;
         toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`, 'success');
       }
+      await _yieldPaint();   // תן לבאנר להיעלם לפני הטעינה הכבדה
       await loadNicks(document.getElementById('search-input').value);
-      if (!p.cancelled && p.conflicts > 0) {
-        setTimeout(() => {
-          if (confirm(`נמצאו ${p.conflicts} התנגשויות. לפתור אותן עכשיו?`)) {
-            if (typeof openConflictsResolver === 'function') openConflictsResolver();
-          }
-        }, 300);
-      }
     }
+    } finally { busy = false; }
   }, 700);
 }
 
@@ -2810,13 +2983,15 @@ function openChazonishnikHelp() {
   openChazonishnik();
 }
 
-function onSyncForumChange() {
+function updateSyncHint() {
   const sel = document.getElementById('sync-forum');
   const opt = sel?.selectedOptions[0];
   const hint = document.getElementById('sync-forum-hint');
   if (!opt || !hint) return;
-  if (opt.dataset.scrapable === '0') {
-    hint.innerHTML = '⛔ פורום זה כנראה אינו בנוי על NodeBB ולא ניתן לסריקה אוטומטית.';
+  const plat = opt.dataset.platform || 'nodebb';
+  if (!SCRAPABLE_PLATFORMS.has(plat)) {
+    hint.innerHTML = `⛔ פלטפורמת ${esc(PLATFORM_LABELS[plat] || plat)} — אין API ציבורי לרשימת משתמשים, ` +
+                     `לכן אין סריקה אוטומטית. אפשר להוסיף ולנהל ניקים בפורום זה ידנית.`;
     hint.style.color = 'var(--danger)';
   } else if (opt.dataset.login === '1') {
     hint.innerHTML = '🔒 פורום זה דורש התחברות — הזן עוגיית express.sid למטה (ראה "🍪 איך משיגים?").';
@@ -2824,6 +2999,12 @@ function onSyncForumChange() {
   } else {
     hint.innerHTML = '';
   }
+}
+
+// מופעל בהחלפת פורום: עדכן רמז + טען עוגייה שמורה של הפורום החדש
+function onSyncForumChange() {
+  updateSyncHint();
+  syncPrefillCookie();
 }
 
 async function skipCurrentForum() {
@@ -2840,68 +3021,15 @@ async function stopScrape() {
   toast('הסריקה תיעצר…', 'info');
 }
 
-// ══ פותר התנגשויות גלובלי ═══════════════════════════════════════════════
-async function openConflictsResolver() {
-  const conflicts = await api('get_all_conflicts') || [];
-  openModal('⚠️ פתרון התנגשויות', renderResolverBody(conflicts), [
-    { label: 'העדף הכל: החדש',  cls: 'btn-warning', action: () => resolveAllConflicts('new') },
-    { label: 'העדף הכל: הקיים', cls: 'btn-ghost',   action: () => resolveAllConflicts('existing') },
-    { label: 'סגור',            cls: 'btn-ghost',   action: closeModal },
-  ], 'modal-lg');
-}
+// (הוסר: "פותר התנגשויות גלובלי" — הסריקה עברה למנוע המקורות ואינה מייצרת
+//  עוד רשומות nick_conflicts; התנגשויות legacy עדיין נצפות ונסגרות בדיאלוג הניק.)
 
-function renderResolverBody(conflicts) {
-  if (!conflicts.length) {
-    return `<div style="text-align:center;padding:30px;color:var(--subtext)">
-      <div style="font-size:44px;margin-bottom:10px">✓</div>אין התנגשויות פתוחות</div>`;
-  }
-  return `
-    <p style="color:var(--subtext);font-size:13px;margin-bottom:14px">
-      לכל שדה: הערך הקיים מול הערך שנסרק. בחר איזה לשמור, או השתמש בכפתורים למטה לפתרון גורף.
-    </p>
-    <div id="resolver-list">
-      ${conflicts.map(c => `
-        <div class="conflict-item" data-cid="${c.id}" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px;border-bottom:1px solid var(--border-soft)">
-          <div style="flex:1;min-width:220px">
-            <div style="font-weight:700;font-size:12px;margin-bottom:4px">
-              ${esc(c.username)} · <span style="color:var(--accent-2)">${esc(c.field_name)}</span>
-            </div>
-            <div style="font-size:12.5px">
-              <span style="color:var(--subtext)">קיים:</span> ${esc(String(c.current_value ?? '') || '(ריק)')}
-              &nbsp;→&nbsp;
-              <span style="color:var(--subtext)">חדש:</span> <b>${esc(c.conflicting_value)}</b>
-            </div>
-          </div>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-sm btn-primary" onclick="resolveOne(${c.id}, true)">קבל חדש</button>
-            <button class="btn btn-sm btn-ghost"   onclick="resolveOne(${c.id}, false)">שמור קיים</button>
-          </div>
-        </div>`).join('')}
-    </div>`;
-}
-
-async function resolveOne(conflictId, acceptNew) {
-  if (acceptNew) await api('apply_conflict', conflictId);
-  else           await api('delete_conflict', conflictId);
-  const el = document.querySelector(`.conflict-item[data-cid="${conflictId}"]`);
-  if (el) el.remove();
-  await loadNicks(document.getElementById('search-input').value);
-  const list = document.getElementById('resolver-list');
-  if (list && !list.querySelector('.conflict-item')) {
-    list.innerHTML = `<div style="text-align:center;padding:24px;color:var(--subtext)">✓ כל ההתנגשויות נפתרו</div>`;
-  }
-}
-
-async function resolveAllConflicts(prefer) {
-  const label = prefer === 'new' ? 'להחיל את כל הערכים החדשים' : 'לשמור על כל הערכים הקיימים';
-  if (!confirm(`${label}?`)) return;
-  const r = await api('resolve_all_conflicts', prefer);
-  await loadNicks(document.getElementById('search-input').value);
-  toast(`${r?.count ?? 0} התנגשויות נפתרו`, 'success');
-  closeModal();
-}
-
-function openChazonishnik() {
+async function openChazonishnik() {
+  const forums = await api('get_scrapable_forums') || [];
+  // Chazonishnik מסתמך על נתיבי הפוסטים של NodeBB בלבד
+  const opts = forums.filter(f => (f.url || '').trim() && (f.platform || 'nodebb') === 'nodebb')
+    .map(f => `<option value="${esc(f.url)}" ${/mitmachim/.test(f.url) ? 'selected' : ''}>${esc(f.name)}</option>`)
+    .join('');
   openModal('📖 Chazonishnik — ניתוח פעילות משתמש', `
     <div style="font-size:13.5px;line-height:1.7">
       <div style="padding:12px 14px;background:var(--card2);border-radius:10px;margin-bottom:14px">
@@ -2910,15 +3038,17 @@ function openChazonishnik() {
         והפוסטים המוצלחים ביותר.
       </div>
 
-      <div style="padding:10px 12px;border:1px solid var(--accent-2);border-radius:8px;margin-bottom:14px;font-size:12.5px">
-        ⚠️ כרגע נתמך <b>רק עבור פורום מתמחים טופ</b> (mitmachim.top). תמיכה בפורומים נוספים תתווסף.
+      <div class="form-group" style="margin-bottom:14px">
+        <label class="form-label">פורום</label>
+        <select id="chz-forum" class="form-select" onchange="chzPrefillCookie()">${opts || '<option value="https://mitmachim.top">מתמחים טופ</option>'}</select>
       </div>
 
       <div style="margin-bottom:14px">
-        <b>🍪 דורש עוגיית התחברות (express.sid)</b>
+        <b>🍪 עוגיית התחברות (express.sid)</b>
         <div style="color:var(--subtext);font-size:12.5px;margin-top:4px">
-          כדי לגשת להיסטוריית הפוסטים צריך "עוגיית" התחברות אישית שלך מהפורום.
-          זו מחרוזת ארוכה שמתחילה ב-<code>s%3A</code>. בחר אחת משתי הדרכים:
+          בפורומים שמסתירים היסטוריית פוסטים מאורחים (למשל מתמחים טופ) נדרשת "עוגיית"
+          התחברות אישית שלך — מחרוזת ארוכה שמתחילה ב-<code>s%3A</code>. בפורום ציבורי
+          אפשר להשאיר ריק. כך משיגים אותה:
         </div>
       </div>
 
@@ -2957,15 +3087,28 @@ function openChazonishnik() {
         <label class="form-label">שם משתמש לניתוח</label>
         <input id="chz-user" class="form-input" placeholder="שם המשתמש בפורום (למשל: בנימין)">
       </div>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">עוגיית express.sid <span style="font-size:10px;opacity:.6">(אופציונלי בפורום ציבורי · נשמרת לפעם הבאה)</span></label>
+        <input id="chz-cookie" class="form-input" dir="ltr" placeholder="s%3A...  (השאר ריק אם הפורום ציבורי)">
+      </div>
       <div class="form-group" style="margin-bottom:6px">
-        <label class="form-label">עוגיית express.sid</label>
-        <input id="chz-cookie" class="form-input" dir="ltr" placeholder="s%3A...">
+        <label class="form-label">הגבל מספר פוסטים <span style="font-size:10px;opacity:.6">(אופציונלי — למשתמשים ותיקים הניתוח עלול להיות ארוך)</span></label>
+        <input id="chz-maxposts" type="number" min="1" class="form-input" placeholder="הכל (ריק)">
       </div>
     </div>
   `, [
     { label: '📊 נתח פעילות', cls: 'btn-primary', action: runChazonishnik },
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
+  chzPrefillCookie();
+}
+
+async function chzPrefillCookie() {
+  const url = document.getElementById('chz-forum')?.value || '';
+  const input = document.getElementById('chz-cookie');
+  if (!input || !url) return;
+  const saved = await api('get_saved_cookie', url);
+  if (saved) input.value = saved;
 }
 
 function openExt(url) {
@@ -2976,10 +3119,11 @@ let _chzPoll = null;
 
 async function runChazonishnik() {
   const username = document.getElementById('chz-user')?.value.trim();
-  const cookie   = document.getElementById('chz-cookie')?.value.trim();
+  const cookie   = document.getElementById('chz-cookie')?.value.trim() || '';
+  const baseUrl  = document.getElementById('chz-forum')?.value || 'https://mitmachim.top';
+  const maxPosts = parseInt(document.getElementById('chz-maxposts')?.value) || null;
   if (!username) { toast('הזן שם משתמש', 'error'); return; }
-  if (!cookie)   { toast('נדרשת עוגיית express.sid', 'error'); return; }
-  const start = await api('run_chazonishnik', username, cookie);
+  const start = await api('run_chazonishnik', username, cookie, baseUrl, maxPosts);
   if (!start?.ok) { toast('שגיאה: ' + (start?.error || ''), 'error'); return; }
   showChazonishnikProgress(username);
 }
@@ -3006,7 +3150,11 @@ function startChazonishnikMonitor() {
   const banner = document.getElementById('chz-banner');
   if (banner) banner.style.display = '';
 
+  let busy = false;
   _chzPoll = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
     const p = await api('get_chazonishnik_progress');
     if (!p) return;
     let label = 'מתחיל…';
@@ -3026,7 +3174,9 @@ function startChazonishnikMonitor() {
       if (p.cancelled) { toast('הניתוח בוטל', 'info'); if (isModalOpen()) closeModal(); return; }
       if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (isModalOpen()) closeModal(); return; }
       if (p.html) { showChazonishnikReport(p.html, p.count); toast('הניתוח הושלם ✓', 'success'); }
+      else if (isModalOpen()) closeModal();
     }
+    } finally { busy = false; }
   }, 600);
 }
 
@@ -3066,7 +3216,8 @@ async function saveChazonishnikReport(html) {
 
 async function openStinknik() {
   const forums = await api('get_scrapable_forums') || [];
-  const opts = forums.filter(f => (f.url||'').trim())
+  // Stinknik מסתמך על נתיבי הפוסטים של NodeBB בלבד
+  const opts = forums.filter(f => (f.url||'').trim() && (f.platform || 'nodebb') === 'nodebb')
     .map(f => `<option value="${esc(f.url)}">${esc(f.name)}</option>`).join('');
   openModal('🦨 Stinknik — כל הדיסלייקים של ניק', `
     <div style="font-size:13.5px;line-height:1.7">
@@ -3081,35 +3232,49 @@ async function openStinknik() {
       </div>
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">פורום</label>
-        <select id="stink-forum" class="form-select">${opts}</select>
+        <select id="stink-forum" class="form-select" onchange="stinkPrefillCookie()">${opts}</select>
       </div>
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">שם משתמש או קישור לפרופיל</label>
         <input id="stink-user" class="form-input" placeholder="בנימין  או  קישור מלא לפרופיל">
       </div>
-      <div class="form-group" style="margin-bottom:6px">
-        <label class="form-label" style="font-size:11px;color:var(--subtext)">עוגייה (אופציונלי)</label>
+      <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label" style="font-size:11px;color:var(--subtext)">עוגייה (אופציונלי · נשמרת לפעם הבאה)</label>
         <input id="stink-cookie" class="form-input" dir="ltr" placeholder="השאר ריק ברוב המקרים">
+      </div>
+      <div class="form-group" style="margin-bottom:6px">
+        <label class="form-label" style="font-size:11px;color:var(--subtext)">הגבל מספר פוסטים (אופציונלי — לניקים ותיקים הסריקה עלולה להיות ארוכה)</label>
+        <input id="stink-maxposts" type="number" min="1" class="form-input" placeholder="הכל (ריק)">
       </div>
     </div>
   `, [
     { label: '🦨 מצא דיסלייקים', cls: 'btn-primary', action: runStinknik },
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
+  stinkPrefillCookie();
 }
 
 let _stinkPoll = null;
 
+async function stinkPrefillCookie() {
+  const url = document.getElementById('stink-forum')?.value || '';
+  const input = document.getElementById('stink-cookie');
+  if (!input || !url) return;
+  const saved = await api('get_saved_cookie', url);
+  if (saved) input.value = saved;
+}
+
 async function runStinknik() {
   const user = document.getElementById('stink-user')?.value.trim();
   const cookie = document.getElementById('stink-cookie')?.value.trim() || '';
+  const maxPosts = parseInt(document.getElementById('stink-maxposts')?.value) || null;
   let baseUrl = document.getElementById('stink-forum')?.value || 'https://mitmachim.top';
   // אם הודבק קישור מלא — נחלץ ממנו את הדומיין
   if (user && /^https?:\/\//i.test(user)) {
     try { const u = new URL(user); baseUrl = u.origin; } catch (e) {}
   }
   if (!user) { toast('הזן שם משתמש או קישור', 'error'); return; }
-  const start = await api('run_stinknik', user, cookie, baseUrl);
+  const start = await api('run_stinknik', user, cookie, baseUrl, maxPosts);
   if (!start?.ok) { toast('שגיאה: ' + (start?.error || ''), 'error'); return; }
   showStinknikProgress(user);
 }
@@ -3132,7 +3297,11 @@ function startStinknikMonitor() {
   if (_stinkPoll) clearInterval(_stinkPoll);
   const banner = document.getElementById('stink-banner');
   if (banner) banner.style.display = '';
+  let busy = false;
   _stinkPoll = setInterval(async () => {
+    if (busy) return;
+    busy = true;
+    try {
     const p = await api('get_stinknik_progress');
     if (!p) return;
     const label = `נסרקו ${p.checked} פוסטים · ${p.disliked} עם דיסים`;
@@ -3146,7 +3315,9 @@ function startStinknikMonitor() {
       if (p.cancelled) { toast('הסריקה בוטלה', 'info'); if (isModalOpen()) closeModal(); return; }
       if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (isModalOpen()) closeModal(); return; }
       if (p.html) { showStinknikReport(p.html, p.disliked); toast('הסריקה הושלמה ✓', 'success'); }
+      else if (isModalOpen()) closeModal();
     }
+    } finally { busy = false; }
   }, 600);
 }
 
@@ -3234,8 +3405,8 @@ function buildCardElement(n) {
     const initial = (n.username || '?').trim().charAt(0).toUpperCase();
     const nickCol = n.nick_color || color;
     const avatarHtml = n.avatar_image
-      ? `<div class="card-avatar" style="padding:0;overflow:hidden"><img src="${n.avatar_image}" style="width:100%;height:100%;object-fit:cover"></div>`
-      : `<div class="card-avatar" style="background:linear-gradient(135deg,${nickCol},${shade(nickCol,-25)})">${esc(initial)}</div>`;
+      ? `<div class="card-avatar" style="padding:0;overflow:hidden"><img src="${esc(n.avatar_image)}" style="width:100%;height:100%;object-fit:cover"></div>`
+      : `<div class="card-avatar" style="background:linear-gradient(135deg,${esc(nickCol)},${esc(shade(nickCol,-25))})">${esc(initial)}</div>`;
 
     // rows — only fields that exist
     const cf = n.conflict_fields ? String(n.conflict_fields).split(',') : [];

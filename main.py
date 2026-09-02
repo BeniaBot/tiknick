@@ -29,8 +29,8 @@ import scraper
 _scrape_state = {
     "running": False, "done": False, "error": None,
     "page": 0, "total_pages": 0,
-    "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
-    "forum": None, "cancelled": False, "auto_resolved": 0,
+    "added": 0, "updated": 0, "unchanged": 0,
+    "forum": None, "cancelled": False,
 }
 _scrape_cancel = threading.Event()
 _scrape_skip = threading.Event()
@@ -56,8 +56,22 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.0"
+APP_VERSION = "0.8.2"
 GITHUB_REPO = "BeniaBot/tiknick"
+
+def _install_type():
+    """
+    'installer' אם רצים מהתקנה (יש קובץ סימון install-type.txt ליד ה-EXE,
+    שהאינסטולר מתקין), אחרת 'portable'. קובע לאיזה נכס לעדכן.
+    """
+    try:
+        if getattr(sys, "frozen", False):
+            exe_dir = os.path.dirname(sys.executable)
+            if os.path.exists(os.path.join(exe_dir, "install-type.txt")):
+                return "installer"
+    except Exception:
+        pass
+    return "portable"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
 def resource_path(rel):
@@ -188,23 +202,39 @@ class API:
         return [f for f in forums if (f.get("url") or "").strip()]
 
     def check_forum(self, forum_url, cookie=""):
-        """בדיקה מקדימה שהכתובת היא פורום NodeBB עם API פעיל"""
+        """בדיקה מקדימה של הפורום — מזהה פלטפורמה (NodeBB/Discourse) ושומר עוגייה+פלטפורמה"""
         try:
-            return scraper.check_forum(forum_url, cookie=cookie or None)
+            res = scraper.check_forum(forum_url, cookie=cookie or None)
+            if res.get("platform") and res["platform"] != "unknown":
+                db.set_forum_platform_by_url(forum_url, res["platform"])
+            if (cookie or "").strip():
+                db.save_cookie_for_url(forum_url, cookie)
+            return res
         except Exception as e:
-            return {"ok": False, "user_count": None, "title": None, "error": str(e)}
+            return {"ok": False, "user_count": None, "title": None,
+                    "platform": "unknown", "error": str(e)}
 
     def start_scrape(self, forum_name, forum_url, cookie="", max_pages=None):
         """מתחיל סריקה ברקע. הממשק יסקור התקדמות דרך get_scrape_progress."""
         if _scrape_state["running"]:
             return {"ok": False, "error": "סריקה כבר רצה"}
 
+        # שמור עוגייה לדומיין (לשימוש חוזר), והשתמש בשמורה אם לא סופקה חדשה
+        if (cookie or "").strip():
+            db.save_cookie_for_url(forum_url, cookie)
+        else:
+            cookie = db.get_cookie_for_url(forum_url) or ""
+        platform = db.get_forum_platform(forum_name)
+
         _scrape_cancel.clear()
         _scrape_state.update({
             "running": True, "done": False, "error": None,
             "page": 0, "total_pages": 0,
-            "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
+            "added": 0, "updated": 0, "unchanged": 0,
             "forum": forum_name, "cancelled": False,
+            # אפס מצב רב-פורומי שנותר מ'סרוק הכל'/'סנכרן נבחרים' קודמים
+            "all_mode": False, "selected_mode": False,
+            "forum_index": 0, "forum_total": 0, "skipped": [],
         })
 
         def _progress(p):
@@ -214,7 +244,6 @@ class API:
                 "added": p.get("added", 0),
                 "updated": p.get("updated", 0),
                 "unchanged": p.get("unchanged", 0),
-                "conflicts": p.get("conflicts", 0),
             })
 
         def _run():
@@ -226,14 +255,9 @@ class API:
                     progress_cb=_progress,
                     cancel_flag=_scrape_cancel,
                     max_pages=mp,
+                    platform=platform,
                 )
                 _scrape_state["cancelled"] = _scrape_cancel.is_set()
-                # החלת מדיניות התנגשות אוטומטית (אם הוגדרה)
-                policy = db.get_setting("conflict_policy", "ask")
-                if policy in ("new", "existing") and _scrape_state["conflicts"] > 0:
-                    resolved = db.resolve_all_conflicts(policy)
-                    _scrape_state["auto_resolved"] = resolved
-                    _scrape_state["conflicts"] = 0
             except Exception as e:
                 _scrape_state["error"] = str(e)
             finally:
@@ -246,7 +270,7 @@ class API:
     def get_scrape_progress(self):
         return dict(_scrape_state)
 
-    def start_scrape_all(self, cookie=""):
+    def start_scrape_all(self, cookie="", max_pages=None):
         """סורק את כל הפורומים ברצף, עם דילוג אוטומטי על פורום שנכשל."""
         if _scrape_state["running"]:
             return {"ok": False, "error": "סריקה כבר רצה"}
@@ -259,23 +283,24 @@ class API:
         _scrape_state.update({
             "running": True, "done": False, "error": None,
             "page": 0, "total_pages": 0,
-            "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
-            "forum": None, "cancelled": False, "auto_resolved": 0,
+            "added": 0, "updated": 0, "unchanged": 0,
+            "forum": None, "cancelled": False,
             "all_mode": True, "forum_index": 0, "forum_total": len(forums),
             "skipped": [],
         })
+
+        # מצטבר מהפורומים שהסתיימו; ההתקדמות מציגה מצטבר + הפורום הרץ כרגע
+        base = {"added": 0, "updated": 0}
 
         def _progress(p):
             _scrape_state.update({
                 "page": p.get("page", 0),
                 "total_pages": p.get("total_pages", 0),
-                "added": _scrape_state.get("added", 0),  # מצטבר לאורך כל הפורומים
+                "added":   base["added"]   + p.get("added", 0),
+                "updated": base["updated"] + p.get("updated", 0),
             })
-            _scrape_state["cur_added"] = p.get("added", 0)
-            _scrape_state["cur_updated"] = p.get("updated", 0)
 
         def _run():
-            total_added = total_updated = total_conflicts = 0
             for i, f in enumerate(forums):
                 if _scrape_cancel.is_set():
                     _scrape_state["cancelled"] = True
@@ -286,28 +311,26 @@ class API:
                 _scrape_state["total_pages"] = 0
                 _scrape_skip.clear()
                 try:
+                    # עוגייה שמורה לפורום זה גוברת על העוגייה הכללית (אם יש)
+                    fcookie = db.get_cookie_for_url(f["url"]) or cookie or None
+                    mp = int(max_pages) if max_pages else None
                     stats = scraper.scrape_forum(
                         f["name"], f["url"], db,
-                        cookie=cookie or None,
+                        cookie=fcookie,
                         progress_cb=_progress,
                         cancel_flag=_scrape_cancel,
                         skip_flag=_scrape_skip,
+                        max_pages=mp,
+                        platform=f.get("platform") or "nodebb",
                     )
-                    total_added   += stats.get("added", 0)
-                    total_updated += stats.get("updated", 0)
-                    total_conflicts += stats.get("conflicts", 0)
-                    _scrape_state["added"]   = total_added
-                    _scrape_state["updated"] = total_updated
-                    _scrape_state["conflicts"] = total_conflicts
+                    base["added"]   += stats.get("added", 0)
+                    base["updated"] += stats.get("updated", 0)
+                    _scrape_state["added"]   = base["added"]
+                    _scrape_state["updated"] = base["updated"]
                 except Exception as e:
                     # דילוג אוטומטי על פורום שנכשל
                     _scrape_state["skipped"].append({"forum": f["name"], "error": str(e)})
                     continue
-            # מדיניות התנגשות אוטומטית בסוף
-            policy = db.get_setting("conflict_policy", "ask")
-            if policy in ("new", "existing") and _scrape_state["conflicts"] > 0:
-                _scrape_state["auto_resolved"] = db.resolve_all_conflicts(policy)
-                _scrape_state["conflicts"] = 0
             _scrape_state["running"] = False
             _scrape_state["done"] = True
 
@@ -338,14 +361,21 @@ class API:
         _scrape_state.update({
             "running": True, "done": False, "error": None,
             "page": 0, "total_pages": len(ids),
-            "added": 0, "updated": 0, "unchanged": 0, "conflicts": 0,
-            "forum": None, "cancelled": False, "auto_resolved": 0,
+            "added": 0, "updated": 0, "unchanged": 0,
+            "forum": None, "cancelled": False,
             "all_mode": False, "selected_mode": True,
             "forum_index": 0, "forum_total": 0, "skipped": [],
         })
 
-        # מפת URL לכל פורום
-        forum_urls = {f["name"]: (f.get("url") or "").strip() for f in db.get_forums()}
+        # מפת URL ופלטפורמה לכל פורום (קריאת get_forums אחת)
+        _forums = db.get_forums()
+        forum_urls = {f["name"]: (f.get("url") or "").strip() for f in _forums}
+        forum_plats = {f["name"]: (f.get("platform") or "nodebb") for f in _forums}
+        _cookie_cache = {}   # origin/url → cookie, כדי לא לפתוח חיבור DB לכל ניק
+        def _cookie_for(u):
+            if u not in _cookie_cache:
+                _cookie_cache[u] = db.get_cookie_for_url(u) or cookie or None
+            return _cookie_cache[u]
 
         def _run():
             updated = 0
@@ -361,19 +391,16 @@ class API:
                 if not url:
                     _scrape_state["skipped"].append({"forum": nick.get("username",""), "error": "אין URL לפורום"})
                     continue
+                plat = forum_plats.get(nick["forum"], "nodebb")
+                fcookie = _cookie_for(url)
                 try:
-                    mapped = scraper.scrape_single_user(url, nick["username"], cookie=cookie or None)
+                    mapped = scraper.scrape_single_user(url, nick["username"],
+                                                        cookie=fcookie, platform=plat)
                     if not mapped:
                         _scrape_state["skipped"].append({"forum": nick["username"], "error": "לא נמצא"})
                         continue
-                    # אלץ את ערך הסריקה לנצח — כתיבה ישירה + רישום למקור סריקה
-                    scrape_src = db.get_scrape_source()
-                    for field, val in mapped.items():
-                        if val in (None, ""):
-                            continue
-                        db.record_field_value(nid, field, val, scrape_src["id"])
-                        # בחירה מפורשת → ערך הסריקה מנצח בתצוגה
-                        db.force_field_value(nid, field, val)
+                    # בחירה מפורשת → ערך הסריקה מנצח בתצוגה (הכול בחיבור DB אחד)
+                    db.force_scraped_values(nid, mapped)
                     updated += 1
                     _scrape_state["updated"] = updated
                 except Exception as e:
@@ -425,14 +452,25 @@ class API:
             logging.exception("open_url failed for %s", url)
             return {"ok": False, "error": str(e)}
 
-    def run_chazonishnik(self, username, cookie, base_url="https://mitmachim.top"):
-        """מתחיל ניתוח פעילות ברקע. התקדמות דרך get_chazonishnik_progress."""
+    def run_chazonishnik(self, username, cookie="", base_url="https://mitmachim.top",
+                         max_posts=None):
+        """מתחיל ניתוח פעילות ברקע. התקדמות דרך get_chazonishnik_progress.
+        עוגייה אופציונלית — פורומים ציבוריים חושפים היסטוריית פוסטים גם בלעדיה.
+        max_posts — הגבלת מספר הפוסטים הנסרקים (None = הכל)."""
         if _chz_state["running"]:
             return {"ok": False, "error": "ניתוח כבר רץ"}
         if not username or not username.strip():
             return {"ok": False, "error": "הזן שם משתמש"}
-        if not cookie or not cookie.strip():
-            return {"ok": False, "error": "נדרשת עוגיית express.sid"}
+        base_url = base_url or "https://mitmachim.top"
+        cookie = (cookie or "").strip()
+        if cookie:
+            db.save_cookie_for_url(base_url, cookie)
+        else:
+            cookie = db.get_cookie_for_url(base_url) or ""
+        try:
+            max_posts = int(max_posts) if max_posts else None
+        except (ValueError, TypeError):
+            max_posts = None
 
         _chz_cancel.clear()
         _chz_state.update({"running": True, "done": False, "error": None,
@@ -455,7 +493,8 @@ class API:
                 save_path = os.path.join(out_dir, f"chazonishnik_{safe}.html")
                 result = chazonishnik.analyze_user(
                     username, cookie, base_url=base_url,
-                    progress=_progress, save_path=save_path, cancel_flag=_chz_cancel)
+                    progress=_progress, save_path=save_path, cancel_flag=_chz_cancel,
+                    max_posts=max_posts)
                 if result.get("cancelled"):
                     _chz_state["cancelled"] = True
                 elif result.get("ok"):
@@ -478,12 +517,24 @@ class API:
         return dict(_chz_state)
 
     # ── Stinknik — ניתוח דיסלייקים ─────────────────────────────────
-    def run_stinknik(self, user_input, cookie="", base_url="https://mitmachim.top"):
-        """מתחיל ניתוח דיסלייקים ברקע. התקדמות דרך get_stinknik_progress."""
+    def run_stinknik(self, user_input, cookie="", base_url="https://mitmachim.top",
+                     max_posts=None):
+        """מתחיל ניתוח דיסלייקים ברקע. התקדמות דרך get_stinknik_progress.
+        max_posts — הגבלת מספר הפוסטים הנסרקים (None = הכל)."""
         if _stink_state["running"]:
             return {"ok": False, "error": "ניתוח כבר רץ"}
         if not user_input or not user_input.strip():
             return {"ok": False, "error": "הזן שם משתמש או קישור לפרופיל"}
+        base_url = base_url or "https://mitmachim.top"
+        cookie = (cookie or "").strip()
+        if cookie:
+            db.save_cookie_for_url(base_url, cookie)
+        else:
+            cookie = db.get_cookie_for_url(base_url) or ""
+        try:
+            max_posts = int(max_posts) if max_posts else None
+        except (ValueError, TypeError):
+            max_posts = None
         _stink_cancel.clear()
         _stink_state.update({"running": True, "done": False, "error": None,
                              "checked": 0, "page": 0, "disliked": 0,
@@ -498,8 +549,9 @@ class API:
             try:
                 import stinknik
                 result = stinknik.analyze_dislikes(
-                    user_input, base_url=(base_url or "https://mitmachim.top"),
-                    cookie=(cookie or None), progress=_progress, cancel_flag=_stink_cancel)
+                    user_input, base_url=base_url,
+                    cookie=(cookie or None), progress=_progress, cancel_flag=_stink_cancel,
+                    max_posts=max_posts)
                 if result.get("cancelled"):
                     _stink_state["cancelled"] = True
                 elif result.get("ok"):
@@ -575,11 +627,12 @@ class API:
 
     # ── בדיקת עדכונים מ-GitHub ──────────────────────────────────────
     def get_app_version(self):
-        return {"version": APP_VERSION, "repo": GITHUB_REPO}
+        return {"version": APP_VERSION, "repo": GITHUB_REPO,
+                "install_type": _install_type()}
 
     def download_update(self, download_url):
-        """מוריד את ה-EXE החדש לתיקייה זמנית ליד התוכנה. מחזיר את הנתיב."""
-        import urllib.request, sys as _sys
+        """מוריד את קובץ העדכון (EXE נייד או Setup) לפי סוג ההתקנה. מחזיר את הנתיב."""
+        import urllib.request, sys as _sys, tempfile
         if not download_url:
             return {"ok": False, "error": "אין קישור הורדה"}
         # רק כשרצים כ-EXE (frozen)
@@ -587,8 +640,11 @@ class API:
             return {"ok": False, "error": "עדכון מתוך התוכנה זמין רק בגרסת ה-EXE"}
         try:
             cur_exe = _sys.executable
-            folder = os.path.dirname(cur_exe)
-            new_path = os.path.join(folder, "TikNick_new.exe")
+            if _install_type() == "installer":
+                # אינסטולר: מורידים לתיקייה זמנית (תיקיית ההתקנה לרוב אינה כתיבה)
+                new_path = os.path.join(tempfile.gettempdir(), "TikNick-Setup-new.exe")
+            else:
+                new_path = os.path.join(os.path.dirname(cur_exe), "TikNick_new.exe")
             req = urllib.request.Request(download_url, headers={"User-Agent": "TikNick-Updater"})
             with urllib.request.urlopen(req, timeout=60) as resp, open(new_path, "wb") as out:
                 total = int(resp.headers.get("Content-Length", 0))
@@ -619,6 +675,22 @@ class API:
             return {"ok": False, "error": "זמין רק בגרסת ה-EXE"}
         if not new_exe_path or not os.path.exists(new_exe_path):
             return {"ok": False, "error": "קובץ העדכון לא נמצא"}
+
+        # גרסת אינסטולר: מריצים את ה-Setup בשקט (הוא מחליף את הקבצים,
+        # סוגר את התהליך הישן אם נשאר, ומפעיל מחדש דרך סעיף [Run])
+        if _install_type() == "installer":
+            try:
+                subprocess.Popen([new_exe_path, "/SILENT", "/SUPPRESSMSGBOXES",
+                                  "/NOCANCEL", "/CLOSEAPPLICATIONS"])
+                try:
+                    webview.windows[0].destroy()
+                except Exception:
+                    pass
+                os._exit(0)
+            except Exception as e:
+                logging.exception("apply_update (installer) failed")
+                return {"ok": False, "error": str(e)}
+
         try:
             cur_exe = _sys.executable
             exe_name = os.path.basename(cur_exe)
@@ -718,20 +790,35 @@ del "%~f0"
         logging.info("Update check: current=%s%s latest=%s%s newer=%s",
                      current, cur_t, latest, lat_t, is_newer)
 
-        # מצא את קובץ ה-EXE להורדה
-        exe_url = ""
+        # בחר את הנכס המתאים לסוג ההתקנה:
+        #   installer → קובץ Setup (שם מכיל setup/install)
+        #   portable  → ה-EXE הרגיל
+        install_type = _install_type()
+        portable_url = setup_url = ""
         for asset in data.get("assets", []):
-            if asset.get("name", "").lower().endswith(".exe"):
-                exe_url = asset.get("browser_download_url", "")
-                break
+            name = asset.get("name", "").lower()
+            if not name.endswith(".exe"):
+                continue
+            url = asset.get("browser_download_url", "")
+            if "setup" in name or "install" in name:
+                if not setup_url:
+                    setup_url = url
+            elif not portable_url:
+                portable_url = url
+
+        # התאמה קפדנית: ניידת מקבלת רק EXE נייד, מותקנת רק Setup.
+        # אם הנכס המתאים חסר — נשארים בלי קישור הורדה ישיר (הממשק יפתח את דף ה-Release),
+        # כדי לא להריץ בטעות מתקין על גרסה ניידת או להפך.
+        download_url = setup_url if install_type == "installer" else portable_url
 
         return {
             "ok": True,
             "current": current,
             "latest": latest,
             "update_available": is_newer,
+            "install_type": install_type,
             "release_url": data.get("html_url", f"https://github.com/{GITHUB_REPO}/releases"),
-            "download_url": exe_url,
+            "download_url": download_url,
             "notes": (data.get("body") or "")[:800],
         }
 
@@ -791,23 +878,10 @@ del "%~f0"
         db.delete_contact(int(contact_id))
         return {"ok": True}
 
-    # ── התנגשויות ──────────────────────────────────────────────────
+    # ── התנגשויות (תצוגת legacy בדיאלוג הניק בלבד) ──────────────────
     def delete_conflict(self, conflict_id):
         db.delete_conflict(int(conflict_id))
         return {"ok": True}
-
-    def get_all_conflicts(self):
-        return db.get_all_conflicts()
-
-    def apply_conflict(self, conflict_id):
-        """מקבל את הערך החדש מההתנגשות ומחיל אותו על הניק"""
-        ok = db.apply_conflict(int(conflict_id))
-        return {"ok": ok}
-
-    def resolve_all_conflicts(self, prefer):
-        """prefer='new' מחיל את כל החדשים; prefer='existing' שומר קיים"""
-        n = db.resolve_all_conflicts(prefer)
-        return {"ok": True, "count": n}
 
     # ── הגדרות סנכרון ──────────────────────────────────────────────
     def get_sync_settings(self):
@@ -828,17 +902,6 @@ del "%~f0"
         db.set_forum_io_flag(forum_name, bool(included))
         return {"ok": True}
 
-    # section 3: מדיניות התנגשות בסנכרון מהאינטרנט
-    # 'ask' = תמיד לשאול (ברירת מחדל), 'new' = תמיד להעדיף חדש, 'existing' = תמיד לשמור קיים
-    def get_conflict_policy(self):
-        return db.get_setting("conflict_policy", "ask")
-
-    def set_conflict_policy(self, policy):
-        if policy not in ("ask", "new", "existing"):
-            policy = "ask"
-        db.set_setting("conflict_policy", policy)
-        return {"ok": True}
-
     def get_setting(self, key, default=""):
         return db.get_setting(key, default)
 
@@ -847,18 +910,25 @@ del "%~f0"
         return {"ok": True}
 
     # ── ייצוא / ייבוא ──────────────────────────────────────────────
-    def export_data(self):
-        import shutil
+    def get_export_counts(self):
+        """כמה ניקים ייכללו בכל מצב ייצוא (הכל / עם מידע / עם מידע שלי)."""
+        return db.count_export_modes()
+
+    def export_data(self, mode="all"):
         try:
             from webview import FileDialog
             save_dialog = FileDialog.SAVE
         except ImportError:
             save_dialog = webview.SAVE_DIALOG  # older pywebview
 
+        if mode not in ("all", "has_info", "my_info"):
+            mode = "all"
+        suffix = {"all": "", "has_info": "_מידע", "my_info": "_שלי"}[mode]
+
         result = webview.windows[0].create_file_dialog(
             save_dialog,
             directory=_HERE,
-            save_filename="tiknick_export.tiknick",
+            save_filename=f"tiknick_export{suffix}.tiknick",
             file_types=("TikNick (*.tiknick)", "JSON (*.json)", "All files (*.*)")
         )
         if not result:
@@ -873,7 +943,7 @@ del "%~f0"
         if not dest:
             return {"ok": False, "error": "בוטל"}
 
-        data = db.export_data()
+        data = db.export_data(mode)
         with open(dest, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return {"ok": True, "path": dest, "count": len(data["nicks"])}
@@ -978,6 +1048,23 @@ del "%~f0"
     def search_usernames(self, prefix, limit=8):
         """חיפוש שמות משתמש להשלמה אוטומטית בעת תיוג"""
         return db.search_usernames(prefix, int(limit))
+
+    # ── תצוגת משתמש מאוחדת (איחוד זהויות) ──────────────────────────
+    def lookup_nicks(self, query, limit=12):
+        """חיפוש ניקים לתצוגת המשתמש המאוחדת (לפי שם משתמש/שם אמיתי)"""
+        return db.search_nicks_for_lookup(query, int(limit))
+
+    def get_merged_profile(self, nick_id):
+        """מחזיר תצוגה מאוחדת של ניק וכל הזהויות המקושרות אליו"""
+        return db.get_merged_profile(int(nick_id))
+
+    # ── עוגיות התחברות שמורות (לפי דומיין) ─────────────────────────
+    def get_saved_cookie(self, url):
+        return db.get_cookie_for_url(url or "")
+
+    def save_cookie(self, url, cookie):
+        db.save_cookie_for_url(url or "", cookie or "")
+        return {"ok": True}
 
     # ── חיפוש/סינון/פעולות מרובות מתקדם ────────────────────────────
     def get_filterable_fields(self):
