@@ -1174,3 +1174,9 @@ tbody tr:hover td:last-child::after {
 .tab-btn:hover{color:var(--text)}
 .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
 .policy-opt:hover{border-color:var(--accent)!important;background:var(--row-hover)}
+
+/* ══ העתקת ערכים ══
+   user-select:none הגלובלי חסם העתקה של טלפון/מייל/כתובת — בדיוק המידע
+   שבשבילו פותחים את התוכנה. משטחי ערכים חוזרים לבחירה רגילה. */
+tbody td, .card-row .cv, #lookup-profile, .tooltip,
+.contact-item .ct-val, .identity-item .id-name, .conflict-val { user-select: text; }

@@ -196,6 +196,18 @@ def check_forum(forum_url, cookie=None):
             "error": "לא זוהתה מערכת פורום נתמכת (NodeBB/Discourse) עם רשימת משתמשים ציבורית בכתובת זו."}
 
 
+def _num_str(v):
+    """מספר → מחרוזת, כולל 0. (g() מתייחס ל-0 כחסר, ולכן ירידת מוניטין ל-0
+    או ספירת הודעות 0 לא הייתה מתעדכנת לעולם.)"""
+    if isinstance(v, bool):
+        return ""
+    if isinstance(v, (int, float)):
+        return str(int(v))
+    if isinstance(v, str) and v.strip().lstrip("-").isdigit():
+        return str(int(v.strip()))
+    return ""
+
+
 def _map_user(u):
     """ממפה אובייקט משתמש של NodeBB לשדות של Tik-Nick (רק מה שקיים)."""
     def g(*keys):
@@ -245,20 +257,22 @@ def _map_user(u):
     if loc:      extra_bits.append(f"מיקום: {loc}")
     web = g("website")
     if web:      extra_bits.append(f"אתר: {web}")
+    # תקרות אורך — "אודות"/חתימה יכולים להיות בלוב ענק, והוא היה נשמר בשלמותו
+    # בטבלה, במקורות ובאינדקס החיפוש
     about = g("aboutme")
-    if about:    extra_bits.append(f"אודות: {about}")
+    if about:    extra_bits.append(f"אודות: {str(about)[:300]}")
     sig = g("signature")
-    if sig:      extra_bits.append(f"חתימה: {sig}")
+    if sig:      extra_bits.append(f"חתימה: {str(sig)[:300]}")
     pv = u.get("profileviews")
     if pv:       extra_bits.append(f"צפיות בפרופיל: {pv}")
     if last_online:
         extra_bits.append(f"נראה לאחרונה: {last_online}")
-    extra_info = " · ".join(extra_bits)
+    extra_info = (" · ".join(extra_bits))[:2000]
 
     return {
         "full_name":    g("fullname"),
-        "reputation":   g("reputation") or "",
-        "post_count":   g("postcount") or "",
+        "reputation":   _num_str(u.get("reputation")),
+        "post_count":   _num_str(u.get("postcount")),
         "groups":       groups,
         "status":       "מורחק" if u.get("banned") else "",
         "join_date":    join_date,
@@ -380,6 +394,7 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
     if progress_cb:
         progress_cb({"page": 1, "total_pages": total_pages, **stats, "done": False})
 
+    consecutive_fail = 0
     for page in range(2, total_pages + 1):
         if cancel_flag is not None and cancel_flag.is_set():
             stats["cancelled"] = True
@@ -390,7 +405,16 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
         time.sleep(PAGE_DELAY_SEC)
         try:
             data = _fetch_json(base + f"/api/users?page={page}", cookie=cookie)
+            consecutive_fail = 0
         except ScrapeError:
+            # עמוד שנכשל נספר ומדווח — אחרת סריקה חלקית נראית כמוצלחת
+            stats["failed_pages"] = stats.get("failed_pages", 0) + 1
+            consecutive_fail += 1
+            if consecutive_fail >= 5:
+                stats["aborted"] = True   # הפורום כנראה נפל — אין טעם להמשיך
+                break
+            if progress_cb:
+                progress_cb({"page": page, "total_pages": total_pages, **stats, "done": False})
             continue
         handle_users(data.get("users", []) if isinstance(data, dict) else [])
         stats["pages"] = page
@@ -454,7 +478,10 @@ def _scrape_discourse(forum_name, base, db, cookie, progress_cb,
                 base + f"/directory_items.json?period=all&order=post_count&page={page}",
                 cookie=cookie)
         except ScrapeError:
-            break   # כשל רשת — עוצרים במקום ללולאה אינסופית
+            # כשל רשת — עוצרים (אין total_pages אמין) ומדווחים שהסריקה חלקית
+            stats["failed_pages"] = stats.get("failed_pages", 0) + 1
+            stats["aborted"] = True
+            break
         items = data.get("directory_items", []) if isinstance(data, dict) else []
         if not items:
             break

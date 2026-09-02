@@ -22,6 +22,8 @@ const S = {
   // כרטיסים: גדילה הדרגתית תוך גלילה (ללא כפתור), ללא הסרה כדי לשמור על פשטות
   cardsRendered: 0,
   cardsChunk:  120,
+  // תמונות פרופיל נטענות לפי דרישה (הרשימה מחזירה רק דגל has_avatar)
+  avatarCache: new Map(),
 };
 
 // ══ COLUMNS ══════════════════════════════════════════════════════════
@@ -482,6 +484,17 @@ async function loadNicks(search = '') {
   const myToken = ++S.loadToken;
   S.currentSearch = search;
   S.multiSelected.clear();
+  setStatus('טוען…');   // משוב מיידי — במאגר גדול הטעינה נמשכת שניות
+  // תמונות פרופיל עלולות להשתנות אחרי סריקה/ייבוא — מטמון טרי לכל טעינה
+  S.avatarCache.clear();
+  // חיפוש חופשי וסינון מתקדם אינם חיים יחד — הצגת סינון ישן עם תוצאות חיפוש מבלבלת,
+  // ותשובת סינון שעוד בדרך לא תדרוס את הטעינה החדשה
+  clearTimeout(_filterTimer); _filterSeq++;
+  if (_fieldFilterActive) {
+    _fieldFilterActive = false;
+    const fc = document.getElementById('flt-count');
+    if (fc) fc.textContent = '';
+  }
 
   const res = await api('get_nicks', search);
 
@@ -518,7 +531,12 @@ function sortBy(col) {
   });
 }
 
+// Collator אחד קבוע — localeCompare(...,'he') בכל השוואה היה פי ~2.4 יקר יותר
+const HE_COLLATOR = new Intl.Collator('he', { numeric: true });
+
 function sortNicks() {
+  // ברירת המחדל כבר ממוינת ב-SQL (has_info, trust_level, updated_at) — אין טעם למיין שוב
+  if (S.sortCol === 'has_info') return;
   S.nicks.sort((a, b) => {
     // has_info always first
     if (a.has_info !== b.has_info) return b.has_info - a.has_info;
@@ -526,7 +544,7 @@ function sortNicks() {
     const vb = b[S.sortCol] ?? '';
     const n = typeof va === 'number';
     return n ? (va - vb) * S.sortDir
-             : String(va).localeCompare(String(vb), 'he') * S.sortDir;
+             : HE_COLLATOR.compare(String(va), String(vb)) * S.sortDir;
   });
 }
 
@@ -586,8 +604,10 @@ function renderTable() {
   if (!S.nicks.length) {
     document.getElementById('tbody').innerHTML = '';
     empty.style.display = '';
+    renderEmptyState();
     updateStats();
-    renderCards();
+    setStatus(`עודכן ${new Date().toLocaleTimeString('he-IL')} · אין תוצאות`);
+    if (DISPLAY.view === 'cards') renderCards();
     return;
   }
   empty.style.display = 'none';
@@ -596,7 +616,31 @@ function renderTable() {
 
   updateStats();
   setStatus(`עודכן ${new Date().toLocaleTimeString('he-IL')}`);
-  renderCards();  // תמיד מרנדר גם כרטיסים (מוסתר אם במצב טבלה)
+  // כרטיסים נבנים רק כשהתצוגה פעילה — אחרת נבנו 120 כרטיסים נסתרים בכל רענון
+  if (DISPLAY.view === 'cards') renderCards();
+}
+
+// מצב ריק מותאם: אחרי חיפוש/סינון זו לא "התחלה", אלא "אין תוצאות"
+function renderEmptyState() {
+  const box = document.getElementById('empty-state');
+  if (!box) return;
+  const q = (S.currentSearch || '').trim();
+  if (q || _fieldFilterActive) {
+    box.innerHTML = `<div class="empty-icon">🔍</div>
+      <h3>לא נמצאו תוצאות${q ? ` עבור "${esc(q)}"` : ''}</h3>
+      <p>נסו לחפש אחרת, או <b style="color:var(--accent);cursor:pointer"
+         onclick="clearAllFilters()">נקו את החיפוש</b></p>`;
+  } else {
+    box.innerHTML = `<div class="empty-icon">📭</div>
+      <h3>אין ניקים להצגה</h3><p>לחץ "ניק חדש" כדי להתחיל</p>`;
+  }
+}
+
+async function clearAllFilters() {
+  const inp = document.getElementById('search-input');
+  if (inp) inp.value = '';
+  if (_fieldFilterActive) await clearFieldFilter();
+  else await loadNicks('');
 }
 
 // ── Virtual scrolling: בונה רק את השורות בטווח הנראה + מרווח בטחון ──────
@@ -643,9 +687,19 @@ function renderTableWindow() {
   const sample = tbody.querySelector('tr:not(.v-spacer)');
   if (sample) {
     const h = sample.getBoundingClientRect().height;
-    if (h && Math.abs(h - S.rowHeight) > 1) S.rowHeight = h;
+    if (h && Math.abs(h - S.rowHeight) > 1 && !_rhRerender) {
+      // הגובה האמיתי שונה מההנחה (למשל אחרי שינוי צפיפות) — בנה שוב פעם אחת
+      // עם הגובה המדויק, אחרת המרווחים והחלון הנראה לא תואמים עד הגלילה הבאה
+      S.rowHeight = h;
+      _rhRerender = true;
+      try { renderTableWindow(); } finally { _rhRerender = false; }
+      return;
+    }
   }
+
+  hydrateAvatars();   // רק לשורות שנבנו כרגע
 }
+let _rhRerender = false;
 
 let _tableScrollRaf = null;
 function onTableScroll() {
@@ -653,6 +707,35 @@ function onTableScroll() {
   _tableScrollRaf = requestAnimationFrame(() => {
     _tableScrollRaf = null;
     renderTableWindow();
+  });
+}
+
+// ── טעינת תמונות פרופיל לפי דרישה ────────────────────────────────────
+// הרשימה מגיעה בלי תמונות (רק has_avatar) כדי לא להעביר עשרות MB בגשר.
+// אחרי כל רינדור מושכים רק את התמונות של השורות שבאמת מוצגות, ומטמינים.
+function applyAvatar(el, dataUrl) {
+  el.dataset.avatarDone = '1';
+  const safe = safeUrl(dataUrl);            // רק data:image או http(s)
+  if (!safe || /["'()\\]/.test(safe.slice(0, 32))) return;
+  if (el.tagName === 'IMG') el.src = safe;
+  else el.style.backgroundImage = `url("${safe.replace(/["\\]/g, '')}")`;
+}
+
+async function hydrateAvatars() {
+  const pending = [];
+  document.querySelectorAll('[data-avatar-id]:not([data-avatar-done])').forEach(el => {
+    const id = el.dataset.avatarId;
+    if (S.avatarCache.has(id)) applyAvatar(el, S.avatarCache.get(id));
+    else pending.push(id);
+  });
+  if (!pending.length) return;
+  const ids = [...new Set(pending)].slice(0, 200);
+  const map = await api('get_avatars', ids);
+  if (!map) return;   // כשל גשר — אל "תזכור" שאין תמונה; ננסה שוב ברינדור הבא
+  ids.forEach(id => S.avatarCache.set(id, map[id] || null));
+  document.querySelectorAll('[data-avatar-id]:not([data-avatar-done])').forEach(el => {
+    const id = el.dataset.avatarId;
+    if (S.avatarCache.has(id)) applyAvatar(el, S.avatarCache.get(id));
   });
 }
 
@@ -669,12 +752,13 @@ function renderForum(td, n) {
 
 function renderUsername(td, n) {
   // מיני אווטאר/נקודת צבע לפני השם
-  if (n.avatar_image || n.nick_color) {
+  if (n.has_avatar || n.nick_color) {
     const dot = document.createElement('span');
     dot.className = 'uname-dot';
-    if (n.avatar_image) {
-      dot.style.cssText = 'background-image:url('+n.avatar_image+')';
+    if (n.has_avatar) {
       dot.classList.add('has-img');
+      dot.style.background = n.nick_color || 'var(--card2)';
+      dot.dataset.avatarId = n.id;   // התמונה נטענת לפי דרישה
     } else {
       dot.style.background = n.nick_color;
     }
@@ -695,7 +779,9 @@ function renderUsername(td, n) {
 async function showFieldSourcesTooltip(e, nickId, fieldKey) {
   // שמור קואורדינטות מיד — לפני ה-await (אחרת האירוע עלול להתאפס)
   const cx = e.clientX, cy = e.clientY;
+  const tok = ttBegin();
   const srcs = await api('get_field_sources', nickId, fieldKey);
+  if (!ttValid(tok)) return;      // העכבר כבר עזב
   if (!srcs || srcs.length < 2) return;
   const srcKind = s => s.kind==='me' ? 'אני' : s.kind==='scrape' ? 'סריקה' : s.name;
   const rows = srcs.map((s, i) =>
@@ -703,6 +789,11 @@ async function showFieldSourcesTooltip(e, nickId, fieldKey) {
   ).join('');
   showTooltipAt(cx, cy, `<b>גרסאות לפי מקור:</b>${rows}`);
 }
+
+// מונה ריחוף: תשובה שחוזרת אחרי שהעכבר כבר עזב לא תציג טולטיפ יתום
+let _ttSeq = 0;
+function ttBegin() { return ++_ttSeq; }
+function ttValid(token) { return token === _ttSeq; }
 
 function showTooltipAt(cx, cy, html) {
   const tt = document.getElementById('tooltip');
@@ -715,6 +806,8 @@ function showTooltipAt(cx, cy, html) {
 function renderRep(td, n) {
   if (!n.reputation) return;
   td.textContent = Number(n.reputation).toLocaleString();
+  td.dir = 'ltr';   // אחרת מוניטין שלילי מוצג הפוך ("12-" במקום "-12")
+  td.style.textAlign = 'right';
   td.style.color = n.reputation > 100 ? '#3fb950' : 'inherit';
 }
 
@@ -809,10 +902,12 @@ function relativeTime(dateStr) {
   const now = new Date();
   const diff = Math.floor((now - d) / 1000);
   if (isNaN(diff)) return dateStr;
-  if (diff < 60)     return 'עכשיו';
-  if (diff < 3600)   return `לפני ${Math.floor(diff/60)} דק'`;
-  if (diff < 86400)  return `לפני ${Math.floor(diff/3600)} שע'`;
-  if (diff < 604800) return `לפני ${Math.floor(diff/86400)} ימים`;
+  if (diff < 60) return 'עכשיו';
+  // עברית: יחיד/זוגי/רבים ("לפני דקה", "לפני שעתיים", "אתמול")
+  const m = Math.floor(diff / 60), h = Math.floor(diff / 3600), dd = Math.floor(diff / 86400);
+  if (diff < 3600)   return m === 1 ? 'לפני דקה'  : m === 2 ? 'לפני שתי דקות' : `לפני ${m} דקות`;
+  if (diff < 86400)  return h === 1 ? 'לפני שעה'  : h === 2 ? 'לפני שעתיים'  : `לפני ${h} שעות`;
+  if (diff < 604800) return dd === 1 ? 'אתמול'    : dd === 2 ? 'לפני יומיים'  : `לפני ${dd} ימים`;
   return d.toLocaleDateString('he-IL');
 }
 
@@ -873,6 +968,10 @@ function selectRow(id, e) {
   document.querySelectorAll('tbody tr').forEach(tr => {
     tr.classList.toggle('selected', parseInt(tr.dataset.id) === id);
   });
+  // גם בתצוגת כרטיסים — אחרת הסימון והבחירה בפועל לא תואמים
+  document.querySelectorAll('.nick-card').forEach(c => {
+    c.classList.toggle('selected', parseInt(c.dataset.id) === id);
+  });
   document.getElementById('btn-edit').disabled   = false;
   document.getElementById('btn-delete').disabled = false;
   if(document.getElementById('stat-sel'))document.getElementById('stat-sel').textContent='1';
@@ -886,8 +985,10 @@ async function deleteSelected() {
   if (!S.selectedId) return;
   const nick = S.nicks.find(n => n.id === S.selectedId);
   if (!nick) return;
-  if (!confirm(`למחוק את "${nick.username}"?`)) return;
-  await api('delete_nick', S.selectedId);
+  if (!confirm(`למחוק את "${nick.username}" מפורום ${nick.forum}?\n\n` +
+               'יימחקו איתו גם אנשי הקשר, קישורי הזהויות והיסטוריית המידע שלו.')) return;
+  const r = await api('delete_nick', S.selectedId);
+  if (!r?.ok) { toast('המחיקה נכשלה: ' + (r?.error || ''), 'error'); return; }
   S.selectedId = null;
   document.getElementById('btn-edit').disabled   = true;
   document.getElementById('btn-delete').disabled = true;
@@ -936,10 +1037,11 @@ async function deleteBulkSelected() {
   if (!ids.length) return;
   if (!confirm(`למחוק ${ids.length} ניקים שנבחרו? פעולה בלתי הפיכה!`)) return;
   const res = await api('delete_nicks', ids);
+  if (!res?.ok) { toast('המחיקה נכשלה: ' + (res?.error || ''), 'error'); return; }
   S.multiSelected.clear();
   S.selectedId = null;
   await loadNicks(document.getElementById('search-input').value);
-  toast(`${res?.count ?? ids.length} ניקים נמחקו`, 'success');
+  toast(`${res.count} ניקים נמחקו`, 'success');
 }
 
 // ══ SEARCH ════════════════════════════════════════════════════════════
@@ -958,7 +1060,14 @@ function updateStats() {
 // ══ NICK DIALOG ═══════════════════════════════════════════════════════
 async function openNickDialog(nickId = null) {
   let nick = null;
-  if (nickId) nick = await api('get_nick', nickId);
+  if (nickId) {
+    nick = await api('get_nick', nickId);
+    if (!nick) {   // נמחק בינתיים / שגיאת גשר — אחרת נופל בשקט
+      toast('הניק לא נמצא — ייתכן שנמחק', 'error');
+      await loadNicks(document.getElementById('search-input').value);
+      return;
+    }
+  }
   const forums = S.forums.map(f =>
     `<option value="${esc(f.name)}" ${nick?.forum===f.name?'selected':''}>${esc(f.name)}</option>`
   ).join('');
@@ -1012,7 +1121,8 @@ async function openNickDialog(nickId = null) {
       </div>
       <div class="form-group">
         <label class="form-label">מייל ראשי</label>
-        <input class="form-input" id="f-email" value="${esc(nick?.email||'')}">
+        <input class="form-input" id="f-email" dir="ltr" style="text-align:left"
+               value="${esc(nick?.email||'')}">
       </div>
       <div class="form-group full">
         <label class="form-label">כתובת</label>
@@ -1024,8 +1134,8 @@ async function openNickDialog(nickId = null) {
       </div>
       <div class="form-group">
         <label class="form-label">מוניטין</label>
-        <input class="form-input" id="f-reputation" type="number" min="0"
-               value="${nick?.reputation||0}">
+        <input class="form-input" id="f-reputation" type="number" dir="ltr"
+               value="${esc(nick?.reputation ?? 0)}">
       </div>
       <div class="form-group">
         <label class="form-label">סטטוס</label>
@@ -1050,10 +1160,10 @@ async function openNickDialog(nickId = null) {
       <div class="form-group full">
         <label class="form-label">קישור לפרופיל (URL)</label>
         <div style="display:flex;gap:6px">
-          <input class="form-input" id="f-avatar_url" placeholder="https://..."
-                 value="${esc(nick?.avatar_url||'')}" style="flex:1">
+          <input class="form-input" id="f-avatar_url" placeholder="https://..." dir="ltr"
+                 value="${esc(nick?.avatar_url||'')}" style="flex:1;text-align:left">
           <a id="profile-link-btn"
-             href="${nick?.avatar_url||'#'}" target="_blank"
+             href="${esc(safeUrl(nick?.avatar_url) || '#')}" target="_blank"
              title="פתח פרופיל"
              style="display:${nick?.avatar_url ? 'flex' : 'none'};
                     align-items:center;padding:8px 10px;
@@ -1121,7 +1231,7 @@ async function openNickDialog(nickId = null) {
   openModal(title, html, [
     { label: '💾 שמור', cls: 'btn-primary', action: () => saveNick(nickId) },
     { label: 'ביטול',   cls: 'btn-ghost',   action: closeModal },
-  ], 'modal-lg');
+  ], 'modal-lg', { id: 'nick-dialog', dismissable: false });
 
   // wire up contacts
   if (nick) wireContactsSection(nick);
@@ -1264,10 +1374,49 @@ function wireIdentitiesSection() {}
 let _tagField = null;
 
 // האזנה גלובלית — תופסת כל שדה עם class="tag-field" גם אם נוצר דינמית
+let _tagTimer = null, _tagSeq = 0;
 document.addEventListener('input', (e) => {
   if (e.target && e.target.classList && e.target.classList.contains('tag-field')) {
-    onTagInput(e);
+    // debounce — בלי זה כל הקשה שלחה בקשה לגשר, והתוצאות חזרו לא לפי הסדר
+    clearTimeout(_tagTimer);
+    _tagTimer = setTimeout(() => onTagInput(e), 180);
   }
+});
+
+// ── חיווט מטפלים דרך data-* במקום onclick מוטבע ────────────────────────
+// שמות פורומים מיובאים אינם בטוחים: בריחת HTML אינה מגינה על מחרוזת JS בתוך
+// מאפיין (הדפדפן מפענח את הישות לפני ש-JS מנתח), ולכן אין לבנות handler מטקסט.
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest && e.target.closest('.known-add');
+  if (btn && typeof window.fmAddKnown === 'function') {
+    window.fmAddKnown(btn.dataset.name, btn.dataset.color, btn.dataset.url);
+  }
+});
+document.addEventListener('change', (e) => {
+  const sel = e.target.closest && e.target.closest('.fmap-select');
+  if (sel && typeof window.fmapOnChange === 'function') {
+    window.fmapOnChange(sel, sel.dataset.fname);
+  }
+});
+// תיוג @: בחירה מההשלמה (mousedown, לפני שה-textarea מאבד פוקוס) ולחיצה/ריחוף על תג
+document.addEventListener('mousedown', (e) => {
+  const opt = e.target.closest && e.target.closest('.tag-opt');
+  if (opt && opt.dataset.username != null) pickTag(e, opt.dataset.username);
+});
+// capture: רץ לפני onclick של השורה, ו-goToTag עוצר את ההתפשטות כמו קודם
+document.addEventListener('click', (e) => {
+  const tag = e.target.closest && e.target.closest('.nick-tag');
+  if (tag && tag.dataset.tag != null) goToTag(e, tag.dataset.tag);
+}, true);
+document.addEventListener('mouseover', (e) => {
+  const tag = e.target.closest && e.target.closest('.nick-tag');
+  if (tag && tag.dataset.tag != null && !(e.relatedTarget && tag.contains(e.relatedTarget))) {
+    tagHover(e, tag.dataset.tag);
+  }
+});
+document.addEventListener('mouseout', (e) => {
+  const tag = e.target.closest && e.target.closest('.nick-tag');
+  if (tag && !(e.relatedTarget && tag.contains(e.relatedTarget))) hideTooltip();
 });
 
 async function onTagInput(e) {
@@ -1285,11 +1434,14 @@ async function onTagInput(e) {
   box.style.zIndex = '99999';
   if (!m) { box.style.display = 'none'; return; }
   const prefix = m[1];
+  const seq = ++_tagSeq;
   const results = await api('search_usernames', prefix, 8) || [];
+  if (seq !== _tagSeq) return;   // הגיעה בקשה חדשה יותר — התוצאה הזו מיושנת
   if (!results.length) { box.style.display = 'none'; return; }
+  // השם עובר ב-data-username (לא במחרוזת JS מוטבעת) — גרש בשם היה שובר את ה-handler
   box.innerHTML = results.map(r => `
     <div class="tag-opt" style="padding:7px 12px;cursor:pointer;font-size:13px;direction:rtl"
-         onmousedown="pickTag(event,'${esc(r.username).replace(/'/g,"\\'")}')">
+         data-username="${esc(r.username)}">
       <span style="color:${S.forumColors[r.forum]||'#8b90a0'}">[${esc(r.forum)}]</span>
       ${esc(r.username)}
     </div>`).join('');
@@ -1331,11 +1483,9 @@ function renderTaggedText(text) {
     if (m) {
       const raw = m[1];                      // עם קווים תחתונים
       const display = raw.replace(/_/g, ' '); // תצוגה עם רווחים
-      const safeRaw = esc(raw).replace(/'/g,"\\'");
+      // ה-handlers מחוברים בהאצלה לפי data-tag — לא מחרוזת JS מוטבעת (גרש/לוכסן שוברים אותה)
       return `<span class="nick-tag" style="color:var(--accent);cursor:pointer;font-weight:600"
-                onclick="goToTag(event,'${safeRaw}')"
-                onmouseenter="tagHover(event,'${safeRaw}')"
-                onmouseleave="hideTooltip()">@${esc(display)}</span>`;
+                data-tag="${esc(raw)}">@${esc(display)}</span>`;
     }
     return esc(p);
   }).join('');
@@ -1375,12 +1525,21 @@ window.goToTag = goToTag;
 window.tagHover = tagHover;
 window.renderTaggedText = renderTaggedText;
 
-async function searchForIdentity(q, nickId) {
+let _idSearchTimer = null, _idSearchSeq = 0;
+function searchForIdentity(q, nickId) {
+  clearTimeout(_idSearchTimer);
+  _idSearchTimer = setTimeout(() => _searchForIdentityNow(q, nickId), 200);
+}
+
+async function _searchForIdentityNow(q, nickId) {
   const box = document.getElementById('id-results');
+  if (!box) return;
   if (!q.trim()) { box.style.display = 'none'; return; }
+  const seq = ++_idSearchSeq;
   const res   = await api('get_nicks', q, 0, 50);
   const nicks = res && Array.isArray(res.rows) ? res.rows : (Array.isArray(res) ? res : []);
   const nick  = await api('get_nick', nickId);
+  if (seq !== _idSearchSeq || !nick) return;   // תשובה מיושנת / הניק נעלם
   const linked = new Set((nick.identities||[]).map(i => i.id));
   linked.add(nickId);
   const results = nicks.filter(n => !linked.has(n.id)).slice(0, 20);
@@ -1493,11 +1652,20 @@ async function saveNick(nickId) {
   if (!data.username?.trim()) { toast('שם משתמש הוא שדה חובה', 'error'); return; }
 
   if (nickId) {
-    await api('update_nick', nickId, data);
+    const r = await api('update_nick', nickId, data);
+    if (!r?.ok) {   // אל תסגור ואל תדווח הצלחה כשהשמירה נכשלה
+      toast('השמירה נכשלה: ' + (r?.error || 'שגיאה לא ידועה'), 'error');
+      return;
+    }
+    S.avatarCache.delete(String(nickId));   // ייתכן שהתמונה הוחלפה
     toast('ניק עודכן ✓', 'success');
   } else {
     const res = await api('create_nick', data);
-    if (res?.ok) toast('ניק נוסף ✓', 'success');
+    if (!res?.ok) {
+      toast('ההוספה נכשלה: ' + (res?.error || 'שגיאה לא ידועה'), 'error');
+      return;
+    }
+    toast('ניק נוסף ✓', 'success');
   }
   closeModal();
   await loadNicks(document.getElementById('search-input').value);
@@ -1675,8 +1843,9 @@ async function openForumMgr() {
           ${isActive
             ? `<span style="font-size:11px;color:var(--success);padding:3px 8px;
                             background:rgba(63,185,80,.12);border-radius:10px">✓ קיים</span>`
-            : `<button class="btn btn-sm btn-primary btn-icon"
-                       onclick="fmAddKnown('${esc(f.name)}','${f.color}','${esc(f.url||'')}')">➕</button>`
+            : `<button class="btn btn-sm btn-primary btn-icon known-add"
+                       data-name="${esc(f.name)}" data-color="${esc(f.color)}"
+                       data-url="${esc(f.url||'')}">➕</button>`
           }
         </div>`;
     }).join('');
@@ -1690,7 +1859,7 @@ async function openForumMgr() {
 
     <div style="margin-top:12px;display:flex;gap:6px;align-items:center">
       <input class="form-input" id="rename-val" placeholder="שם חדש לפורום שנבחר" style="flex:1">
-      <input class="form-input" id="rename-url" placeholder="קישור (URL)" style="flex:1">
+      <input class="form-input" id="rename-url" placeholder="קישור (URL)" dir="ltr" style="flex:1;text-align:left">
       <button class="btn btn-ghost btn-sm" onclick="fmRename()">✏️ שמור</button>
     </div>
 
@@ -1701,7 +1870,7 @@ async function openForumMgr() {
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
         <input class="form-input" id="new-forum-name" placeholder="שם"
                style="flex:1" oninput="fmAutoFill(this.value)">
-        <input class="form-input" id="new-forum-url" placeholder="קישור (אופציונלי)" style="flex:1">
+        <input class="form-input" id="new-forum-url" placeholder="קישור (אופציונלי)" dir="ltr" style="flex:1;text-align:left">
         <input type="color" id="new-forum-color" value="#58a6ff"
                style="width:34px;height:34px;border:none;background:none;cursor:pointer;padding:0">
         <button class="btn btn-primary btn-sm" onclick="fmAdd()">הוסף</button>
@@ -1886,7 +2055,17 @@ function onFilterOpChange(opSel) {
   valInput.style.opacity = noValue ? '.4' : '1';
 }
 
-async function applyFieldFilter() {
+// debounce + token: בלי זה כל הקשה בשדה הסינון הריצה שאילתה מלאה על כל המאגר,
+// ותשובות שחזרו לא לפי הסדר הציגו תוצאות של קידומת ישנה
+let _filterTimer = null, _filterSeq = 0;
+function applyFieldFilter() {
+  clearTimeout(_filterTimer);
+  return new Promise(resolve => {
+    _filterTimer = setTimeout(() => _applyFieldFilterNow().then(resolve, resolve), 200);
+  });
+}
+
+async function _applyFieldFilterNow() {
   const rows = [...document.querySelectorAll('#filter-rows .filter-row')];
   const conditions = [];
   for (const r of rows) {
@@ -1902,7 +2081,9 @@ async function applyFieldFilter() {
     document.getElementById('flt-count').textContent = '';
     return;
   }
+  const seq = ++_filterSeq;
   const results = await api('filter_nicks_multi', conditions) || [];
+  if (seq !== _filterSeq) return;   // סינון חדש יותר כבר יצא
   _fieldFilterActive = true;
   S.nicks = results;
   S.total = results.length;
@@ -1915,6 +2096,7 @@ async function applyFieldFilter() {
 
 async function clearFieldFilter() {
   _fieldFilterActive = false;
+  clearTimeout(_filterTimer); _filterSeq++;   // בטל סינון שעוד בדרך
   const rows = document.getElementById('filter-rows');
   if (rows) rows.innerHTML = '';
   addFilterRow();
@@ -1944,8 +2126,9 @@ async function bulkEditSelected() {
       const field = document.getElementById('bulk-field').value;
       const value = document.getElementById('bulk-value').value;
       const r = await api('bulk_update_field', ids, field, value);
+      if (!r?.ok) { toast('העדכון נכשל: ' + (r?.error || ''), 'error'); return; }
       closeModal();
-      toast(`${r?.count ?? 0} ניקים עודכנו ✓`, 'success');
+      toast(`${r.count} ניקים עודכנו ✓`, 'success');
       if (_fieldFilterActive) await applyFieldFilter();
       else await loadNicks(document.getElementById('search-input').value);
     }},
@@ -1963,6 +2146,9 @@ async function syncSelectedOnline() {
 }
 
 async function onSrcTrust(sid, val) {
+  // הכרעה מחדש לכל הערכים של המקור — במאגר גדול זה נמשך שניות; תן משוב
+  setStatus('מעדכן ערכים לפי דרגת האמינות החדשה…');
+  toast('מעדכן ערכים לפי האמינות החדשה…', 'info');
   await api('update_source', sid, null, null, parseInt(val), null);
   await loadNicks(document.getElementById('search-input').value);
 }
@@ -1979,6 +2165,8 @@ async function onSrcAbsolute(sid, checked) {
 }
 async function onSrcDelete(sid) {
   if (!confirm('למחוק את המקור הזה? כל הערכים שהגיעו ממנו יימחקו, והנתונים ייפלו לערך הבא לפי אמינות.')) return;
+  setStatus('מוחק מקור ומכריע מחדש…');
+  toast('מוחק מקור ומעדכן ערכים…', 'info');
   const r = await api('delete_source', sid);
   if (r?.ok) {
     document.querySelector(`.sync-item[data-sid="${sid}"]`)?.remove();
@@ -2082,8 +2270,8 @@ async function openSyncMgr() {
           <span class="toggle-slider"></span>
         </label>
         <span style="font-size:12px">אבסולוטי</span>` : ''}
-      <span style="display:flex;align-items:center;gap:6px" class="src-trust-wrap"
-            style="${s.kind==='me' && s.absolute?'opacity:.4':''}">
+      <span class="src-trust-wrap"
+            style="display:flex;align-items:center;gap:6px;${s.kind==='me' && s.absolute?'opacity:.4':''}">
         אמינות <b class="src-tval" id="stv-${s.id}">${s.trust}</b>
         <input type="range" min="1" max="10" value="${s.trust}" class="src-trust" style="width:90px"
                ${s.kind==='me' && s.absolute?'disabled':''}
@@ -2332,8 +2520,7 @@ async function showForumMappingDialog(unknownForums, totalNicks) {
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <label style="font-size:12px;color:var(--subtext);white-space:nowrap">מזג לתוך:</label>
-        <select class="form-select fmap-select" data-fname="${esc(fname)}" style="flex:1"
-                onchange="fmapOnChange(this,'${esc(fname)}')">
+        <select class="form-select fmap-select" data-fname="${esc(fname)}" style="flex:1">
           <option value="">— הוסף כפורום חדש —</option>
           ${existingForums.map(ef =>
             `<option value="${esc(ef)}">${esc(ef)}</option>`
@@ -2498,7 +2685,9 @@ async function doResetSettings() {
 
 // ══ TOOLTIP ════════════════════════════════════════════════════════════
 async function showContactsTooltip(e, nickId) {
+  const tok = ttBegin();
   const nick = await api('get_nick', nickId);
+  if (!ttValid(tok)) return;
   const cts  = nick?.contacts || [];
   if (!cts.length) return;
   const html = cts.map(ct =>
@@ -2509,7 +2698,9 @@ async function showContactsTooltip(e, nickId) {
 
 async function showIdentityTooltip(e, nickId) {
   const cx = e.clientX, cy = e.clientY;
+  const tok = ttBegin();
   const nick = await api('get_nick', nickId);
+  if (!ttValid(tok)) return;
   const list = nick?.identities || [];
   if (!list.length) return;
   const html = list.map(i =>
@@ -2530,16 +2721,24 @@ function showTooltip(e, html) {
 }
 
 function hideTooltip() {
+  _ttSeq++;   // מבטל תשובות שנמצאות בדרך
   document.getElementById('tooltip').style.display = 'none';
 }
 
 // ══ MODAL ═════════════════════════════════════════════════════════════
-function openModal(title, bodyHtml, buttons = [], extraClass = '') {
+// מזהה החלון הפתוח כרגע — כדי שתהליך רקע שמסתיים לא ידרוס חלון אחר
+let _currentModalId = '';
+
+function openModal(title, bodyHtml, buttons = [], extraClass = '', opts = {}) {
   closeModal();
+  _currentModalId = opts.id || '';
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'modal-overlay';
-  overlay.onclick = e => { if (e.target === overlay) closeModal(); };
+  // דיאלוגים עם הזנת נתונים אינם נסגרים בלחיצה על הרקע (איבוד עבודה)
+  if (opts.dismissable !== false) {
+    overlay.onclick = e => { if (e.target === overlay) closeModal(); };
+  }
 
   const btnsHtml = buttons.map((b, i) =>
     `<button class="btn ${b.cls}" id="mb-idx-${i}">${b.label}</button>`
@@ -2548,7 +2747,7 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '') {
   overlay.innerHTML = `
     <div class="modal ${extraClass}">
       <div class="modal-header">
-        <div class="modal-title">${title}</div>
+        <div class="modal-title">${esc(title)}</div>
         <button class="modal-close" onclick="closeModal()">✕</button>
       </div>
       <div class="modal-body">${bodyHtml}</div>
@@ -2565,6 +2764,7 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '') {
 
 function closeModal() {
   document.getElementById('modal-overlay')?.remove();
+  _currentModalId = '';
 }
 
 // ══ TOAST ═════════════════════════════════════════════════════════════
@@ -2660,6 +2860,8 @@ function applyTheme() {
 function applyView() {
   document.body.dataset.view = DISPLAY.view;
   updateViewToggle();
+  // הכרטיסים נבנים רק כשהתצוגה פעילה — לכן יש לבנותם במעבר אליה
+  if (DISPLAY.view === 'cards') renderCards();   // גם כשריק — מנקה כרטיסים ישנים
 }
 
 function updateViewToggle() {
@@ -2824,13 +3026,13 @@ async function openInternetSync() {
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px">
       <label style="font-size:12px;color:var(--subtext)">
-        עוגיית התחברות (express.sid) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה). נשמרת לפעם הבאה.
+        עוגיית התחברות (<span id="sync-cookie-name" dir="ltr">express.sid</span>) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה). נשמרת לפעם הבאה.
       </label>
       <button class="btn btn-ghost btn-sm" style="white-space:nowrap;flex-shrink:0"
               onclick="openChazonishnikHelp()" title="איך משיגים עוגיות?">🍪 איך משיגים?</button>
     </div>
     <input id="sync-cookie" class="form-input" style="width:100%;margin-bottom:12px" dir="ltr"
-           placeholder="express.sid=s%3A...  (השאר ריק אם הפורום ציבורי)">
+           placeholder="הדבק כאן את ערך העוגייה (השאר ריק אם הפורום ציבורי)">
 
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
       <label style="font-size:12px;color:var(--subtext);white-space:nowrap">הגבל עמודים (אופציונלי):</label>
@@ -2854,6 +3056,15 @@ async function openInternetSync() {
     { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
   ], 'modal-lg');
   onSyncForumChange();
+  // אם סריקה כבר רצה ברקע — הראה זאת במקום דיאלוג שנראה "רדום"
+  api('get_scrape_progress').then(p => {
+    if (!p || !p.running) return;
+    const wrap = document.getElementById('sync-progress-wrap');
+    if (wrap) wrap.style.display = '';
+    const t = document.getElementById('sync-progress-text');
+    if (t) t.textContent = `סריקה פעילה כרגע: ${p.forum || ''} · עמוד ${p.page}/${p.total_pages || '?'}`;
+    if (!_scrapePoll) startScrapeMonitor();
+  });
 }
 
 // טוען את העוגייה השמורה לפורום הנבחר לתוך שדה העוגייה
@@ -2867,10 +3078,11 @@ async function syncPrefillCookie() {
 }
 
 async function doStartScrapeAll() {
-  if (!confirm('לסרוק את כל הפורומים ברצף? פורום שלא ניתן לסרוק יידלג אוטומטית.')) return;
-  const cookie = document.getElementById('sync-cookie')?.value.trim() || '';
+  if (!confirm('לסרוק את כל הפורומים ברצף?\n\n' +
+               'פורום שלא ניתן לסרוק יידלג אוטומטית.\n' +
+               'לכל פורום תשמש רק העוגייה השמורה שלו — עוגייה של פורום אחד לא תישלח לאחרים.')) return;
   const maxPages = parseInt(document.getElementById('sync-maxpages')?.value) || null;
-  const start = await api('start_scrape_all', cookie, maxPages);
+  const start = await api('start_scrape_all', '', maxPages);
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל', 'error'); return; }
   const wrap = document.getElementById('sync-progress-wrap');
   if (wrap) wrap.style.display = '';
@@ -2945,7 +3157,10 @@ function startScrapeMonitor() {
     const pct = p.total_pages ? Math.round((p.page / p.total_pages) * 100) : 0;
     const forumPrefix = p.all_mode
       ? `[${p.forum_index}/${p.forum_total}] ${p.forum||''} · ` : '';
-    const label = `${forumPrefix}עמוד ${p.page}/${p.total_pages || '?'} · נוספו ${p.added} · עודכנו ${p.updated}`;
+    // ב"סנכרן נבחרים" המונה הוא ניקים, לא עמודים
+    const label = p.selected_mode
+      ? `ניק ${p.page} מתוך ${p.total_pages} · עודכנו ${p.updated}`
+      : `${forumPrefix}עמוד ${p.page}/${p.total_pages || '?'} · נוספו ${p.added} · עודכנו ${p.updated}`;
 
     // עדכן באנר צף (תמיד)
     const bBar = document.getElementById('scrape-banner-bar');
@@ -2967,10 +3182,14 @@ function startScrapeMonitor() {
       if (p.error) {
         toast('שגיאת סריקה: ' + p.error, 'error');
       } else {
-        const msg = p.cancelled ? 'הסריקה בוטלה' : 'הסריקה הושלמה';
+        const partial = (p.failed_pages || 0) > 0;
+        const msg = p.cancelled ? 'הסריקה בוטלה'
+                  : partial ? 'הסריקה הסתיימה חלקית' : 'הסריקה הושלמה';
         let extra = '';
-        if (p.skipped && p.skipped.length) extra = ` · דולגו ${p.skipped.length} פורומים`;
-        toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`, 'success');
+        if (partial) extra += ` · ${p.failed_pages} עמודים נכשלו`;
+        if (p.skipped && p.skipped.length) extra += ` · דולגו ${p.skipped.length} פורומים`;
+        toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`,
+              partial ? 'error' : 'success');
       }
       await _yieldPaint();   // תן לבאנר להיעלם לפני הטעינה הכבדה
       await loadNicks(document.getElementById('search-input').value);
@@ -2989,12 +3208,16 @@ function updateSyncHint() {
   const hint = document.getElementById('sync-forum-hint');
   if (!opt || !hint) return;
   const plat = opt.dataset.platform || 'nodebb';
+  // שם העוגייה תלוי בפלטפורמה: NodeBB → express.sid, Discourse → _t
+  const cookieName = plat === 'discourse' ? '_t' : 'express.sid';
+  const ckEl = document.getElementById('sync-cookie-name');
+  if (ckEl) ckEl.textContent = cookieName;
   if (!SCRAPABLE_PLATFORMS.has(plat)) {
     hint.innerHTML = `⛔ פלטפורמת ${esc(PLATFORM_LABELS[plat] || plat)} — אין API ציבורי לרשימת משתמשים, ` +
                      `לכן אין סריקה אוטומטית. אפשר להוסיף ולנהל ניקים בפורום זה ידנית.`;
     hint.style.color = 'var(--danger)';
   } else if (opt.dataset.login === '1') {
-    hint.innerHTML = '🔒 פורום זה דורש התחברות — הזן עוגיית express.sid למטה (ראה "🍪 איך משיגים?").';
+    hint.innerHTML = `🔒 פורום זה דורש התחברות — הזן את עוגיית <span dir="ltr">${cookieName}</span> למטה (ראה "🍪 איך משיגים?").`;
     hint.style.color = 'var(--accent-2)';
   } else {
     hint.innerHTML = '';
@@ -3098,6 +3321,8 @@ async function openChazonishnik() {
     </div>
   `, [
     { label: '📊 נתח פעילות', cls: 'btn-primary', action: runChazonishnik },
+    ...(_lastReport.chz ? [{ label: '📄 הדוח האחרון', cls: 'btn-ghost',
+        action: () => showChazonishnikReport(_lastReport.chz.html, _lastReport.chz.count) }] : []),
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
   chzPrefillCookie();
@@ -3116,6 +3341,8 @@ function openExt(url) {
 }
 
 let _chzPoll = null;
+// הדוח האחרון נשמר כדי שאפשר יהיה לפתוח אותו שוב בלי להריץ ניתוח מחדש
+const _lastReport = { chz: null, stink: null };
 
 async function runChazonishnik() {
   const username = document.getElementById('chz-user')?.value.trim();
@@ -3141,7 +3368,7 @@ function showChazonishnikProgress(username) {
   `, [
     { label: '✕ בטל', cls: 'btn-danger', action: cancelChazonishnik },
     { label: '🏠 המשך ברקע', cls: 'btn-ghost', action: closeModal },
-  ], 'modal-sm');
+  ], 'modal-sm', { id: 'chz-progress' });
   startChazonishnikMonitor();
 }
 
@@ -3171,10 +3398,20 @@ function startChazonishnikMonitor() {
     if (p.done || !p.running) {
       clearInterval(_chzPoll); _chzPoll = null;
       if (banner) banner.style.display = 'none';
-      if (p.cancelled) { toast('הניתוח בוטל', 'info'); if (isModalOpen()) closeModal(); return; }
-      if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (isModalOpen()) closeModal(); return; }
-      if (p.html) { showChazonishnikReport(p.html, p.count); toast('הניתוח הושלם ✓', 'success'); }
-      else if (isModalOpen()) closeModal();
+      // סוגרים רק את חלון ההתקדמות שלנו — לא חלון אחר שהמשתמש פתח בינתיים
+      const mine = _currentModalId === 'chz-progress';
+      if (p.cancelled) { toast('הניתוח בוטל', 'info'); if (mine) closeModal(); return; }
+      if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (mine) closeModal(); return; }
+      if (p.html) {
+        _lastReport.chz = { html: p.html, count: p.count };
+        if (mine || !isModalOpen()) {
+          showChazonishnikReport(p.html, p.count);
+          toast('הניתוח הושלם ✓', 'success');
+        } else {
+          // אל תגנוב את המסך מעבודה פתוחה — הדוח נשמר וזמין לפתיחה
+          toast('📊 הדוח מוכן — פתח דרך Chazonishnik', 'success');
+        }
+      } else if (mine) closeModal();
     }
     } finally { busy = false; }
   }, 600);
@@ -3191,12 +3428,16 @@ async function cancelChazonishnik() {
   const banner = document.getElementById('chz-banner');
   if (banner) banner.style.display = 'none';
   toast('מבטל…', 'info');
-  if (isModalOpen()) closeModal();
+  // סגור רק את חלון ההתקדמות שלנו — לא דיאלוג אחר שהמשתמש עובד בו
+  if (_currentModalId === 'chz-progress') closeModal();
 }
 
 function showChazonishnikReport(html, postCount) {
+  // sandbox ללא allow-same-origin: לדוח יש origin נפרד, ולכן סקריפט בתוכו
+  // (למשל מכותרת נושא עוינת) לא יכול להגיע ל-window.parent.pywebview.api.
   openModal(`📊 דוח פעילות${postCount ? ` · ${postCount} פוסטים` : ''}`, `
-    <iframe id="chz-frame" style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
+    <iframe id="chz-frame" sandbox="allow-scripts allow-popups"
+            style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
   `, [
     { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveChazonishnikReport(html) },
     { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openChazonishnik },
@@ -3236,7 +3477,7 @@ async function openStinknik() {
       </div>
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">שם משתמש או קישור לפרופיל</label>
-        <input id="stink-user" class="form-input" placeholder="בנימין  או  קישור מלא לפרופיל">
+        <input id="stink-user" class="form-input" dir="auto" placeholder="בנימין  או  קישור מלא לפרופיל">
       </div>
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label" style="font-size:11px;color:var(--subtext)">עוגייה (אופציונלי · נשמרת לפעם הבאה)</label>
@@ -3249,6 +3490,8 @@ async function openStinknik() {
     </div>
   `, [
     { label: '🦨 מצא דיסלייקים', cls: 'btn-primary', action: runStinknik },
+    ...(_lastReport.stink ? [{ label: '📄 הדוח האחרון', cls: 'btn-ghost',
+        action: () => showStinknikReport(_lastReport.stink.html, _lastReport.stink.count) }] : []),
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
   stinkPrefillCookie();
@@ -3289,7 +3532,7 @@ function showStinknikProgress(user) {
   `, [
     { label: '✕ בטל', cls: 'btn-danger', action: cancelStinknik },
     { label: '🏠 המשך ברקע', cls: 'btn-ghost', action: closeModal },
-  ], 'modal-sm');
+  ], 'modal-sm', { id: 'stink-progress' });
   startStinknikMonitor();
 }
 
@@ -3312,10 +3555,18 @@ function startStinknikMonitor() {
     if (p.done || !p.running) {
       clearInterval(_stinkPoll); _stinkPoll = null;
       if (banner) banner.style.display = 'none';
-      if (p.cancelled) { toast('הסריקה בוטלה', 'info'); if (isModalOpen()) closeModal(); return; }
-      if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (isModalOpen()) closeModal(); return; }
-      if (p.html) { showStinknikReport(p.html, p.disliked); toast('הסריקה הושלמה ✓', 'success'); }
-      else if (isModalOpen()) closeModal();
+      const mine = _currentModalId === 'stink-progress';
+      if (p.cancelled) { toast('הסריקה בוטלה', 'info'); if (mine) closeModal(); return; }
+      if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (mine) closeModal(); return; }
+      if (p.html) {
+        _lastReport.stink = { html: p.html, count: p.disliked };
+        if (mine || !isModalOpen()) {
+          showStinknikReport(p.html, p.disliked);
+          toast('הסריקה הושלמה ✓', 'success');
+        } else {
+          toast('🦨 הדוח מוכן — פתח דרך Stinknik', 'success');
+        }
+      } else if (mine) closeModal();
     }
     } finally { busy = false; }
   }, 600);
@@ -3327,12 +3578,13 @@ async function cancelStinknik() {
   const banner = document.getElementById('stink-banner');
   if (banner) banner.style.display = 'none';
   toast('מבטל…', 'info');
-  if (isModalOpen()) closeModal();
+  if (_currentModalId === 'stink-progress') closeModal();
 }
 
 function showStinknikReport(html, disCount) {
   openModal(`🦨 דוח דיסלייקים${disCount != null ? ` · ${disCount} פוסטים` : ''}`, `
-    <iframe id="stink-frame" style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
+    <iframe id="stink-frame" sandbox="allow-scripts allow-popups"
+            style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
   `, [
     { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveStinknikReport(html) },
     { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openStinknik },
@@ -3368,6 +3620,7 @@ function renderCards() {
   for (let i = 0; i < upTo; i++) {
     grid.appendChild(buildCardElement(S.nicks[i]));
   }
+  hydrateAvatars();
 }
 
 function appendMoreCards() {
@@ -3379,6 +3632,7 @@ function appendMoreCards() {
     grid.appendChild(buildCardElement(S.nicks[i]));
   }
   S.cardsRendered = to;
+  hydrateAvatars();
 }
 
 let _cardsScrollRaf = null;
@@ -3404,8 +3658,9 @@ function buildCardElement(n) {
     const stCls = {'פעיל':'status-active','מורחק':'status-banned','מושעה':'status-suspended'}[st] || '';
     const initial = (n.username || '?').trim().charAt(0).toUpperCase();
     const nickCol = n.nick_color || color;
-    const avatarHtml = n.avatar_image
-      ? `<div class="card-avatar" style="padding:0;overflow:hidden"><img src="${esc(n.avatar_image)}" style="width:100%;height:100%;object-fit:cover"></div>`
+    const avatarHtml = n.has_avatar
+      ? `<div class="card-avatar" style="padding:0;overflow:hidden;background:${esc(nickCol)}">
+           <img data-avatar-id="${n.id}" alt="" style="width:100%;height:100%;object-fit:cover"></div>`
       : `<div class="card-avatar" style="background:linear-gradient(135deg,${esc(nickCol)},${esc(shade(nickCol,-25))})">${esc(initial)}</div>`;
 
     // rows — only fields that exist
@@ -3604,7 +3859,11 @@ async function changeDisplaySetting(key, val, btn) {
   }
   if (key === 'theme')    applyTheme();
   if (key === 'view')     applyView();
-  if (key === 'density')  document.body.dataset.density  = val;
+  if (key === 'density') {
+    document.body.dataset.density = val;
+    S.rowHeight = 0;     // גובה השורה השתנה — הגלילה הווירטואלית תמדוד מחדש
+    renderTable();
+  }
   await api('set_display_setting', key, val);
 }
 
@@ -3630,5 +3889,13 @@ async function resetDisplay() {
 
 function esc(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
-                         .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+                         .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+                         .replace(/'/g,'&#39;');
+}
+
+// כתובת בטוחה ל-href/src: רק http(s) או data:image. אחרת — לא נפתח כלום.
+// (avatar_url מגיע מהפורום; ערך כמו javascript:... אסור להגיע ל-DOM)
+function safeUrl(u) {
+  const s = String(u ?? '').trim();
+  return /^(https?:\/\/|data:image\/)/i.test(s) ? s : '';
 }

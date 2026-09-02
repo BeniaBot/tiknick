@@ -139,15 +139,16 @@ def _build_html(slug, disliked, checked, up, down, rep):
     if disliked:
         rows = []
         for p in disliked:
+            # כל ערך מהפורום (כולל pid ו-link) עובר בריחה
             rows.append(f"""
             <div class="post-card">
-              <div class="post-title">{_esc(p['title'])} <span style="opacity:.5;font-size:13px">#{p['pid']}</span></div>
+              <div class="post-title">{_esc(p['title'])} <span style="opacity:.5;font-size:13px">#{_esc(p['pid'])}</span></div>
               <div class="post-stats">
-                <span>👍 {p['upvotes']}</span>
-                <span class="dis">👎 {p['downvotes']}</span>
-                <span>⭐ {p['reputation']}</span>
+                <span>👍 {_esc(p['upvotes'])}</span>
+                <span class="dis">👎 {_esc(p['downvotes'])}</span>
+                <span>⭐ {_esc(p['reputation'])}</span>
               </div>
-              <a href="{p['link']}" target="_blank" class="post-link">למעבר לפוסט 🌐</a>
+              <a href="{_esc(p['link'])}" target="_blank" class="post-link">למעבר לפוסט 🌐</a>
             </div>""")
         posts_html = "".join(rows)
     else:
@@ -165,7 +166,7 @@ def _build_html(slug, disliked, checked, up, down, rep):
 
 def _esc(s):
     return (str(s).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace('"', "&quot;"))
+            .replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;"))
 
 
 _TEMPLATE = r"""<!DOCTYPE html>

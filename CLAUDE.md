@@ -106,6 +106,33 @@ WAL + foreign_keys ON. אינדקסים על username/forum/updated_at/trust_lev
 - ערכות: dark (ברירת מחדל, פחם חם) / light (קרם) / system; 8 מבטאים (ברירת מחדל amber); צפיפות compact/normal/cozy — הכול CSS variables על `data-*` attributes, נשמר ב-settings.
 - `user-select:none` גלובלי, film-grain overlay, אנימציות spring.
 
+## מה נוסף ב-0.8.3 (2026-09-02) — סריקת עומק
+
+**מקור**: ביקורת רב-ממדית (6 סוכני קריאה-בלבד, 79 ממצאים) + מדידות על מאגר סינתטי של 20-40 אלף ניקים ועל ה-DB האמיתי של בנימין (88MB, 90k ניקים).
+
+**ביצועים (הכי חשוב לזכור):**
+- `get_connection()` הוא **thread-local ונשמר** (`_local`); מתחלף אוטומטית כש-`DB_PATH` משתנה. `with get_connection() as conn:` עדיין מבצע commit בסוף הבלוק — אבל עכשיו על חיבור משותף, כך שבלוקים מקוננים באותו thread חולקים טרנזקציה. פתיחת חיבור חדש לכל קריאה עלתה ~7ms.
+- **רשימות (`get_all_nicks`/`filter_*`) לא מחזירות `avatar_image`** — רק `has_avatar`; התמונה נטענת ב-`get_avatars(ids)` רק לשורות המוצגות (`hydrateAvatars()` ב-JS, cache ב-`S.avatarCache`). `extra_info` נחתך ל-300 ברשימות בלבד (`_list_cols_sql`). זה הוריד את המטען לגשר מ-22.7MB ל-13MB על 20k.
+- **אינדקס `idx_fv_nick_source(nick_id, source_id)` הוא קריטי**: בלעדיו המתכנן בחר ב-`idx_fv_source` ומקור הסריקה מחזיק כמעט את כל השורות → סריקה מלאה לכל משתמש (464ms/משתמש על ה-DB האמיתי). `PRAGMA optimize` רץ ב-`init_db`.
+- `merge_scraped_users` שולף את הניקים הקיימים ואת ערכי הסריקה שלהם ב-**2 שאילתות לעמוד** (`_chunks` של 400), לא לכל משתמש.
+- `_resolve_fields_conn` **מדלג על UPDATE כשהמנצח לא השתנה** (כל UPDATE על nicks משכתב את שורת ה-FTS). `_resolve_fields_bulk(conn, {nick:[fields]})` — 2 שאילתות ל-400 ניקים, משמש את `update_source`/`delete_source`.
+- `import_data` כולו בחיבור אחד: טעינת קיימים במנות, `_upsert_field_value` + `_resolve_fields_conn` פעם אחת לניק.
+- `delete_nicks`/`bulk_update_field` במנות של 400 (מגבלת פרמטרים של SQLite).
+- `count_export_modes` סופר ב-SQL (`_HAS_INFO_SQL`/`_MY_INFO_SQL` — מקור אמת יחיד לתנאים).
+- JS: `renderCards()` רק כש-`DISPLAY.view==='cards'`; `HE_COLLATOR` במקום `localeCompare` וללא מיון כש-`sortCol==='has_info'`; debounce+token ל-`applyFieldFilter` (מחזיר Promise), לתיוג `@` ולחיפוש זהויות; טולטיפים עם `ttBegin/ttValid`.
+
+**אבטחה (RCE chain שנסגר):**
+- דוחות Chazonishnik/Stinknik: iframe עם `sandbox="allow-scripts allow-popups"` (בלי allow-same-origin → אין גישה ל-`window.parent.pywebview.api`) + בריחה מלאה בתבניות (`_esc`, `_json_for_script` שמנטרל `</script>`).
+- `openModal` מבצע `esc(title)`; `esc()` מנטרל גם `'`; `safeUrl()` לכל href/src ממקור פורום (רק http(s)/data:image); `applyAvatar` מאמת URL.
+- handlers מוטבעים שנבנו משמות פורומים הוחלפו ב-`data-*` + האזנה מואצלת (`.known-add`, `.fmap-select`) — בריחת HTML לא מגינה על מחרוזת JS בתוך מאפיין.
+- `download_update` מקבל רק https מ-github.com / githubusercontent.com; `_looks_like_inno_setup` מאמת התאמת סוג לפני `apply_update`.
+
+**נכונות/יציבות:** `delete_nick`/`delete_nicks`/`bulk_update_field` מחזירים `{ok,error}`; ה-JS בודק ולא מדווח הצלחה על כישלון. `start_scrape_all`/`sync_selected_online` עם try/finally (אחרת `running` נתקע לנצח). הסורק סופר `failed_pages` ועוצר אחרי 5 כישלונות רצופים; ה-UI מציג "הסתיימה חלקית". `_map_user`: `_num_str` שומר 0 (ירידת מוניטין ל-0 מתעדכנת), תקרות ל-extra_info; במיזוג — הרחקה שבוטלה מנוקה ל"פעיל" רק אם הסריקה הקודמת רשמה "מורחק".
+
+**UX:** מודאלים עם `opts.id`/`dismissable`; `_currentModalId` — מוניטורי הרקע סוגרים רק את החלון שלהם ושומרים `_lastReport` ("📄 הדוח האחרון"); דיאלוג הניק לא נסגר מרקע; `renderEmptyState` לפי חיפוש; `relativeTime` בעברית תקינה; `dir="ltr"` לשדות URL/מייל/מוניטין; `user-select:text` למשטחי ערכים; שם עוגייה לפי פלטפורמה (`#sync-cookie-name`); "סרוק הכל" משתמש **רק** בעוגיות שמורות פר-פורום (פרטיות).
+
+**עדיין פתוח (מהביקורת, לא טופל):** כרטיסים גדלים בלי גבול בגלילה; ייבוא עדיין חוסם את ה-UI (מהיר, אבל בלי פס התקדמות); `update_source` ~10s על 40k ניקים (עם משוב, לא ברקע); עוגיות בטקסט גלוי ב-SQLite (DPAPI אפשרי); אין אימות חתימה על קובץ עדכון (רק allow-list של מארח + בדיקת סוג); רשימת הפורומים שדולגו ב"סרוק הכל" לא מוצגת בפירוט; הגדרות סנכרון מערבבות שמירה-מיידית ושמירה-בכפתור.
+
 ## מה נוסף ב-0.8.2 (2026-09-01)
 
 - **סריקת Discourse** לצד NodeBB: `scraper.detect_platform` + dispatch ב-`scrape_forum`. פלטפורמות ללא API ציבורי (XenForo/phpBB/custom) מרימות `ScrapeError` ידידותית ולא נסרקות. `check_forum` מחזיר `platform` ושומר אותו לפורום.
@@ -159,7 +186,7 @@ python main.py        # הרצה מהמקור (או הפעל.bat)
 build.bat             # EXE → dist\TikNick.exe
 ```
 
-אין טסטים ואין linter בפרויקט. בדיקת שינוי = הרצה ידנית.
+**בדיקות (מ-0.8.3):** `python tests/run_all.py` (או `run_tests.bat`) — 6 חבילות, ~80 בדיקות על database/scraper/API (DB זמני, בלי רשת, ~1 דקה). `tests/bench_scale.py` ו-`tests/bench_critical.py` הם בנצ'מרקים על מאגר סינתטי גדול (20-40k ניקים) — להריץ לפני/אחרי כל שינוי במסלולי ה-DB החמים. אין linter; `node --check web/app.js` + `python -m py_compile` לתחביר. **אין בדיקות UI** — ה-JS מאומת בקריאה ובביקורת בלבד.
 
 ## עקרונות עבודה
 

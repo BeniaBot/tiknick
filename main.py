@@ -29,8 +29,10 @@ import scraper
 _scrape_state = {
     "running": False, "done": False, "error": None,
     "page": 0, "total_pages": 0,
-    "added": 0, "updated": 0, "unchanged": 0,
+    "added": 0, "updated": 0, "unchanged": 0, "failed_pages": 0,
     "forum": None, "cancelled": False,
+    "all_mode": False, "selected_mode": False,
+    "forum_index": 0, "forum_total": 0, "skipped": [],
 }
 _scrape_cancel = threading.Event()
 _scrape_skip = threading.Event()
@@ -56,8 +58,22 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.2"
+APP_VERSION = "0.8.3"
 GITHUB_REPO = "BeniaBot/tiknick"
+
+def _looks_like_inno_setup(path):
+    """
+    האם הקובץ שהורד הוא מתקין Inno Setup — בדיקה לפי תוכן הקובץ, לא לפי שמו.
+    כך גרסה ניידת לעולם לא תחליף את עצמה במתקין (ולהפך), גם אם נכס ב-Release
+    נקרא בשם מטעה.
+    """
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4 * 1024 * 1024)
+        return b"Inno Setup" in head or b"JR.Inno.Setup" in head
+    except Exception:
+        return False
+
 
 def _install_type():
     """
@@ -151,6 +167,10 @@ class API:
         lim = int(limit) if limit else None
         return db.get_all_nicks(search or "", limit=lim, offset=int(offset or 0))
 
+    def get_avatars(self, nick_ids):
+        """תמונות פרופיל לפי דרישה — רק לשורות שמוצגות (הרשימה עצמה לא נושאת אותן)"""
+        return db.get_avatars(nick_ids or [])
+
     def get_nick(self, nick_id):
         nick = db.get_nick(int(nick_id))
         if not nick:
@@ -187,13 +207,21 @@ class API:
             return {"ok": False, "error": str(e)}
 
     def delete_nick(self, nick_id):
-        db.delete_nick(int(nick_id))
-        return {"ok": True}
+        try:
+            db.delete_nick(int(nick_id))
+            return {"ok": True}
+        except Exception as e:
+            logging.exception("delete_nick failed")
+            return {"ok": False, "error": str(e)}
 
     def delete_nicks(self, nick_ids):
         """מחיקה מרובה בפועל — מוחקת את הניקים הנבחרים (לא מרוקנת עמודות בלבד)"""
-        n = db.delete_nicks(nick_ids or [])
-        return {"ok": True, "count": n}
+        try:
+            n = db.delete_nicks(nick_ids or [])
+            return {"ok": True, "count": n}
+        except Exception as e:
+            logging.exception("delete_nicks failed")
+            return {"ok": False, "error": str(e)}
 
     # ── סנכרון לאינטרנט (סריקת פורומי NodeBB) ──────────────────────
     def get_scrapable_forums(self):
@@ -244,6 +272,7 @@ class API:
                 "added": p.get("added", 0),
                 "updated": p.get("updated", 0),
                 "unchanged": p.get("unchanged", 0),
+                "failed_pages": p.get("failed_pages", 0),
             })
 
         def _run():
@@ -271,7 +300,8 @@ class API:
         return dict(_scrape_state)
 
     def start_scrape_all(self, cookie="", max_pages=None):
-        """סורק את כל הפורומים ברצף, עם דילוג אוטומטי על פורום שנכשל."""
+        """סורק את כל הפורומים ברצף, עם דילוג אוטומטי על פורום שנכשל.
+        cookie אינו בשימוש כאן במכוון — כל פורום משתמש רק בעוגייה השמורה שלו."""
         if _scrape_state["running"]:
             return {"ok": False, "error": "סריקה כבר רצה"}
 
@@ -285,12 +315,13 @@ class API:
             "page": 0, "total_pages": 0,
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": None, "cancelled": False,
-            "all_mode": True, "forum_index": 0, "forum_total": len(forums),
-            "skipped": [],
+            "all_mode": True, "selected_mode": False,   # אפס מצב מ'סנכרן נבחרים' קודם
+            "forum_index": 0, "forum_total": len(forums),
+            "skipped": [], "failed_pages": 0,
         })
 
         # מצטבר מהפורומים שהסתיימו; ההתקדמות מציגה מצטבר + הפורום הרץ כרגע
-        base = {"added": 0, "updated": 0}
+        base = {"added": 0, "updated": 0, "failed_pages": 0}
 
         def _progress(p):
             _scrape_state.update({
@@ -298,9 +329,11 @@ class API:
                 "total_pages": p.get("total_pages", 0),
                 "added":   base["added"]   + p.get("added", 0),
                 "updated": base["updated"] + p.get("updated", 0),
+                "failed_pages": base["failed_pages"] + p.get("failed_pages", 0),
             })
 
         def _run():
+          try:
             for i, f in enumerate(forums):
                 if _scrape_cancel.is_set():
                     _scrape_state["cancelled"] = True
@@ -311,8 +344,9 @@ class API:
                 _scrape_state["total_pages"] = 0
                 _scrape_skip.clear()
                 try:
-                    # עוגייה שמורה לפורום זה גוברת על העוגייה הכללית (אם יש)
-                    fcookie = db.get_cookie_for_url(f["url"]) or cookie or None
+                    # פרטיות: משתמשים אך ורק בעוגייה השמורה של הפורום הזה.
+                    # אין להעביר עוגיית התחברות של פורום אחד לכל שאר הפורומים.
+                    fcookie = db.get_cookie_for_url(f["url"]) or None
                     mp = int(max_pages) if max_pages else None
                     stats = scraper.scrape_forum(
                         f["name"], f["url"], db,
@@ -325,12 +359,19 @@ class API:
                     )
                     base["added"]   += stats.get("added", 0)
                     base["updated"] += stats.get("updated", 0)
+                    base["failed_pages"] += stats.get("failed_pages", 0)
+                    _scrape_state["failed_pages"] = base["failed_pages"]
                     _scrape_state["added"]   = base["added"]
                     _scrape_state["updated"] = base["updated"]
                 except Exception as e:
                     # דילוג אוטומטי על פורום שנכשל
                     _scrape_state["skipped"].append({"forum": f["name"], "error": str(e)})
                     continue
+          except Exception as e:
+            # בלי זה, חריגה כאן משאירה את התוכנה במצב "סורק" לצמיתות
+            logging.exception("scrape_all worker crashed")
+            _scrape_state["error"] = str(e)
+          finally:
             _scrape_state["running"] = False
             _scrape_state["done"] = True
 
@@ -364,7 +405,7 @@ class API:
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": None, "cancelled": False,
             "all_mode": False, "selected_mode": True,
-            "forum_index": 0, "forum_total": 0, "skipped": [],
+            "forum_index": 0, "forum_total": 0, "skipped": [], "failed_pages": 0,
         })
 
         # מפת URL ופלטפורמה לכל פורום (קריאת get_forums אחת)
@@ -378,21 +419,26 @@ class API:
             return _cookie_cache[u]
 
         def _run():
-            updated = 0
+          updated = 0
+          try:
             for i, nid in enumerate(ids):
                 if _scrape_cancel.is_set():
                     _scrape_state["cancelled"] = True
                     break
                 _scrape_state["page"] = i + 1
-                nick = db.get_nick(nid)
-                if not nick:
+                try:
+                    nick = db.get_nick(nid)
+                    if not nick:
+                        continue
+                    url = forum_urls.get(nick["forum"], "")
+                    if not url:
+                        _scrape_state["skipped"].append({"forum": nick.get("username",""), "error": "אין URL לפורום"})
+                        continue
+                    plat = forum_plats.get(nick["forum"], "nodebb")
+                    fcookie = _cookie_for(url)
+                except Exception as e:
+                    _scrape_state["skipped"].append({"forum": str(nid), "error": str(e)})
                     continue
-                url = forum_urls.get(nick["forum"], "")
-                if not url:
-                    _scrape_state["skipped"].append({"forum": nick.get("username",""), "error": "אין URL לפורום"})
-                    continue
-                plat = forum_plats.get(nick["forum"], "nodebb")
-                fcookie = _cookie_for(url)
                 try:
                     mapped = scraper.scrape_single_user(url, nick["username"],
                                                         cookie=fcookie, platform=plat)
@@ -406,6 +452,11 @@ class API:
                 except Exception as e:
                     _scrape_state["skipped"].append({"forum": nick.get("username",""), "error": str(e)})
                     continue
+          except Exception as e:
+            # בלי זה, חריגה כאן משאירה את התוכנה במצב "סורק" לצמיתות
+            logging.exception("sync_selected worker crashed")
+            _scrape_state["error"] = str(e)
+          finally:
             _scrape_state["running"] = False
             _scrape_state["done"] = True
 
@@ -633,8 +684,19 @@ class API:
     def download_update(self, download_url):
         """מוריד את קובץ העדכון (EXE נייד או Setup) לפי סוג ההתקנה. מחזיר את הנתיב."""
         import urllib.request, sys as _sys, tempfile
+        from urllib.parse import urlsplit
         if not download_url:
             return {"ok": False, "error": "אין קישור הורדה"}
+        # רק מארחים של GitHub, ורק https — כדי שקריאה זו לא תוכל לשמש להורדת
+        # קובץ שרירותי (למשל מקוד שהוזרק לדוח) והרצתו דרך apply_update.
+        _parts = urlsplit(download_url)
+        _host = (_parts.hostname or "").lower()
+        if _parts.scheme != "https" or not (
+                _host == "github.com" or _host.endswith(".github.com")
+                or _host == "objects.githubusercontent.com"
+                or _host.endswith(".githubusercontent.com")):
+            logging.error("Blocked update download from untrusted host: %s", download_url)
+            return {"ok": False, "error": "מקור ההורדה אינו מזוהה — העדכון בוטל"}
         # רק כשרצים כ-EXE (frozen)
         if not getattr(_sys, "frozen", False):
             return {"ok": False, "error": "עדכון מתוך התוכנה זמין רק בגרסת ה-EXE"}
@@ -657,6 +719,21 @@ class API:
                     got += len(chunk)
                     _update_state["downloaded"] = got
                     _update_state["total"] = total
+
+            # שער בטיחות: ודא שהקובץ שהורד תואם לסוג ההתקנה (לפי תוכן, לא לפי שם)
+            is_setup = _looks_like_inno_setup(new_path)
+            want_setup = _install_type() == "installer"
+            if is_setup != want_setup:
+                try:
+                    os.remove(new_path)
+                except Exception:
+                    pass
+                logging.error("Update asset mismatch: is_setup=%s want_setup=%s url=%s",
+                              is_setup, want_setup, download_url)
+                return {"ok": False, "error": (
+                    "קובץ העדכון שהורד אינו מתאים לסוג ההתקנה שלך "
+                    f"({'מותקנת' if want_setup else 'ניידת'}). "
+                    "העדכון בוטל — אפשר להוריד ידנית מדף ההורדות.")}
             return {"ok": True, "path": new_path}
         except Exception as e:
             logging.exception("download_update failed")
@@ -1077,8 +1154,12 @@ del "%~f0"
         return db.filter_nicks_multi(conditions or [])
 
     def bulk_update_field(self, nick_ids, field, value):
-        n = db.bulk_update_field(nick_ids or [], field, value)
-        return {"ok": True, "count": n}
+        try:
+            n = db.bulk_update_field(nick_ids or [], field, value)
+            return {"ok": True, "count": n}
+        except Exception as e:
+            logging.exception("bulk_update_field failed")
+            return {"ok": False, "error": str(e)}
 
 
 if __name__ == "__main__":

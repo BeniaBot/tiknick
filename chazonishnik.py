@@ -204,15 +204,27 @@ def _chartjs_tag():
                 'dist/chart.umd.min.js"></script>')
 
 
+def _esc(s):
+    """בריחת HTML — כל טקסט שמקורו בפורום אינו בטוח."""
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;"))
+
+
+def _json_for_script(obj):
+    """
+    JSON להטמעה בתוך <script>. json.dumps אינו מנטרל '</script>', ולכן כותרת נושא
+    או שם משתמש עוינים היו יכולים לפרוץ מהבלוק. מנטרלים < > & כרצפי \\u.
+    """
+    return (json.dumps(obj, ensure_ascii=False)
+            .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
+
+
 def _build_html(user_slug, base_url, my_uid, posts_data):
-    json_data = json.dumps(posts_data, ensure_ascii=False)
-    my_uid_json = json.dumps(my_uid)
-    base_url_json = json.dumps(base_url)
     return HTML_TEMPLATE.replace("__CHARTJS__", _chartjs_tag()) \
-        .replace("__USER__", user_slug) \
-        .replace("__JSON_DATA__", json_data) \
-        .replace("__MY_UID__", my_uid_json) \
-        .replace("__BASE_URL__", base_url_json)
+        .replace("__USER__", _esc(user_slug)) \
+        .replace("__JSON_DATA__", _json_for_script(posts_data)) \
+        .replace("__MY_UID__", _json_for_script(my_uid)) \
+        .replace("__BASE_URL__", _json_for_script(base_url))
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -264,6 +276,9 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 </div>
 <script>
 const data=__JSON_DATA__;const myUid=__MY_UID__;const baseUrl=__BASE_URL__;
+// כל טקסט מהפורום עובר בריחה לפני הזרקה ל-innerHTML
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+const escAttr=s=>encodeURIComponent(String(s==null?'':s));
 const totalLikes=data.reduce((a,b)=>a+b.likes,0);
 const totalWords=data.reduce((a,b)=>a+b.words,0);
 document.getElementById('stat-posts').innerText=data.length.toLocaleString();
@@ -276,13 +291,13 @@ new Chart(document.getElementById('chart-monthly'),{type:'line',data:{labels:Obj
 const hourlyData=Array(24).fill(0);data.forEach(d=>hourlyData[d.hour]++);
 new Chart(document.getElementById('chart-hourly'),{type:'bar',data:{labels:Array.from({length:24},(_,i)=>i+":00"),datasets:[{label:'פוסטים',data:hourlyData,backgroundColor:'#8b5cf6'}]},options:{responsive:true,maintainAspectRatio:false}});
 const fans={};data.forEach(p=>p.voters.forEach(v=>{if(v.uid!=myUid)fans[v.username]=(fans[v.username]||0)+1}));
-Object.entries(fans).sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(([name,count])=>{document.getElementById('list-fans').innerHTML+=`<div class="list-item"><a href="${baseUrl}/user/${name}" target="_blank">${name}</a><span class="badge">${count}</span></div>`;});
+Object.entries(fans).sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(([name,count])=>{document.getElementById('list-fans').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/user/${escAttr(name)}" target="_blank">${esc(name)}</a><span class="badge">${esc(count)}</span></div>`;});
 const dayOrder=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 const dayCounts=dayOrder.map(day=>data.filter(d=>d.day===day).length);
 new Chart(document.getElementById('chart-weekly'),{type:'radar',data:{labels:dayOrder,datasets:[{label:'פוסטים',data:dayCounts,borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,.2)'}]},options:{responsive:true,maintainAspectRatio:false,scales:{r:{grid:{color:'#334155'}}}}});
 const lens={'קצר':0,'בינוני':0,'ארוך':0};data.forEach(d=>{if(d.words<20)lens['קצר']++;else if(d.words<100)lens['בינוני']++;else lens['ארוך']++;});
 new Chart(document.getElementById('chart-length'),{type:'doughnut',data:{labels:Object.keys(lens),datasets:[{data:Object.values(lens),backgroundColor:['#ef4444','#3b82f6','#10b981'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'70%'}});
-[...data].sort((a,b)=>b.likes-a.likes).slice(0,10).forEach(p=>{document.getElementById('list-best').innerHTML+=`<div class="list-item"><a href="${baseUrl}/post/${p.pid}" target="_blank" style="max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.title}</a><span class="badge">+${p.likes}</span></div>`;});
+[...data].sort((a,b)=>b.likes-a.likes).slice(0,10).forEach(p=>{document.getElementById('list-best').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/post/${encodeURIComponent(p.pid)}" target="_blank" style="max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</a><span class="badge">+${esc(p.likes)}</span></div>`;});
 new Chart(document.getElementById('chart-scatter'),{type:'scatter',data:{datasets:[{label:'פוסטים',data:data.map(d=>({x:d.words,y:d.likes})),backgroundColor:'#38bdf888'}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{type:'logarithmic',title:{display:true,text:'כמות מילים'}},y:{title:{display:true,text:'לייקים'}}}}});
 </script>
 </body>

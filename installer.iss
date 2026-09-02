@@ -6,7 +6,7 @@
 ; Requires: Inno Setup 6 (ISCC.exe).
 
 #define AppName "Tik-Nick"
-#define AppVersion "0.8.2"
+#define AppVersion "0.8.3"
 #define AppExe "TikNick.exe"
 #define AppPublisher "בני הבוט"
 #define AppURL "https://github.com/BeniaBot/tiknick"

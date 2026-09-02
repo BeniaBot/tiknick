@@ -5,7 +5,7 @@
 **תוכנת דסקטופ בעברית לניהול ומעקב אחר ניקים (שמות משתמש) בפורומים.**
 כל המידע נשמר מקומית במחשב שלך — פרטיות מלאה.
 
-[![Version](https://img.shields.io/badge/גרסה-0.8.2-f59e0b?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
+[![Version](https://img.shields.io/badge/גרסה-0.8.3-f59e0b?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
 [![Platform](https://img.shields.io/badge/פלטפורמה-Windows%2010%2F11-blue?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 
@@ -54,6 +54,11 @@
 ```bash
 pip install pywebview
 python main.py
+```
+
+### בדיקות
+```bash
+python tests/run_all.py
 ```
 
 ### קימפול ל-EXE עצמאי (גרסה ניידת)

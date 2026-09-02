@@ -4,6 +4,7 @@ database.py - ניהול מסד נתונים SQLite לניקטרקר
 import sqlite3
 import json
 import os
+import threading
 from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -73,11 +74,30 @@ ALL_NICK_FIELDS = [
     ("avatar_image",  "תמונת פרופיל",    False),  # כבד — ברירת מחדל לא מסונכרן
 ]
 
+_local = threading.local()
+
 def get_connection():
+    """
+    מחזיר חיבור SQLite לשימוש חוזר לכל thread.
+    פתיחת חיבור חדש בכל קריאה (כולל 2 PRAGMA) עלתה ~7ms — מה שהצטבר לשניות
+    בכל פעולה שעושה הרבה קריאות קטנות. חיבור אחד per-thread מוריד זאת כמעט לאפס.
+    sqlite3 אינו בטוח לשיתוף בין threads, ולכן thread-local (הסריקה רצה ב-thread נפרד).
+    אם DB_PATH השתנה (בדיקות / אתחול) — נסגר הישן ונפתח חדש.
+    """
+    conn = getattr(_local, "conn", None)
+    if conn is not None and getattr(_local, "path", None) == DB_PATH:
+        return conn
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    _local.conn = conn
+    _local.path = DB_PATH
     return conn
 
 def init_db():
@@ -229,6 +249,10 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_identities_b      ON nick_identities(nick_id_b);
             CREATE INDEX IF NOT EXISTS idx_shelved_nick_id   ON shelved_values(nick_id);
             CREATE INDEX IF NOT EXISTS idx_fv_nick           ON field_values(nick_id);
+            CREATE INDEX IF NOT EXISTS idx_fv_nick_field     ON field_values(nick_id, field_name);
+            -- קריטי: בלי אינדקס דו-עמודתי המתכנן בוחר את idx_fv_source, ומכיוון
+            -- שמקור הסריקה מחזיק כמעט את כל השורות — כל שליפה סורקת את כל הטבלה.
+            CREATE INDEX IF NOT EXISTS idx_fv_nick_source    ON field_values(nick_id, source_id);
             CREATE INDEX IF NOT EXISTS idx_fv_source         ON field_values(source_id);
         """)
         # מקור ברירת מחדל: "אני" (id יציב דרך kind='me')
@@ -254,6 +278,13 @@ def init_db():
     _migrate()
     _init_fts()
     _backfill_sources()
+    # בלי סטטיסטיקות (sqlite_stat1) המתכנן בוחר אינדקסים לפי ניחוש ברירת מחדל,
+    # ועלול לבחור אינדקס גרוע בטבלאות גדולות. PRAGMA optimize מייצר/מרענן אותן בזול.
+    try:
+        with get_connection() as conn:
+            conn.execute("PRAGMA optimize")
+    except Exception:
+        pass
 
 FTS_AVAILABLE = False
 
@@ -551,14 +582,47 @@ def delete_forum(forum_id, move_to_general=True):
         conn.execute("DELETE FROM forums WHERE id=?", (forum_id,))
 
 # ── ניקים ────────────────────────────────────────────────────────────
+def _chunks(seq, size):
+    """חותך רשימה למנות — SQLite מגביל את מספר הפרמטרים בשאילתה."""
+    seq = list(seq)
+    for i in range(0, len(seq), size):
+        yield seq[i:i + size]
+
+def _list_cols_sql():
+    """
+    עמודות לרשימות (טבלה/כרטיסים/סינון) — במכוון **בלי** avatar_image.
+    התמונה נשמרת כ-data URL בבסיס64 ומשקלה עשרות KB; שליחתה לכל השורות ניפחה את
+    המטען שעובר לגשר ה-JS לעשרות MB. במקומה מוחזר דגל has_avatar, והתמונה עצמה
+    נטענת לפי דרישה (get_avatars) רק עבור השורות שמוצגות בפועל.
+    """
+    # extra_info הוא בלוב סרוק (מיקום/אתר/אודות/חתימה) שיכול להיות ארוך מאוד;
+    # ברשימה ממילא מוצג רק תקציר, ולכן נחתך כאן. הערך המלא זמין ב-get_nick.
+    cols = ", ".join(
+        "substr(n.extra_info,1,300) as extra_info" if f == "extra_info" else "n." + f
+        for f in _NICK_FIELDS if f != "avatar_image")
+    return (f"n.id, {cols}, n.created_at, n.updated_at, "
+            f"(n.avatar_image != '') as has_avatar")
+
+def get_avatars(nick_ids):
+    """מחזיר {nick_id: avatar_image} רק לניקים המבוקשים שיש להם תמונה."""
+    ids = [int(i) for i in (nick_ids or [])][:500]   # תקרה, למניעת מטען ענק
+    if not ids:
+        return {}
+    ph = ",".join("?" * len(ids))
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT id, avatar_image FROM nicks WHERE id IN ({ph}) AND avatar_image != ''",
+            ids).fetchall()
+        return {str(r["id"]): r["avatar_image"] for r in rows}
+
 def get_all_nicks(search="", limit=None, offset=0):
     """
     מחזיר dict: {"rows": [...], "total": N}.
     limit=None (ברירת מחדל) מחזיר הכל, לתאימות אחורה עם קריאות ישנות.
     """
     with get_connection() as conn:
-        base_select = """
-            SELECT n.*,
+        base_select = f"""
+            SELECT {_list_cols_sql()},
                 (SELECT COUNT(*) FROM nick_conflicts c WHERE c.nick_id = n.id) as conflict_count,
                 CASE WHEN (
                        n.phone != '' OR n.notes != '' OR n.private_notes != ''
@@ -653,7 +717,7 @@ def filter_nicks(field, op="contains", value=""):
         else:  # contains
             where = f"WHERE n.{field} LIKE ?"; params = [f"%{value}%"]
         rows = conn.execute(
-            f"SELECT n.* {computed} FROM nicks n {where} "
+            f"SELECT {_list_cols_sql()} {computed} FROM nicks n {where} "
             f"ORDER BY n.{field}", params).fetchall()
         return [dict(r) for r in rows]
 
@@ -690,7 +754,8 @@ def filter_nicks_multi(conditions):
     order = conds[0]["field"]
     with get_connection() as conn:
         rows = conn.execute(
-            f"SELECT n.* {computed} FROM nicks n {where} ORDER BY n.{order}", params).fetchall()
+            f"SELECT {_list_cols_sql()} {computed} FROM nicks n {where} "
+            f"ORDER BY n.{order}", params).fetchall()
         return [dict(r) for r in rows]
 
 def bulk_update_field(nick_ids, field, value):
@@ -722,12 +787,15 @@ def bulk_update_field(nick_ids, field, value):
     # הכרעה מחדש (כדי לכבד מקורות אבסולוטיים/אמינים יותר) — רק אם יש ריבוי מקורות
     if field not in _NON_SOURCED:
         with get_connection() as conn:
-            multi = {r[0] for r in conn.execute(
-                f"""SELECT nick_id FROM field_values WHERE field_name=? AND nick_id IN
-                    ({','.join('?'*len(ids))}) GROUP BY nick_id HAVING COUNT(*)>1""",
-                [field] + ids).fetchall()}
-        for nid in multi:
-            resolve_field(nid, field)
+            multi = set()
+            for chunk in _chunks(ids, 400):
+                ph = ",".join("?" * len(chunk))
+                multi.update(r[0] for r in conn.execute(
+                    f"""SELECT nick_id FROM field_values WHERE field_name=? AND nick_id IN
+                        ({ph}) GROUP BY nick_id HAVING COUNT(*)>1""",
+                    [field] + list(chunk)).fetchall())
+            for nid in multi:
+                _resolve_fields_conn(conn, nid, [field])
     return len(ids)
 
 def get_nick(nick_id):
@@ -859,15 +927,34 @@ def merge_scraped_users(forum, users, source_label="סריקה"):
     stats = {"added": 0, "updated": 0, "unchanged": 0}
     with get_connection() as conn:
         scrape_sid = get_scrape_source(conn)["id"]
+
+        # ── שתי שאילתות לכל העמוד, במקום שתיים לכל משתמש ──────────────
+        # (השליפה הפר-משתמשית של ערכי הסריקה הקיימים הייתה סורקת את כל
+        #  field_values בכל קריאה במאגר גדול — צוואר הבקבוק החמור ביותר.)
+        names = [u for u, _ in users]
+        existing_rows = {}
+        for chunk in _chunks(names, 400):
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                    f"SELECT id, username, scraped_email FROM nicks "
+                    f"WHERE forum=? AND username IN ({ph})", [forum] + list(chunk)):
+                existing_rows[r["username"]] = r
+
+        old_by_nick = {}
+        for chunk in _chunks([r["id"] for r in existing_rows.values()], 400):
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                    f"SELECT nick_id, field_name, value FROM field_values "
+                    f"WHERE source_id=? AND nick_id IN ({ph})", [scrape_sid] + list(chunk)):
+                old_by_nick.setdefault(r["nick_id"], {})[r["field_name"]] = r["value"]
+
         for username, scraped in users:
             new_vals = {}
             for f in _SCRAPE_MERGE_FIELDS:
                 v = scraped.get(f, "")
                 if v not in (None, ""):
                     new_vals[f] = v
-            row = conn.execute(
-                "SELECT id, scraped_email FROM nicks WHERE forum=? AND username=? LIMIT 1",
-                (forum, username)).fetchone()
+            row = existing_rows.get(username)
 
             if row is None:
                 cur = conn.execute(
@@ -887,9 +974,12 @@ def merge_scraped_users(forum, users, source_label="סריקה"):
             if scraped.get("email") and scraped["email"] != row["scraped_email"]:
                 conn.execute("UPDATE nicks SET scraped_email=? WHERE id=?",
                              (scraped["email"], nid))
-            old = {r["field_name"]: r["value"] for r in conn.execute(
-                "SELECT field_name, value FROM field_values WHERE nick_id=? AND source_id=?",
-                (nid, scrape_sid)).fetchall()}
+            old = old_by_nick.get(nid, {})
+            # הרחקה שבוטלה: הסורק לא מדווח "לא מורחק" (מחזיר סטטוס ריק), ולכן
+            # "מורחק" שנרשם בסריקה קודמת היה נשאר לנצח. אם עכשיו אין סטטוס
+            # והסריקה הקודמת רשמה הרחקה — מנקים ל"פעיל".
+            if "status" not in new_vals and old.get("status") == "מורחק":
+                new_vals["status"] = "פעיל"
             changed = {f: v for f, v in new_vals.items() if str(v) != old.get(f)}
             if not changed:
                 stats["unchanged"] += 1
@@ -950,10 +1040,14 @@ def delete_nicks(nick_ids):
     ids = [int(i) for i in (nick_ids or [])]
     if not ids:
         return 0
+    # מנות של 400 — SQLite מגביל את מספר הפרמטרים, ו"בחר הכל" יכול להיות עשרות אלפים
+    deleted = 0
     with get_connection() as conn:
-        ph = ",".join(["?"] * len(ids))
-        cur = conn.execute(f"DELETE FROM nicks WHERE id IN ({ph})", ids)
-        return cur.rowcount
+        for chunk in _chunks(ids, 400):
+            ph = ",".join(["?"] * len(chunk))
+            cur = conn.execute(f"DELETE FROM nicks WHERE id IN ({ph})", list(chunk))
+            deleted += cur.rowcount
+    return deleted
 
 def reset_all():
     """איפוס נתונים מלא — מוחק ניקים וכל המידע הנלווה כולל מקורות וייבואים."""
@@ -1175,39 +1269,46 @@ def set_forum_io_flag(forum_name, included: bool):
                      (f"forumio_{forum_name}", "1" if included else "0"))
 
 # ── ייצוא / ייבוא ────────────────────────────────────────────────────
-# שאילתת ייצוא עם דגלי has_info / my_info מחושבים לכל ניק — משותפת לייצוא ולספירה.
-_EXPORT_QUERY = """
+# תנאי has_info / my_info — מקור אמת יחיד, משותף לייצוא ולספירה
+_HAS_INFO_SQL = """(
+   n.phone != '' OR n.notes != '' OR n.private_notes != '' OR n.real_name != ''
+   OR (n.email != '' AND n.email != n.scraped_email)
+   OR EXISTS (SELECT 1 FROM nick_contacts ct WHERE ct.nick_id = n.id)
+   OR EXISTS (SELECT 1 FROM nick_identities i WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id)
+)"""
+_MY_INFO_SQL = """(
+   EXISTS (SELECT 1 FROM field_values fv WHERE fv.nick_id=n.id AND fv.source_id=1)
+   OR EXISTS (SELECT 1 FROM nick_contacts ct WHERE ct.nick_id=n.id)
+   OR n.private_notes != ''
+)"""
+
+_EXPORT_QUERY = f"""
     SELECT n.*,
-      CASE WHEN (
-         n.phone != '' OR n.notes != '' OR n.private_notes != '' OR n.real_name != ''
-         OR (n.email != '' AND n.email != n.scraped_email)
-         OR EXISTS (SELECT 1 FROM nick_contacts ct WHERE ct.nick_id = n.id)
-         OR EXISTS (SELECT 1 FROM nick_identities i WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id)
-      ) THEN 1 ELSE 0 END as _has_info,
-      CASE WHEN (
-         EXISTS (SELECT 1 FROM field_values fv WHERE fv.nick_id=n.id AND fv.source_id=1)
-         OR EXISTS (SELECT 1 FROM nick_contacts ct WHERE ct.nick_id=n.id)
-         OR n.private_notes != ''
-      ) THEN 1 ELSE 0 END as _my_info
+      CASE WHEN {_HAS_INFO_SQL} THEN 1 ELSE 0 END as _has_info,
+      CASE WHEN {_MY_INFO_SQL} THEN 1 ELSE 0 END as _my_info
     FROM nicks n
 """
 
+def _excluded_forums_clause():
+    """(where_sql, params) המחריג פורומים שכובו בהגדרות הייבוא/ייצוא."""
+    excluded = [name for name, inc in get_forum_io_flags().items() if not inc]
+    if not excluded:
+        return "", []
+    return "WHERE n.forum NOT IN (%s)" % ",".join("?" * len(excluded)), excluded
+
 def count_export_modes():
-    """כמה ניקים ייכללו בכל מצב ייצוא — לתצוגה בדיאלוג הייצוא."""
-    io_flags = get_forum_io_flags()
+    """כמה ניקים ייכללו בכל מצב ייצוא — ספירה ב-SQL (בלי למשוך את כל השורות)."""
+    where, params = _excluded_forums_clause()
     with get_connection() as conn:
-        rows = conn.execute(_EXPORT_QUERY).fetchall()
-    all_c = info_c = mine_c = 0
-    for r in rows:
-        d = dict(r)
-        if io_flags.get(d.get("forum", ""), True) is False:
-            continue
-        all_c += 1
-        if d.get("_has_info"):
-            info_c += 1
-        if d.get("_my_info"):
-            mine_c += 1
-    return {"all": all_c, "has_info": info_c, "my_info": mine_c}
+        row = conn.execute(f"""
+            SELECT COUNT(*) AS all_c,
+                   SUM(CASE WHEN {_HAS_INFO_SQL} THEN 1 ELSE 0 END) AS info_c,
+                   SUM(CASE WHEN {_MY_INFO_SQL} THEN 1 ELSE 0 END) AS mine_c
+            FROM nicks n {where}
+        """, params).fetchone()
+    return {"all": row["all_c"] or 0,
+            "has_info": row["info_c"] or 0,
+            "my_info": row["mine_c"] or 0}
 
 def export_data(mode="all"):
     """
@@ -1306,15 +1407,17 @@ def update_source(source_id, name=None, notes=None, trust=None, absolute=None):
     if not sets:
         return
     vals.append(source_id)
-    affected = set()
     with get_connection() as conn:
         conn.execute(f"UPDATE sources SET {', '.join(sets)} WHERE id=?", vals)
         rows = conn.execute(
             "SELECT DISTINCT nick_id, field_name FROM field_values WHERE source_id=?",
             (source_id,)).fetchall()
-        affected = {(r[0], r[1]) for r in rows}
-    for nid, fld in affected:
-        resolve_field(nid, fld)
+        # הכרעה מחדש מקובצת לפי ניק — UPDATE אחד לכל ניק (ולא לכל שדה),
+        # על אותו חיבור. אחרת שינוי דרגת אמינות של מקור גדול תקע את התוכנה לשעות.
+        by_nick = {}
+        for r in rows:
+            by_nick.setdefault(r[0], []).append(r[1])
+        _resolve_fields_bulk(conn, by_nick)
 
 def delete_source(source_id):
     """מוחק מקור וכל הערכים שלו; מריץ הכרעה מחדש לשדות המושפעים."""
@@ -1324,11 +1427,13 @@ def delete_source(source_id):
         rows = conn.execute(
             "SELECT DISTINCT nick_id, field_name FROM field_values WHERE source_id=?",
             (source_id,)).fetchall()
-        affected = {(r[0], r[1]) for r in rows}
+        by_nick = {}
+        for r in rows:
+            by_nick.setdefault(r[0], []).append(r[1])
         conn.execute("DELETE FROM field_values WHERE source_id=?", (source_id,))
         conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
-    for nid, fld in affected:
-        resolve_field(nid, fld)
+        # הכרעה מחדש מקובצת על אותו חיבור (ראה update_source)
+        _resolve_fields_bulk(conn, by_nick)
     return True
 
 def _upsert_field_value(conn, nick_id, field_name, value, source_id):
@@ -1377,13 +1482,63 @@ def _resolve_fields_conn(conn, nick_id, field_names):
     by_field = {}
     for r in rows:
         by_field.setdefault(r["field_name"], []).append(dict(r))
-    sets, vals = [], []
-    for f in fields:
-        sets.append(f"{f}=?")
-        vals.append(_winner_for(f, by_field.get(f, [])))
+    winners = {f: _winner_for(f, by_field.get(f, [])) for f in fields}
+
+    # כתוב רק אם משהו באמת השתנה: כל UPDATE על nicks מפעיל את טריגרי ה-FTS
+    # ומשכתב את כל שורת האינדקס. דילוג על כתיבות-סרק הופך פעולות המוניות
+    # (שינוי אמינות מקור, מיזוג סריקה חוזרת) לזולות.
+    cur_row = conn.execute(
+        f"SELECT {', '.join(fields)} FROM nicks WHERE id=?", (nick_id,)).fetchone()
+    if cur_row is None:
+        return
+    changed = [f for f in fields if str(cur_row[f] or "") != str(winners[f] or "")]
+    if not changed:
+        return
+    sets = ", ".join(f"{f}=?" for f in changed)
     conn.execute(
-        f"UPDATE nicks SET {', '.join(sets)}, updated_at=datetime('now') WHERE id=?",
-        vals + [nick_id])
+        f"UPDATE nicks SET {sets}, updated_at=datetime('now') WHERE id=?",
+        [winners[f] for f in changed] + [nick_id])
+
+def _resolve_fields_bulk(conn, by_nick):
+    """
+    הכרעה מחדש להרבה ניקים בבת אחת: שתי שאילתות לכל מנה של 400 ניקים,
+    במקום שתיים לכל ניק. משמש פעולות המוניות (שינוי/מחיקת מקור), שבמאגר
+    גדול נגעו במאות אלפי שורות ותקעו את התוכנה.
+    by_nick: {nick_id: [field, ...]}
+    """
+    nids = [n for n in by_nick if by_nick[n]]
+    all_fields = sorted({f for fl in by_nick.values() for f in fl
+                         if f not in _NON_SOURCED and f in _NICK_FIELDS})
+    if not nids or not all_fields:
+        return 0
+    fph = ",".join("?" * len(all_fields))
+    updated = 0
+    for chunk in _chunks(nids, 400):
+        ph = ",".join("?" * len(chunk))
+        grouped = {}
+        for r in conn.execute(f"""
+                SELECT fv.nick_id, fv.field_name, fv.value, fv.created_at,
+                       s.kind, s.trust, s.absolute
+                FROM field_values fv JOIN sources s ON s.id = fv.source_id
+                WHERE fv.nick_id IN ({ph}) AND fv.field_name IN ({fph})
+            """, list(chunk) + all_fields):
+            grouped.setdefault(r["nick_id"], {}).setdefault(r["field_name"], []).append(dict(r))
+        cur_rows = {r["id"]: r for r in conn.execute(
+            f"SELECT id, {', '.join(all_fields)} FROM nicks WHERE id IN ({ph})", list(chunk))}
+        for nid in chunk:
+            cur = cur_rows.get(nid)
+            if cur is None:
+                continue
+            flds = [f for f in by_nick[nid] if f in all_fields]
+            winners = {f: _winner_for(f, grouped.get(nid, {}).get(f, [])) for f in flds}
+            changed = [f for f in flds if str(cur[f] or "") != str(winners[f] or "")]
+            if not changed:
+                continue
+            sets = ", ".join(f"{f}=?" for f in changed)
+            conn.execute(f"UPDATE nicks SET {sets}, updated_at=datetime('now') WHERE id=?",
+                         [winners[f] for f in changed] + [nid])
+            updated += 1
+    return updated
 
 def record_field_value(nick_id, field_name, value, source_id):
     """רושם/מעדכן ערך של שדה ממקור מסוים, ואז מכריע מחדש מי מנצח."""
@@ -1549,42 +1704,65 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
                 existing_forums.add(forum)
 
     io_flags = get_forum_io_flags()
+    # נרמול הרשומות מהקובץ (מיפוי פורומים + סינון) לפני העבודה מול ה-DB
+    entries = []
     for nick in data.get("nicks", []):
-        username  = nick.get("username","").strip()
-        forum_raw = nick.get("forum","").strip()
+        username  = nick.get("username", "").strip()
+        forum_raw = nick.get("forum", "").strip()
         mapped    = mapping.get(forum_raw, "")
         forum     = mapped if mapped else forum_raw
-        if not username: continue
-        if io_flags.get(forum, True) is False:
+        if not username or io_flags.get(forum, True) is False:
             continue
-        existing = find_nick(forum, username)
-        if existing:
-            nid = existing["id"]
-        else:
-            nid = create_nick({"forum": forum, "username": username,
-                               "source": src_name, "trust_level": 3})
-            imported += 1
-        # snapshot אחד לניק (במקום get_nick לכל שדה) — לבדיקת התנגשויות במצב ידני
-        cur = get_nick(nid) if manual_conflicts else None
-        # רשום כל שדה מיובא תחת מקור הייבוא
-        for field in exported_fields:
-            if field in _NON_SOURCED:
-                continue
-            val = nick.get(field, "")
-            if val in (None, ""):
-                continue
-            if manual_conflicts:
-                # בדוק אם קיים ערך שונה מאותו שדה (ממקור אחר)
-                old = str(cur.get(field, "") or "").strip() if cur else ""
-                if old and old != str(val).strip():
-                    pending_conflicts.append({
-                        "nick_id": nid, "username": username, "forum": forum,
-                        "field": field, "old_value": old, "new_value": str(val),
-                        "source_id": import_sid, "source_name": src_name,
-                    })
-                    continue  # אל תרשום עדיין — ימתין להכרעה ידנית
-            record_field_value(nid, field, val, import_sid)
-            recorded += 1
+        entries.append((forum, username, nick))
+
+    sourced_fields = [f for f in exported_fields if f not in _NON_SOURCED]
+
+    # הכל בחיבור וטרנזקציה אחת: קודם טוענים את הניקים הקיימים במנות,
+    # ואז כותבים. (בעבר נפתח חיבור נפרד לכל ערך — ייבוא גדול נמשך עשרות דקות.)
+    with get_connection() as conn:
+        by_forum = {}
+        for forum, username, _ in entries:
+            by_forum.setdefault(forum, set()).add(username)
+        existing = {}          # (forum, username) -> row
+        for forum, unames in by_forum.items():
+            for chunk in _chunks(sorted(unames), 400):
+                ph = ",".join("?" * len(chunk))
+                for r in conn.execute(
+                        f"SELECT * FROM nicks WHERE forum=? AND username IN ({ph})",
+                        [forum] + list(chunk)):
+                    existing[(forum, r["username"])] = r
+
+        for forum, username, nick in entries:
+            row = existing.get((forum, username))
+            if row is not None:
+                nid = row["id"]
+            else:
+                cur_ins = conn.execute(
+                    "INSERT INTO nicks (forum, username, source, trust_level) VALUES (?,?,?,3)",
+                    (forum, username, src_name))
+                nid = cur_ins.lastrowid
+                imported += 1
+
+            changed_fields = []
+            for field in sourced_fields:
+                val = nick.get(field, "")
+                if val in (None, ""):
+                    continue
+                if manual_conflicts and row is not None:
+                    old = str((row[field] if field in row.keys() else "") or "").strip()
+                    if old and old != str(val).strip():
+                        pending_conflicts.append({
+                            "nick_id": nid, "username": username, "forum": forum,
+                            "field": field, "old_value": old, "new_value": str(val),
+                            "source_id": import_sid, "source_name": src_name,
+                        })
+                        continue  # אל תרשום עדיין — ימתין להכרעה ידנית
+                _upsert_field_value(conn, nid, field, val, import_sid)
+                changed_fields.append(field)
+                recorded += 1
+            # הכרעה אחת לכל הניק — UPDATE יחיד (ולא אחד לכל שדה)
+            if changed_fields:
+                _resolve_fields_conn(conn, nid, changed_fields)
 
     # עדכן ספירות בלוג הייבוא (import_sources הישן, לתאימות)
     log_import_source(src_name, import_notes, trust, imported, recorded)
