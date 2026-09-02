@@ -2,6 +2,7 @@
 """Scraper mapping + merge semantics fixed in 0.8.3 (zero values, un-ban, caps)."""
 import os, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # קונסולה בעברית/CP1255 לא תפיל הדפסות
 import scraper, database as db
 
 fails = []

@@ -23,16 +23,33 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 
-def _get_json(url, cookie=None, timeout=15):
+def _get_json(url, cookie=None, timeout=15, retries=3):
+    """GET JSON עם ניסיונות חוזרים וכיבוד Retry-After (429)."""
     req = urllib.request.Request(url)
     req.add_header("User-Agent", _UA)
     req.add_header("Accept", "application/json")
     if cookie:
         val = cookie if cookie.startswith("express.sid=") else f"express.sid={cookie}"
         req.add_header("Cookie", val)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read().decode("utf-8", "replace")
-    return json.loads(raw)
+    last = None
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < retries:
+                ra = e.headers.get("Retry-After")
+                time.sleep(min(int(ra) if (ra and ra.isdigit()) else attempt * 3, 30))
+                last = e
+                continue
+            if e.code in (401, 403, 404):
+                raise
+            last = e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last = e
+        if attempt < retries:
+            time.sleep(attempt * 1.5)
+    raise last
 
 
 def _user_slug_variations(username):
@@ -73,7 +90,8 @@ def _fetch_user(base, username, cookie):
     raise last_err or Exception("לא נמצא משתמש")
 
 
-def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=None):
+def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=None,
+                stats=None):
     all_posts = []
     page = 1
     while page <= MAX_PAGES:
@@ -83,6 +101,9 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=N
         try:
             data = _get_json(url, cookie=cookie)
         except Exception:
+            # עצירה על שגיאה = דוח חלקי; מסמנים כדי לדווח למשתמש
+            if stats is not None and page > 1:
+                stats["stopped_early"] = True
             break
         posts = data.get("posts", []) if isinstance(data, dict) else []
         if not posts:
@@ -140,8 +161,10 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     max_posts — הגבלת מספר הפוסטים הנסרקים (None = הכל).
     """
     base = (base_url or DEFAULT_BASE).rstrip("/")
+    scan_stats = {"stopped_early": False}
     try:
-        my_uid, slug, _ = _fetch_user(base, username, cookie)
+        my_uid, slug, _udata = _fetch_user(base, username, cookie)
+        postcount = int((_udata or {}).get("postcount") or 0)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return {"ok": False, "error": "נדרשת עוגייה תקינה (שגיאת הרשאה)"}
@@ -150,7 +173,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
         return {"ok": False, "error": f"לא ניתן למצוא משתמש: {e}"}
 
     raw_posts = _scan_posts(base, slug, cookie, progress=progress,
-                            cancel_flag=cancel_flag, max_posts=max_posts)
+                            cancel_flag=cancel_flag, max_posts=max_posts, stats=scan_stats)
     if cancel_flag is not None and cancel_flag.is_set():
         return {"ok": False, "cancelled": True, "error": "בוטל"}
     if not raw_posts:
@@ -185,7 +208,12 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
         except Exception:
             path = None
 
-    return {"ok": True, "html": html, "path": path, "posts": len(processed)}
+    limited = bool(max_posts and len(raw_posts) >= max_posts)
+    partial = scan_stats["stopped_early"] or (
+        bool(postcount) and len(raw_posts) < postcount * 0.95 and not limited)
+    return {"ok": True, "html": html, "path": path, "posts": len(processed),
+            "postcount": postcount, "partial": partial, "limited": limited,
+            "stopped_early": scan_stats["stopped_early"]}
 
 
 def _chartjs_tag():

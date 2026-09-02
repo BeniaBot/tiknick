@@ -96,9 +96,41 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
+    # בלי גבול, קובץ ה--wal לא מתכווץ אחרי סריקה/ייבוא גדולים
+    conn.execute("PRAGMA journal_size_limit=67108864")
     _local.conn = conn
     _local.path = DB_PATH
     return conn
+
+def checkpoint():
+    """מקפל את ה-WAL לקובץ הראשי (לסגירה נקייה / אחרי פעולה גדולה)."""
+    try:
+        conn = get_connection()
+        conn.commit()
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception:
+        pass
+
+def db_health():
+    """מצב המאגר לדיאלוג 'בריאות המאגר': גודל, WAL, בדיקת תקינות מהירה, ספירות."""
+    size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    wal = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
+    with get_connection() as conn:
+        qc = conn.execute("PRAGMA quick_check").fetchone()[0]
+        counts = {}
+        for t in ("nicks", "field_values", "nick_contacts", "nick_identities",
+                  "sources", "forums", "trash_nicks"):
+            counts[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+    return {"path": DB_PATH, "size": size, "wal": wal, "quick_check": qc,
+            "counts": counts, "fts": FTS_AVAILABLE}
+
+def vacuum():
+    """כיווץ הקובץ (אחרי מחיקות גדולות). מחזיר את הגודל החדש."""
+    conn = get_connection()
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.execute("VACUUM")
+    return os.path.getsize(DB_PATH)
 
 def init_db():
     with get_connection() as conn:
@@ -238,6 +270,20 @@ def init_db():
                 UNIQUE(nick_id, field_name, source_id)
             );
 
+            -- סל מחזור: צילום מלא של ניק שנמחק (כולל אנשי קשר, זהויות, מקורות)
+            -- כדי ש"בטל" ישחזר הכול. נשמר 30 יום.
+            CREATE TABLE IF NOT EXISTS trash_nicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                batch_id TEXT NOT NULL,
+                nick_id INTEGER NOT NULL,
+                forum TEXT DEFAULT '',
+                username TEXT DEFAULT '',
+                deleted_at TEXT DEFAULT (datetime('now')),
+                payload TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_trash_batch      ON trash_nicks(batch_id);
+            CREATE INDEX IF NOT EXISTS idx_trash_deleted    ON trash_nicks(deleted_at);
+
             -- אינדקסים לביצועים (חיוני כשיש עשרות אלפי ניקים)
             CREATE INDEX IF NOT EXISTS idx_nicks_username    ON nicks(username);
             CREATE INDEX IF NOT EXISTS idx_nicks_forum       ON nicks(forum);
@@ -278,6 +324,11 @@ def init_db():
     _migrate()
     _init_fts()
     _backfill_sources()
+    # סל המחזור נשמר 30 יום
+    try:
+        empty_trash(30)
+    except Exception:
+        pass
     # בלי סטטיסטיקות (sqlite_stat1) המתכנן בוחר אינדקסים לפי ניחוש ברירת מחדל,
     # ועלול לבחור אינדקס גרוע בטבלאות גדולות. PRAGMA optimize מייצר/מרענן אותן בזול.
     try:
@@ -374,6 +425,45 @@ def _backfill_sources():
                         (nid, f, str(v)))
         conn.execute("INSERT OR REPLACE INTO settings (key,value) VALUES ('backfill_sources_done','1')")
 
+def _digits(s):
+    return "".join(ch for ch in str(s or "") if ch.isdigit())
+
+def _phone_norm_sql(col):
+    """ביטוי SQL שמשאיר רק ספרות (בקירוב): מסיר מקפים, רווחים, סוגריים ו-+."""
+    return (f"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({col},'-',''),' ',''),"
+            f"'(',''),')',''),'+','')")
+
+def _search_where(search, match_expr):
+    """
+    תנאי החיפוש המהיר המשולב — מחזיר (where_sql, params):
+      • עמודות הניק דרך FTS (או LIKE כשאין FTS5),
+      • טלפונים/מיילים נוספים (nick_contacts) — בעבר היו בלתי נראים לחיפוש,
+      • התאמת טלפון מנורמל: '050-123-4567' נמצא גם כ-'0501234567' וגם כ-'972501234567'.
+    """
+    parts, params = [], []
+    if match_expr and FTS_AVAILABLE:
+        parts.append("n.id IN (SELECT rowid FROM nicks_fts WHERE nicks_fts MATCH ?)")
+        params.append(match_expr)
+    else:
+        s = f"%{search}%"
+        parts.append("(" + " OR ".join(f"n.{c} LIKE ?" for c in _SEARCH_COLS) + ")")
+        params.extend([s] * len(_SEARCH_COLS))
+    parts.append("n.id IN (SELECT nick_id FROM nick_contacts WHERE value LIKE ?)")
+    params.append(f"%{search}%")
+    digits = _digits(search)
+    if len(digits) >= 5 and len(digits) >= len(search.strip()) - 4:
+        variants = {digits}
+        if digits.startswith("0"):
+            variants.add("972" + digits[1:])
+        elif digits.startswith("972"):
+            variants.add("0" + digits[3:])
+        for d in variants:
+            parts.append(f"{_phone_norm_sql('n.phone')} LIKE ?")
+            parts.append(f"n.id IN (SELECT nick_id FROM nick_contacts WHERE "
+                         f"{_phone_norm_sql('value')} LIKE ?)")
+            params.extend([f"%{d}%", f"%{d}%"])
+    return "WHERE " + " OR ".join(parts), params
+
 def _fts_match_query(search):
     """הופך מחרוזת חיפוש חופשית לביטוי MATCH בטוח (כל מילה כ-prefix, AND בין מילים)"""
     tokens = [t for t in search.strip().split() if t]
@@ -430,6 +520,20 @@ def set_sync_setting(field_key, synced: bool):
         conn.execute(
             "INSERT OR REPLACE INTO sync_settings (field_key, synced) VALUES (?,?)",
             (field_key, 1 if synced else 0))
+
+def set_sync_settings(mapping):
+    """שמירה מרוכזת של כל דגלי הסנכרון בטרנזקציה אחת (במקום קריאת גשר לכל שדה)."""
+    with get_connection() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO sync_settings (field_key, synced) VALUES (?,?)",
+            [(k, 1 if v else 0) for k, v in (mapping or {}).items()])
+
+def set_forum_io_flags(mapping):
+    """שמירה מרוכזת של דגלי ייבוא/ייצוא לפורומים."""
+    with get_connection() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
+            [(f"forumio_{name}", "1" if inc else "0") for name, inc in (mapping or {}).items()])
 
 def get_exportable_fields():
     """מחזיר רשימת שדות שמסונכרנים לפי ההגדרות הנוכחיות"""
@@ -650,28 +754,13 @@ def get_all_nicks(search="", limit=None, offset=0):
 
         match_expr = _fts_match_query(search) if search else None
 
-        if match_expr and FTS_AVAILABLE:
+        if search:
+            where, params = _search_where(search, match_expr)
             total = conn.execute(
-                "SELECT COUNT(*) FROM nicks_fts WHERE nicks_fts MATCH ?", (match_expr,)
-            ).fetchone()[0]
-            rows = conn.execute(
-                base_select + f"""
-                WHERE n.id IN (SELECT rowid FROM nicks_fts WHERE nicks_fts MATCH ?)
-                {order_clause} {limit_clause}
-            """, [match_expr] + params_extra).fetchall()
-        elif search:
-            # נפילה חזרה לחיפוש LIKE (למקרה שאין תמיכת FTS5 בסביבה)
-            s = f"%{search}%"
-            like_parts = " OR ".join(f"n.{c} LIKE ?" for c in _SEARCH_COLS)
-            where = f"WHERE {like_parts}"
-            n_cols = len(_SEARCH_COLS)
-            total = conn.execute(
-                f"SELECT COUNT(*) FROM nicks n {where}", (s,) * n_cols
-            ).fetchone()[0]
+                f"SELECT COUNT(*) FROM nicks n {where}", params).fetchone()[0]
             rows = conn.execute(
                 base_select + where + f" {order_clause} {limit_clause}",
-                (s,) * n_cols + tuple(params_extra)
-            ).fetchall()
+                params + params_extra).fetchall()
         else:
             total = conn.execute("SELECT COUNT(*) FROM nicks").fetchone()[0]
             rows = conn.execute(
@@ -838,17 +927,26 @@ def search_nicks_for_lookup(query, limit=12):
     if not q:
         return []
     like = f"%{q}%"
+    digits = _digits(q)
+    phone_sql, phone_params = "", []
+    if len(digits) >= 5:
+        variants = {digits} | ({"972" + digits[1:]} if digits.startswith("0") else set())
+        for d in variants:
+            phone_sql += (f" OR {_phone_norm_sql('phone')} LIKE ?"
+                          f" OR id IN (SELECT nick_id FROM nick_contacts WHERE {_phone_norm_sql('value')} LIKE ?)")
+            phone_params += [f"%{d}%", f"%{d}%"]
     with get_connection() as conn:
-        rows = conn.execute("""
+        rows = conn.execute(f"""
             SELECT id, username, forum, real_name, full_name FROM nicks
             WHERE username LIKE ? OR real_name LIKE ? OR full_name LIKE ?
+               OR id IN (SELECT nick_id FROM nick_contacts WHERE value LIKE ?){phone_sql}
             ORDER BY
               CASE WHEN username = ? THEN 0
                    WHEN username LIKE ? THEN 1
                    ELSE 2 END,
               username
             LIMIT ?
-        """, (like, like, like, q, q + "%", limit)).fetchall()
+        """, [like, like, like, like] + phone_params + [q, q + "%", limit]).fetchall()
         return [dict(r) for r in rows]
 
 # שדות המוצגים בתצוגת המשתמש המאוחדת (label, key)
@@ -1032,22 +1130,141 @@ def update_nick(nick_id, data):
             resolve_field(nick_id, f)
 
 def delete_nick(nick_id):
-    with get_connection() as conn:
-        conn.execute("DELETE FROM nicks WHERE id=?", (nick_id,))
+    return delete_nicks([nick_id])
 
 def delete_nicks(nick_ids):
-    """מחיקה מרובה — מוחק בפועל את הניקים שנבחרו (לא רק מרוקן עמודות)"""
+    """
+    מחיקה מרובה דרך סל המחזור: לכל ניק נשמר צילום מלא (השורה, אנשי קשר, זהויות,
+    ערכי מקורות, מדף, התנגשויות) ב-trash_nicks, ורק אז נמחק. "בטל" משחזר הכול.
+    מחזיר {"deleted": n, "batch_id": id}.
+    """
+    import uuid
     ids = [int(i) for i in (nick_ids or [])]
     if not ids:
-        return 0
-    # מנות של 400 — SQLite מגביל את מספר הפרמטרים, ו"בחר הכל" יכול להיות עשרות אלפים
+        return {"deleted": 0, "batch_id": None}
+    batch = uuid.uuid4().hex
     deleted = 0
     with get_connection() as conn:
         for chunk in _chunks(ids, 400):
-            ph = ",".join(["?"] * len(chunk))
-            cur = conn.execute(f"DELETE FROM nicks WHERE id IN ({ph})", list(chunk))
+            ph = ",".join("?" * len(chunk))
+            snap = {}
+            for r in conn.execute(f"SELECT * FROM nicks WHERE id IN ({ph})", chunk):
+                snap[r["id"]] = {"nick": dict(r), "contacts": [], "identities": [],
+                                 "field_values": [], "shelved": [], "conflicts": []}
+            if not snap:
+                continue
+            for r in conn.execute(f"SELECT * FROM nick_contacts WHERE nick_id IN ({ph})", chunk):
+                snap[r["nick_id"]]["contacts"].append(dict(r))
+            for r in conn.execute(
+                    f"SELECT nick_id_a, nick_id_b FROM nick_identities "
+                    f"WHERE nick_id_a IN ({ph}) OR nick_id_b IN ({ph})", chunk + chunk):
+                for nid in (r[0], r[1]):
+                    if nid in snap:
+                        snap[nid]["identities"].append([r[0], r[1]])
+            for r in conn.execute(
+                    f"SELECT nick_id, field_name, value, source_id, created_at "
+                    f"FROM field_values WHERE nick_id IN ({ph})", chunk):
+                snap[r["nick_id"]]["field_values"].append(dict(r))
+            for r in conn.execute(f"SELECT * FROM shelved_values WHERE nick_id IN ({ph})", chunk):
+                snap[r["nick_id"]]["shelved"].append(dict(r))
+            for r in conn.execute(f"SELECT * FROM nick_conflicts WHERE nick_id IN ({ph})", chunk):
+                snap[r["nick_id"]]["conflicts"].append(dict(r))
+            conn.executemany(
+                "INSERT INTO trash_nicks (batch_id, nick_id, forum, username, payload) "
+                "VALUES (?,?,?,?,?)",
+                [(batch, nid, s["nick"]["forum"], s["nick"]["username"],
+                  json.dumps(s, ensure_ascii=False)) for nid, s in snap.items()])
+            cur = conn.execute(f"DELETE FROM nicks WHERE id IN ({ph})", chunk)
             deleted += cur.rowcount
-    return deleted
+    return {"deleted": deleted, "batch_id": batch}
+
+def restore_trash(batch_id=None, trash_ids=None):
+    """
+    משחזר ניקים מסל המחזור (לפי batch או לפי רשומות). ניק שבינתיים נוצר מחדש
+    (אותו פורום+שם) מדולג. מחזיר {"restored": n, "skipped": n}.
+    """
+    restored = skipped = 0
+    with get_connection() as conn:
+        if trash_ids:
+            ph = ",".join("?" * len(trash_ids))
+            rows = conn.execute(f"SELECT * FROM trash_nicks WHERE id IN ({ph})",
+                                [int(i) for i in trash_ids]).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM trash_nicks WHERE batch_id=?", (batch_id,)).fetchall()
+        forums = {r[0] for r in conn.execute("SELECT name FROM forums")}
+        handled = []
+        payloads = []
+        for r in rows:
+            s = json.loads(r["payload"])
+            payloads.append(s)
+            n = s["nick"]
+            if conn.execute("SELECT 1 FROM nicks WHERE forum=? AND username=?",
+                            (n["forum"], n["username"])).fetchone():
+                skipped += 1
+                handled.append(r["id"])
+                continue
+            if n["forum"] not in forums:
+                conn.execute("INSERT OR IGNORE INTO forums (name, color, url) VALUES (?,?,'')",
+                             (n["forum"], "#8b90a0"))
+                forums.add(n["forum"])
+            # שמות עמודות מהסכימה החיה בלבד (payload הוא JSON — לא מקור לזיהוי SQL)
+            valid = {r[1] for r in conn.execute("PRAGMA table_info(nicks)")}
+            cols = [c for c in n if c in valid]
+            conn.execute(
+                f"INSERT OR IGNORE INTO nicks ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                [n[c] for c in cols])
+            nid = n["id"]
+            for c in s.get("contacts", []):
+                conn.execute(
+                    "INSERT INTO nick_contacts (nick_id, type, value, label, is_private) VALUES (?,?,?,?,?)",
+                    (nid, c["type"], c["value"], c.get("label", ""), c.get("is_private", 0)))
+            for fv in s.get("field_values", []):
+                # רק אם המקור עדיין קיים
+                conn.execute(
+                    "INSERT OR IGNORE INTO field_values (nick_id, field_name, value, source_id, created_at) "
+                    "SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM sources WHERE id=?)",
+                    (nid, fv["field_name"], fv["value"], fv["source_id"], fv["created_at"], fv["source_id"]))
+            for sh in s.get("shelved", []):
+                conn.execute(
+                    "INSERT INTO shelved_values (nick_id, field_name, value, source_name, source_trust) "
+                    "VALUES (?,?,?,?,?)",
+                    (nid, sh["field_name"], sh["value"], sh.get("source_name", ""), sh.get("source_trust", 0)))
+            for cf in s.get("conflicts", []):
+                conn.execute(
+                    "INSERT INTO nick_conflicts (nick_id, field_name, conflicting_value, source_info) "
+                    "VALUES (?,?,?,?)",
+                    (nid, cf["field_name"], cf["conflicting_value"], cf.get("source_info", "")))
+            restored += 1
+            handled.append(r["id"])
+        # זהויות — אחרי שכל הניקים של האצווה חזרו (שני הצדדים חייבים להתקיים)
+        for s in payloads:
+            for a, b in s.get("identities", []):
+                if (conn.execute("SELECT 1 FROM nicks WHERE id=?", (a,)).fetchone()
+                        and conn.execute("SELECT 1 FROM nicks WHERE id=?", (b,)).fetchone()):
+                    conn.execute("INSERT OR IGNORE INTO nick_identities (nick_id_a, nick_id_b) VALUES (?,?)",
+                                 (min(a, b), max(a, b)))
+        for chunk in _chunks(handled, 400):
+            conn.execute(f"DELETE FROM trash_nicks WHERE id IN ({','.join('?' * len(chunk))})", chunk)
+    return {"restored": restored, "skipped": skipped}
+
+def list_trash(limit=200):
+    """אצוות מחיקה בסל, מהחדשה לישנה: batch_id, deleted_at, count, names (דוגמית)."""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT batch_id, MIN(deleted_at) AS deleted_at, COUNT(*) AS count,
+                   substr(GROUP_CONCAT(username, ' · '), 1, 160) AS names
+            FROM trash_nicks GROUP BY batch_id
+            ORDER BY deleted_at DESC LIMIT ?""", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+def empty_trash(older_than_days=None):
+    with get_connection() as conn:
+        if older_than_days is None:
+            cur = conn.execute("DELETE FROM trash_nicks")
+        else:
+            cur = conn.execute("DELETE FROM trash_nicks WHERE deleted_at < datetime('now', ?)",
+                               (f"-{int(older_than_days)} days",))
+        return cur.rowcount
 
 def reset_all():
     """איפוס נתונים מלא — מוחק ניקים וכל המידע הנלווה כולל מקורות וייבואים."""
@@ -1059,6 +1276,7 @@ def reset_all():
         conn.execute("DELETE FROM field_values")
         conn.execute("DELETE FROM shelved_values")
         conn.execute("DELETE FROM import_sources")
+        conn.execute("DELETE FROM trash_nicks")   # "מחיקה לגמרי" חייבת לרוקן גם את הסל
         # מחק את כל המקורות פרט ל"אני", ואפס את "אני" לברירת מחדל
         conn.execute("DELETE FROM sources WHERE id != 1")
         conn.execute("UPDATE sources SET trust=10, absolute=0, notes='' WHERE id=1")
@@ -1310,17 +1528,21 @@ def count_export_modes():
             "has_info": row["info_c"] or 0,
             "my_info": row["mine_c"] or 0}
 
-def export_data(mode="all"):
+def export_data(mode="all", ids=None):
     """
-    mode: 'all' | 'has_info' (רק ניקים עם מידע מעניין) | 'my_info' (רק ניקים עם מידע שהוספתי בעצמי).
+    mode: 'all' | 'has_info' (רק ניקים עם מידע מעניין) | 'my_info' (רק ניקים עם מידע שהוספתי בעצמי)
+          | 'selected' (רק ה-ids שסופקו — ייצוא חלקי של בחירה/תצוגה).
     """
     exportable = get_exportable_fields()
     io_flags = get_forum_io_flags()   # forum_name -> included?
+    id_set = {int(i) for i in ids} if ids is not None else None
     with get_connection() as conn:
         rows = conn.execute(_EXPORT_QUERY).fetchall()
     records = []
     for r in rows:
         d = dict(r)
+        if id_set is not None and d["id"] not in id_set:
+            continue
         # דלג על פורומים שהוחרגו בהגדרות (סעיף 2)
         if io_flags.get(d.get("forum", ""), True) is False:
             continue
@@ -1396,7 +1618,7 @@ def get_sources():
         rows = conn.execute("SELECT * FROM sources ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
-def update_source(source_id, name=None, notes=None, trust=None, absolute=None):
+def update_source(source_id, name=None, notes=None, trust=None, absolute=None, progress_cb=None):
     sets, vals = [], []
     if name is not None:     sets.append("name=?");     vals.append(name)
     if notes is not None:    sets.append("notes=?");    vals.append(notes)
@@ -1417,9 +1639,9 @@ def update_source(source_id, name=None, notes=None, trust=None, absolute=None):
         by_nick = {}
         for r in rows:
             by_nick.setdefault(r[0], []).append(r[1])
-        _resolve_fields_bulk(conn, by_nick)
+        _resolve_fields_bulk(conn, by_nick, progress_cb)
 
-def delete_source(source_id):
+def delete_source(source_id, progress_cb=None):
     """מוחק מקור וכל הערכים שלו; מריץ הכרעה מחדש לשדות המושפעים."""
     if source_id == 1:
         return False  # לא מוחקים את "אני"
@@ -1433,7 +1655,7 @@ def delete_source(source_id):
         conn.execute("DELETE FROM field_values WHERE source_id=?", (source_id,))
         conn.execute("DELETE FROM sources WHERE id=?", (source_id,))
         # הכרעה מחדש מקובצת על אותו חיבור (ראה update_source)
-        _resolve_fields_bulk(conn, by_nick)
+        _resolve_fields_bulk(conn, by_nick, progress_cb)
     return True
 
 def _upsert_field_value(conn, nick_id, field_name, value, source_id):
@@ -1499,7 +1721,7 @@ def _resolve_fields_conn(conn, nick_id, field_names):
         f"UPDATE nicks SET {sets}, updated_at=datetime('now') WHERE id=?",
         [winners[f] for f in changed] + [nick_id])
 
-def _resolve_fields_bulk(conn, by_nick):
+def _resolve_fields_bulk(conn, by_nick, progress_cb=None):
     """
     הכרעה מחדש להרבה ניקים בבת אחת: שתי שאילתות לכל מנה של 400 ניקים,
     במקום שתיים לכל ניק. משמש פעולות המוניות (שינוי/מחיקת מקור), שבמאגר
@@ -1513,7 +1735,11 @@ def _resolve_fields_bulk(conn, by_nick):
         return 0
     fph = ",".join("?" * len(all_fields))
     updated = 0
+    done = 0
     for chunk in _chunks(nids, 400):
+        if progress_cb:
+            progress_cb(done, len(nids))
+        done += len(chunk)
         ph = ",".join("?" * len(chunk))
         grouped = {}
         for r in conn.execute(f"""
@@ -1674,9 +1900,88 @@ def apply_import_conflict(nick_id, field, value, source_id, accept):
                 (value, nid))
     return True
 
+def apply_import_conflicts(items, accept):
+    """
+    "החל על כל השאר" בפותר ההתנגשויות — כל ההחלטות בחיבור אחד.
+    accept=False → לא נרשם כלום (הקיים נשאר). מחזיר כמה ערכים הוחלו.
+    """
+    if not accept:
+        return 0
+    n = 0
+    with get_connection() as conn:
+        for it in (items or []):
+            field = it.get("field")
+            val = it.get("new_value")
+            if field in _NON_SOURCED or val in (None, ""):
+                continue
+            nid = int(it.get("nick_id"))
+            _upsert_field_value(conn, nid, field, val, int(it.get("source_id")))
+            if field in _NICK_FIELDS and field not in ("forum", "username"):
+                conn.execute(
+                    f"UPDATE nicks SET {field}=?, updated_at=datetime('now') WHERE id=?",
+                    (val, nid))
+            n += 1
+    return n
+
+# ── גיבוי ושחזור מלאים של קובץ ה-DB ──────────────────────────────────
+def backup_to(dest_path):
+    """
+    גיבוי מלא ועקבי (כולל תוכן ה-WAL) לקובץ יעד דרך ה-backup API של SQLite.
+    מחזיר את מספר הניקים שגובו.
+    """
+    src = get_connection()
+    src.commit()
+    dst = sqlite3.connect(dest_path)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+    return src.execute("SELECT COUNT(*) FROM nicks").fetchone()[0]
+
+def _close_thread_connection():
+    conn = getattr(_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
+        _local.path = None
+
+def validate_backup(src_path):
+    """מאמת שקובץ הוא DB תקין של Tik-Nick; מחזיר מספר ניקים או מרים ValueError."""
+    chk = sqlite3.connect(f"file:{src_path}?mode=ro", uri=True)
+    try:
+        ok = chk.execute("PRAGMA integrity_check").fetchone()[0]
+        has = chk.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='nicks'").fetchone()
+        n = chk.execute("SELECT COUNT(*) FROM nicks").fetchone()[0] if has else 0
+    finally:
+        chk.close()
+    if ok != "ok" or not has:
+        raise ValueError("הקובץ אינו גיבוי תקין של Tik-Nick")
+    return n
+
+def restore_from(src_path):
+    """
+    שחזור מגיבוי דרך ה-backup API של SQLite — כותב לתוך המאגר החי במקום להחליף
+    קובץ פתוח (ב-Windows אי אפשר, וגם עותק-קובץ פשוט מפספס את תוכן ה-WAL).
+    עותק בטיחות של המצב הנוכחי נשמר לצדו לפני הכתיבה.
+    """
+    n = validate_backup(src_path)
+    safety = DB_PATH + f".before-restore-{datetime.now():%Y%m%d-%H%M%S}"
+    backup_to(safety)                     # כולל את תוכן ה-WAL
+    src = sqlite3.connect(f"file:{src_path}?mode=ro", uri=True)
+    try:
+        src.backup(get_connection())      # אטומי תחת הנעילה של SQLite
+    finally:
+        src.close()
+    init_db()                             # מיגרציות/אינדקסים/FTS על התוכן החדש
+    return {"nicks": n, "safety_backup": safety}
+
 def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
                 import_name=None, import_notes="", import_trust=None, import_absolute=0,
-                manual_conflicts=False):
+                manual_conflicts=False, progress_cb=None):
     """
     ייבוא מבוסס-מקורות: נוצר מקור ייבוא אחד (שם/הערות/אמינות/אבסולוטי),
     וכל ערך מיובא נרשם תחתיו במנוע המקורות. הערך המנצח בכל שדה נקבע אוטומטית.
@@ -1732,7 +2037,11 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
                         [forum] + list(chunk)):
                     existing[(forum, r["username"])] = r
 
+        done_n = 0
         for forum, username, nick in entries:
+            done_n += 1
+            if progress_cb and done_n % 25 == 0:
+                progress_cb(done_n)
             row = existing.get((forum, username))
             if row is not None:
                 nid = row["id"]

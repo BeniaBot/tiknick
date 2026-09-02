@@ -50,6 +50,12 @@
         <button class="nav-btn" onclick="importData()">
           <span class="icon">📥</span> ייבוא
         </button>
+        <button class="nav-btn" onclick="backupDb()" title="עותק מלא של כל המאגר לקובץ אחד">
+          <span class="icon">🗄️</span> גיבוי מלא
+        </button>
+        <button class="nav-btn" onclick="restoreDb()" title="החלפת המאגר בגיבוי שנשמר">
+          <span class="icon">♻️</span> שחזור מגיבוי
+        </button>
       </div>
       <div class="nav-group">
         <div class="nav-label">הגדרות</div>
@@ -77,6 +83,12 @@
       </div>
       <div class="nav-group">
         <div class="nav-label">מתקדם</div>
+        <button class="nav-btn" onclick="openTrash()" title="ניקים שנמחקו — לשחזור עד 30 יום">
+          <span class="icon">🗑️</span> סל מחזור
+        </button>
+        <button class="nav-btn" onclick="openDbHealth()" title="גודל, תקינות, מיקום הקבצים ויומן">
+          <span class="icon">🩺</span> בריאות המאגר
+        </button>
         <button class="nav-btn danger" onclick="confirmReset()">
           <span class="icon">🔴</span> איפוס נתונים
         </button>
@@ -145,6 +157,7 @@
     <div id="bulk-bar" style="display:none;align-items:center;gap:8px;padding:8px 16px;
          background:var(--card2);border-bottom:1px solid var(--border-soft);flex-wrap:wrap;direction:rtl">
       <span class="stat-pill">✅ <b id="bulk-count2">0</b> נבחרו</span>
+      <button class="btn btn-ghost btn-sm" onclick="copySelectedRows()" title="העתקה כטבלה — להדבקה באקסל">📋 העתק</button>
       <button class="btn btn-danger btn-sm" onclick="deleteBulkSelected()">🗑️ מחק נבחרים</button>
       <button class="btn btn-warning btn-sm" onclick="bulkEditSelected()">✏️ ערוך שדה</button>
       <button class="btn btn-ghost btn-sm" onclick="syncSelectedOnline()" title="סנכרן את הנבחרים מהאינטרנט (הערך מהאינטרנט מנצח)">🌐 סנכרן</button>
@@ -177,8 +190,13 @@
 
     <!-- (הוסר: כפתור "טען עוד" — הוחלף בגלילה וירטואלית שקופה) -->
 
+    <!-- באנרי תהליכי רקע — נערמים זה מעל זה, כדי ששני תהליכים במקביל
+         (למשל Chazonishnik + Stinknik) יהיו שניהם גלויים ולא יסתירו זה את זה -->
+    <div id="bg-tasks" style="position:fixed;bottom:16px;right:16px;z-index:90;
+         display:flex;flex-direction:column;gap:10px;align-items:flex-end">
+
     <!-- floating stinknik progress -->
-    <div id="stink-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+    <div id="stink-banner" style="display:none;
          background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
          box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:240px;direction:rtl">
       <div style="display:flex;align-items:center;gap:10px">
@@ -189,7 +207,7 @@
     </div>
 
     <!-- floating chazonishnik progress -->
-    <div id="chz-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+    <div id="chz-banner" style="display:none;
          background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
          box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:240px;direction:rtl">
       <div style="display:flex;align-items:center;gap:10px">
@@ -200,7 +218,7 @@
     </div>
 
     <!-- floating scrape progress (persistent, works even outside the sync modal) -->
-    <div id="scrape-banner" style="display:none;position:fixed;bottom:16px;left:16px;z-index:900;
+    <div id="scrape-banner" style="display:none;
          background:var(--card);border:1px solid var(--border-soft);border-radius:12px;
          box-shadow:0 8px 30px rgba(0,0,0,.35);padding:12px 14px;min-width:260px;direction:rtl">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
@@ -215,6 +233,8 @@
              background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s"></div>
       </div>
     </div>
+
+    </div><!-- /bg-tasks -->
 
     <!-- statusbar -->
     <div id="statusbar">

@@ -539,7 +539,7 @@ body[data-view="cards"] #cards-wrap{display:block}
 
 /* ══ TOAST ══ */
 #toast-container{position:fixed;bottom:26px;left:26px;z-index:999;display:flex;flex-direction:column;gap:10px;pointer-events:none}
-.toast{padding:14px 19px;border-radius:var(--r-sm);font-size:13.5px;font-weight:700;color:#fff;box-shadow:var(--shadow-lg);animation:slide-toast .34s var(--spring);pointer-events:auto;backdrop-filter:blur(12px);display:flex;align-items:center;gap:9px}
+.toast{padding:14px 19px;border-radius:var(--r-sm);font-size:13.5px;font-weight:700;color:#fff;box-shadow:var(--shadow-lg);animation:slide-toast .34s var(--spring);pointer-events:none;backdrop-filter:blur(12px);display:flex;align-items:center;gap:9px}
 .toast-success{background:linear-gradient(135deg,rgba(52,211,153,.95),rgba(16,150,110,.95))}
 .toast-error{background:linear-gradient(135deg,rgba(244,84,76,.95),rgba(200,50,42,.95))}
 .toast-info{background:linear-gradient(135deg,rgba(255,107,74,.95),rgba(229,80,47,.95))}
@@ -1174,6 +1174,17 @@ tbody tr:hover td:last-child::after {
 .tab-btn:hover{color:var(--text)}
 .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent)}
 .policy-opt:hover{border-color:var(--accent)!important;background:var(--row-hover)}
+
+/* ══ toast עם כפתור פעולה (למשל "↩ בטל") ══ */
+.toast .toast-action{
+  pointer-events:auto;margin-right:10px;padding:4px 10px;border-radius:6px;border:1px solid rgba(255,255,255,.5);
+  background:rgba(255,255,255,.18);color:#fff;font-family:var(--font);font-size:12.5px;font-weight:800;cursor:pointer;
+}
+.toast .toast-action:hover{background:rgba(255,255,255,.3)}
+
+/* ══ טלפון/מייל לחיצים ══ */
+.contact-link{cursor:pointer;border-bottom:1px dashed var(--accent);text-decoration:none}
+.contact-link:hover{color:var(--accent)}
 
 /* ══ העתקת ערכים ══
    user-select:none הגלובלי חסם העתקה של טלפון/מייל/כתובת — בדיוק המידע

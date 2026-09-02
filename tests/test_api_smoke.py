@@ -2,6 +2,7 @@
 """Smoke test: import main (full API surface loads) and exercise new API methods."""
 import os, sys, tempfile
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # קונסולה בעברית/CP1255 לא תפיל הדפסות
 
 import main   # runs top-level (DPI/logging/imports) — must not raise
 sys.excepthook = sys.__excepthook__   # main.py routes tracebacks to a log; restore printing

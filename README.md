@@ -5,7 +5,7 @@
 **תוכנת דסקטופ בעברית לניהול ומעקב אחר ניקים (שמות משתמש) בפורומים.**
 כל המידע נשמר מקומית במחשב שלך — פרטיות מלאה.
 
-[![Version](https://img.shields.io/badge/גרסה-0.8.3-f59e0b?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
+[![Version](https://img.shields.io/badge/גרסה-0.8.4-f59e0b?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
 [![Platform](https://img.shields.io/badge/פלטפורמה-Windows%2010%2F11-blue?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 
@@ -39,6 +39,12 @@
 
 ### 📤 ייצוא גמיש
 ייצוא כל הניקים, רק ניקים עם מידע, או רק ניקים עם מידע שהוספת בעצמך.
+
+### 🗄️ גיבוי, שחזור וסל מחזור
+גיבוי מלא של כל המאגר לקובץ אחד בלחיצה, ושחזור ממנו (עם עותק בטיחות אוטומטי). ניקים שנמחקו עוברים לסל מחזור עם "בטל" מיידי ושחזור עד 30 יום. דיאלוג "בריאות המאגר" עם תקינות, גודל וכיווץ.
+
+### 📞 קישורי קשר, העתקה ואקסל
+לחיצה על טלפון פותחת וואטסאפ/חיוג, על מייל — שליחה. העתקת שורות נבחרות כטבלה להדבקה באקסל, ייצוא CSV, וייצוא חלקי של הנבחרים או התצוגה הנוכחית. קיצורי מקלדת (Ctrl+F, חיצים, Enter, Delete).
 
 ### 🔄 עדכונים
 בדיקת עדכונים אוטומטית, ועדכון מלא מתוך התוכנה — בגרסה הניידת וגם בגרסה המותקנת (כל אחת מתעדכנת לאותו סוג).

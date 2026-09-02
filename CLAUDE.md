@@ -106,6 +106,25 @@ WAL + foreign_keys ON. אינדקסים על username/forum/updated_at/trust_lev
 - ערכות: dark (ברירת מחדל, פחם חם) / light (קרם) / system; 8 מבטאים (ברירת מחדל amber); צפיפות compact/normal/cozy — הכול CSS variables על `data-*` attributes, נשמר ב-settings.
 - `user-select:none` גלובלי, film-grain overlay, אנימציות spring.
 
+## שני באגים שבנימין דיווח (0.8.4) — שורש וסטטוס
+
+1. **"שני תהליכים במקביל — Chazonishnik נעלם כשהפעלתי Stinknik"**: שלושת הבאנרים הצפים היו ממוקמים בדיוק באותו מקום (`bottom:16px;right:16px`), כך שהשני צייר על הראשון. **תוקן**: כולם בתוך `#bg-tasks` (flex column) ונערמים. שים לב שהמוניטורים עצמם (`_chzPoll`/`_stinkPoll`/`_scrapePoll`) תמיד היו עצמאיים — זו הייתה בעיה ויזואלית בלבד, והניתוח כן רץ ברקע.
+2. **"Stinknik סרק רק אחוז מזערי מהפוסטים של לומדעס"**: נבדק מול השרת החי — הקוד **כן** עובר את כל העמודים (3,177 פוסטים מתוך 3,476 postcount, ~128 שניות, ללא עוגייה). שתי סיבות אמיתיות לפער שהמשתמש ראה: (א) בגרסה המשוחררת `_get_json` היה **בלי ריטריי**, וכל תקלת רשת/429 באמצע גרמה ל-`break` שקט שדווח כ"הושלם ✓" (תוקן ב-0.8.4 עם ריטריי + כיבוד Retry-After); (ב) ~300 פוסטים הם בקטגוריות שדורשות התחברות. **תוקן**: הסריקה מדווחת כעת בכנות — `postcount`, `partial`, `stopped_early`, `limited` חוזרים מ-`analyze_dislikes`/`analyze_user`, ה-toast אומר "נסרקו X מתוך Y" ומבחין בין "נעצר בגלל תקלת רשת" ל"השאר דורש התחברות", והדוח עצמו מציג "פוסטים שנסרקו מתוך Y". **לקח: אל תסמוך על `pagination.pageCount` של NodeBB בנתיב `/api/user/{slug}/posts` — הוא מחזיר 1 גם כשיש 170 עמודים; יש לעמוד עד עמוד ריק.**
+
+## מה נוסף ב-0.8.4 (2026-09-02) — "חסרים הרבה דברים"
+
+**מקור**: ניתוח פערי-מוצר (5 סוכנים, 38 הצעות; הרשימה המלאה ב-scratchpad של הסשן) + כל הפריטים שנותרו פתוחים מ-0.8.3.
+
+**סל מחזור (`trash_nicks`)**: `delete_nicks` מצלם לכל ניק payload JSON מלא (השורה, contacts, identities, field_values, shelved, conflicts) ורק אז מוחק; מחזיר `{deleted, batch_id}`. `restore_trash(batch_id)` מחזיר עם **אותו id** (AUTOINCREMENT מבטיח שלא נוצל), מדלג על ניק שנוצר מחדש בינתיים, משחזר זהויות רק כששני הצדדים קיימים, וערכי מקורות רק אם המקור עדיין קיים. purge של 30 יום ב-`init_db`. ב-JS: `toast(msg,type,{actionLabel,onAction})` → "↩ בטל", ודיאלוג `openTrash()`.
+
+**חיפוש**: `_search_where()` — FTS/LIKE על עמודות הניק **וגם** `nick_contacts.value`, **וגם** התאמת טלפון מנורמל (`_phone_norm_sql`, ווריאנטים 0…/972…). `search_nicks_for_lookup` באותה רוח.
+
+**ממשק**: קישורי קשר (`contactMenu` — wa.me/tel:/mailto:/העתקה; `.contact-link[data-cval]` בהאצלה); `copy_to_clipboard` (ctypes, CF_UNICODETEXT — `navigator.clipboard` לא אמין ב-WebView); העתקת נבחרים כ-TSV ופרופיל מאוחד; `export_csv(mode, ids)` (utf-8-sig, `="0501…"` לאפסים מובילים) + `export_data(mode, ids)` עם מצבי `selected`/תצוגה; מקלדת (Ctrl+F, "/", Enter, חיצים, Delete, Esc); זיכרון `sort`/`last_search` ב-display settings; `updateSortIcons()`.
+
+**תשתית**: ייבוא ב-thread (`_import_state`, `get_import_progress`, `runImport()`); פעולות מקור ב-thread (`_source_state`, `_run_source_op`, `waitSourceOp()`); `set_sync_settings`/`set_forum_io_flags`/`apply_import_conflicts` מרוכזים; `start_scrape_all(..., only_forums)` + `showSkippedForums()`; `last_scrape_<forum>` ב-settings + `get_last_scrapes`; `checkpoint()` בסגירת החלון + `journal_size_limit`; `db_health()`/`vacuum()`/`open_data_folder`/`open_log`; `backup_to`/`validate_backup`/`restore_from` (עותק בטיחות `.before-restore-*`); `_single_instance_or_exit` (mutex) ו-`_msgbox` בעברית ב-init_db כושל; עדכון עצמי ממתין לפי PID וכותב `update-failed.txt` (`consume_update_failure`); ריטריי ב-`_get_json` של Chazonishnik/Stinknik; חלון וירטואלי לכרטיסים (`measureCardsLayout`, `cardsSpacer`); אונבורדינג כשאין פורומים.
+
+**מהניתוח — עדיין לא מומש (לפי ערך)**: הצעות זהות אוטומטיות (real_name/phone זהים בין פורומים); חיפוש תת-מחרוזת/סלחני בעברית; ציר זמן/היסטוריה לניק (field_values דורס created_at); דוח "מה השתנה בסריקה" + התראה על הרחקות; לוח סטטיסטיקות; ייבוא CSV; אנשי קשר וזהויות בפורמט .tiknick (גרסה 3); תצוגה מקדימה לייבוא; פעולות מרובות (קישור זהויות/העברת פורום/תיוג); סינונים שמורים; סריקה מתוזמנת; גיבוי אוטומטי יומי + לפני פעולות הרסניות; רוחב/סדר עמודות; פרופיל להדפסה; מפת זהויות.
+
 ## מה נוסף ב-0.8.3 (2026-09-02) — סריקת עומק
 
 **מקור**: ביקורת רב-ממדית (6 סוכני קריאה-בלבד, 79 ממצאים) + מדידות על מאגר סינתטי של 20-40 אלף ניקים ועל ה-DB האמיתי של בנימין (88MB, 90k ניקים).

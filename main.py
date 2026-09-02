@@ -46,6 +46,14 @@ _chz_cancel = threading.Event()
 # מצב הורדת עדכון
 _update_state = {"downloaded": 0, "total": 0}
 
+# מצב ייבוא ברקע (ייבוא גדול נמשך שניות-דקות — לא חוסמים את הממשק)
+_import_state = {"running": False, "done": False, "error": None,
+                 "processed": 0, "total": 0, "result": None}
+
+# מצב פעולת מקור ברקע (שינוי אמינות / מחיקת מקור = הכרעה מחדש לכל הערכים שלו)
+_source_state = {"running": False, "done": False, "error": None,
+                 "processed": 0, "total": 0, "op": ""}
+
 # מצב Stinknik (ניתוח דיסלייקים ברקע)
 _stink_state = {"running": False, "done": False, "error": None,
                 "checked": 0, "page": 0, "disliked": 0, "html": None,
@@ -58,7 +66,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.3"
+APP_VERSION = "0.8.4"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -208,20 +216,110 @@ class API:
 
     def delete_nick(self, nick_id):
         try:
-            db.delete_nick(int(nick_id))
-            return {"ok": True}
+            r = db.delete_nicks([int(nick_id)])
+            return {"ok": True, "count": r["deleted"], "batch_id": r["batch_id"]}
         except Exception as e:
             logging.exception("delete_nick failed")
             return {"ok": False, "error": str(e)}
 
     def delete_nicks(self, nick_ids):
-        """מחיקה מרובה בפועל — מוחקת את הניקים הנבחרים (לא מרוקנת עמודות בלבד)"""
+        """מחיקה מרובה דרך סל המחזור — ניתנת לביטול (restore_trash)"""
         try:
-            n = db.delete_nicks(nick_ids or [])
-            return {"ok": True, "count": n}
+            r = db.delete_nicks(nick_ids or [])
+            return {"ok": True, "count": r["deleted"], "batch_id": r["batch_id"]}
         except Exception as e:
             logging.exception("delete_nicks failed")
             return {"ok": False, "error": str(e)}
+
+    # ── סל מחזור ───────────────────────────────────────────────────
+    def get_trash(self):
+        return db.list_trash()
+
+    def restore_trash(self, batch_id):
+        try:
+            return {"ok": True, **db.restore_trash(batch_id=batch_id)}
+        except Exception as e:
+            logging.exception("restore_trash failed")
+            return {"ok": False, "error": str(e)}
+
+    def empty_trash(self):
+        try:
+            return {"ok": True, "count": db.empty_trash()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # ── לוח ─────────────────────────────────────────────────────────
+    def copy_to_clipboard(self, text):
+        """העתקה ללוח של Windows (CF_UNICODETEXT) — ה-WebView לא תמיד מאפשר navigator.clipboard"""
+        try:
+            import ctypes
+            text = str(text or "")
+            u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+            k32.GlobalAlloc.restype = ctypes.c_void_p
+            k32.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+            k32.GlobalLock.restype = ctypes.c_void_p
+            k32.GlobalLock.argtypes = [ctypes.c_void_p]
+            k32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+            u32.SetClipboardData.restype = ctypes.c_void_p
+            u32.SetClipboardData.argtypes = [ctypes.c_uint, ctypes.c_void_p]
+            if not u32.OpenClipboard(None):
+                return {"ok": False, "error": "הלוח תפוס על ידי תוכנה אחרת"}
+            try:
+                u32.EmptyClipboard()
+                data = text.encode("utf-16-le") + b"\x00\x00"
+                h = k32.GlobalAlloc(0x0002, len(data))          # GMEM_MOVEABLE
+                p = k32.GlobalLock(h)
+                ctypes.memmove(p, data, len(data))
+                k32.GlobalUnlock(h)
+                u32.SetClipboardData(13, h)                     # CF_UNICODETEXT
+            finally:
+                u32.CloseClipboard()
+            return {"ok": True}
+        except Exception as e:
+            logging.exception("copy_to_clipboard failed")
+            return {"ok": False, "error": str(e)}
+
+    # ── בריאות המאגר ────────────────────────────────────────────────
+    def get_db_health(self):
+        try:
+            h = db.db_health()
+            h.update({"ok": True, "log_path": _LOG_PATH, "data_dir": _DATA_DIR,
+                      "version": APP_VERSION, "install_type": _install_type()})
+            return h
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def vacuum_db(self):
+        if (_scrape_state["running"] or _import_state["running"]
+                or _source_state["running"] or _chz_state["running"] or _stink_state["running"]):
+            return {"ok": False, "error": "יש פעולה שרצה ברקע — המתן לסיומה"}
+        try:
+            return {"ok": True, "size": db.vacuum()}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def open_data_folder(self):
+        try:
+            os.startfile(_DATA_DIR)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def open_log(self):
+        try:
+            os.startfile(_LOG_PATH)
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def get_last_scrapes(self):
+        """{שם פורום: זמן סריקה אחרון (ISO)} — למד 'נסרק לאחרונה' בדיאלוג הסנכרון"""
+        out = {}
+        for f in db.get_forums():
+            ts = db.get_setting(f"last_scrape_{f['name']}", "")
+            if ts:
+                out[f["name"]] = ts
+        return out
 
     # ── סנכרון לאינטרנט (סריקת פורומי NodeBB) ──────────────────────
     def get_scrapable_forums(self):
@@ -287,6 +385,11 @@ class API:
                     platform=platform,
                 )
                 _scrape_state["cancelled"] = _scrape_cancel.is_set()
+                if not _scrape_state["cancelled"]:
+                    import datetime as _dt
+                    # UTC — הממשק מפרש את הערך הזה כ-UTC (כמו datetime('now') של SQLite)
+                    db.set_setting(f"last_scrape_{forum_name}",
+                                   _dt.datetime.utcnow().isoformat(timespec="minutes"))
             except Exception as e:
                 _scrape_state["error"] = str(e)
             finally:
@@ -299,13 +402,16 @@ class API:
     def get_scrape_progress(self):
         return dict(_scrape_state)
 
-    def start_scrape_all(self, cookie="", max_pages=None):
+    def start_scrape_all(self, cookie="", max_pages=None, only_forums=None):
         """סורק את כל הפורומים ברצף, עם דילוג אוטומטי על פורום שנכשל.
-        cookie אינו בשימוש כאן במכוון — כל פורום משתמש רק בעוגייה השמורה שלו."""
+        cookie אינו בשימוש כאן במכוון — כל פורום משתמש רק בעוגייה השמורה שלו.
+        only_forums — רשימת שמות לסריקה חוזרת של תת-קבוצה (למשל הפורומים שדולגו)."""
         if _scrape_state["running"]:
             return {"ok": False, "error": "סריקה כבר רצה"}
 
-        forums = [f for f in db.get_forums() if (f.get("url") or "").strip()]
+        wanted = set(only_forums or [])
+        forums = [f for f in db.get_forums()
+                  if (f.get("url") or "").strip() and (not wanted or f["name"] in wanted)]
         if not forums:
             return {"ok": False, "error": "אין פורומים עם כתובת לסריקה"}
 
@@ -361,6 +467,10 @@ class API:
                     base["updated"] += stats.get("updated", 0)
                     base["failed_pages"] += stats.get("failed_pages", 0)
                     _scrape_state["failed_pages"] = base["failed_pages"]
+                    if not stats.get("cancelled") and not stats.get("skipped"):
+                        import datetime as _dt
+                        db.set_setting(f"last_scrape_{f['name']}",
+                                       _dt.datetime.utcnow().isoformat(timespec="minutes"))
                     _scrape_state["added"]   = base["added"]
                     _scrape_state["updated"] = base["updated"]
                 except Exception as e:
@@ -496,6 +606,12 @@ class API:
         """פתח URL בדפדפן ברירת המחדל של המערכת"""
         if not url:
             return {"ok": False, "error": "אין קישור"}
+        # רק סכימות מוכרות — webbrowser.open ב-Windows מגיע ל-ShellExecute,
+        # שיפעיל גם קובץ מקומי או ms-*: אם ערך מהפורום יגיע לכאן
+        from urllib.parse import urlsplit
+        if urlsplit(url).scheme.lower() not in ("http", "https", "mailto", "tel"):
+            logging.warning("Blocked open_url scheme: %s", url[:120])
+            return {"ok": False, "error": "סוג קישור לא נתמך"}
         try:
             webbrowser.open(url)
             return {"ok": True}
@@ -552,6 +668,10 @@ class API:
                     _chz_state["html"] = result.get("html")
                     _chz_state["path"] = result.get("path")
                     _chz_state["count"] = result.get("posts", 0)
+                    _chz_state["postcount"] = result.get("postcount", 0)
+                    _chz_state["partial"] = result.get("partial", False)
+                    _chz_state["stopped_early"] = result.get("stopped_early", False)
+                    _chz_state["limited"] = result.get("limited", False)
                 else:
                     _chz_state["error"] = result.get("error")
             except Exception as e:
@@ -609,6 +729,10 @@ class API:
                     _stink_state["html"] = result.get("html")
                     _stink_state["disliked"] = result.get("disliked", 0)
                     _stink_state["checked"] = result.get("checked", 0)
+                    _stink_state["postcount"] = result.get("postcount", 0)
+                    _stink_state["partial"] = result.get("partial", False)
+                    _stink_state["stopped_early"] = result.get("stopped_early", False)
+                    _stink_state["limited"] = result.get("limited", False)
                 else:
                     _stink_state["error"] = result.get("error")
             except Exception as e:
@@ -742,6 +866,19 @@ class API:
     def get_update_download_progress(self):
         return dict(_update_state)
 
+    def consume_update_failure(self):
+        """האם עדכון קודם נכשל בהחלפת הקובץ? (סימון שכותב סקריפט העדכון) — חד-פעמי."""
+        try:
+            if not getattr(sys, "frozen", False):
+                return {"failed": False}
+            marker = os.path.join(os.path.dirname(sys.executable), "update-failed.txt")
+            if os.path.exists(marker):
+                os.remove(marker)
+                return {"failed": True}
+        except Exception:
+            pass
+        return {"failed": False}
+
     def apply_update(self, new_exe_path):
         """
         מחליף את ה-EXE הישן בחדש: כותב סקריפט batch שממתין לסגירת התוכנה,
@@ -771,6 +908,8 @@ class API:
         try:
             cur_exe = _sys.executable
             exe_name = os.path.basename(cur_exe)
+            pid = os.getpid()
+            fail_marker = os.path.join(os.path.dirname(cur_exe), "update-failed.txt")
             bat = os.path.join(tempfile.gettempdir(), "tiknick_update.bat")
             # ממתין לסגירה מלאה, נותן ל-PyInstaller לנקות את _MEI, מחליף עם ניסיונות
             # חוזרים, ומריץ מחדש בסביבה נקייה (מנקה _MEIPASS2 כדי למנוע שגיאת DLL).
@@ -785,12 +924,16 @@ set "_PYI_APPLICATION_HOME_DIR="
 set "_PYI_ARCHIVE_FILE="
 set "_PYI_PARENT_PROCESS_LEVEL="
 
-rem — המתן עד שהתהליך הישן ייסגר לחלוטין —
+rem — המתן עד שהתהליך הישן (לפי PID, לא לפי שם — ייתכן עותק נוסף רץ) ייסגר —
+set /a waited=0
 :waitloop
-tasklist /FI "IMAGENAME eq {exe_name}" 2>nul | find /I "{exe_name}" >nul
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
 if not errorlevel 1 (
-    ping -n 2 127.0.0.1 >nul
-    goto waitloop
+    set /a waited+=1
+    if %waited% lss 60 (
+        ping -n 2 127.0.0.1 >nul
+        goto waitloop
+    )
 )
 
 rem — המתן עוד רגע לשחרור קבצים וניקוי _MEI —
@@ -806,6 +949,11 @@ if exist "{new_exe_path}" (
         ping -n 2 127.0.0.1 >nul
         goto movetry
     )
+)
+
+rem — אם ההחלפה נכשלה, השאר סימון כדי שהתוכנה תדווח על כך בהפעלה הבאה —
+if exist "{new_exe_path}" (
+    echo failed> "{fail_marker}"
 )
 
 rem — הפעל מחדש בסביבה נקייה (cmd חדש בלי משתני PyInstaller) —
@@ -971,6 +1119,16 @@ del "%~f0"
         db.set_sync_setting(field_key, bool(synced))
         return {"ok": True}
 
+    def set_sync_settings(self, mapping):
+        """שמירה מרוכזת: {field_key: bool} בקריאה אחת"""
+        db.set_sync_settings({k: bool(v) for k, v in (mapping or {}).items()})
+        return {"ok": True}
+
+    def set_forum_io_flags(self, mapping):
+        """שמירה מרוכזת: {forum_name: bool} בקריאה אחת"""
+        db.set_forum_io_flags({k: bool(v) for k, v in (mapping or {}).items()})
+        return {"ok": True}
+
     # section 2: אילו פורומים ייכללו בייבוא/ייצוא
     def get_forum_io_flags(self):
         return db.get_forum_io_flags()
@@ -991,16 +1149,59 @@ del "%~f0"
         """כמה ניקים ייכללו בכל מצב ייצוא (הכל / עם מידע / עם מידע שלי)."""
         return db.count_export_modes()
 
-    def export_data(self, mode="all"):
+    def export_csv(self, mode="all", ids=None):
+        """ייצוא לאקסל: CSV עם BOM (עברית תקינה); מספרים עם 0 מוביל נשמרים כטקסט."""
+        import csv
+        try:
+            from webview import FileDialog
+            save_dialog = FileDialog.SAVE
+        except ImportError:
+            save_dialog = webview.SAVE_DIALOG
+        if mode not in ("all", "has_info", "my_info", "selected"):
+            mode = "all"
+        result = webview.windows[0].create_file_dialog(
+            save_dialog, save_filename="tiknick_export.csv",
+            file_types=("CSV לאקסל (*.csv)", "All files (*.*)"))
+        if not result:
+            return {"ok": False, "error": "בוטל"}
+        dest = result[0] if isinstance(result, (list, tuple)) else result
+        if not dest:
+            return {"ok": False, "error": "בוטל"}
+        try:
+            data = db.export_data("all" if mode == "selected" else mode,
+                                  ids if mode == "selected" else None)
+            labels = {k: lbl for k, lbl, _ in db.ALL_NICK_FIELDS}
+            fields = [f for f in data["exported_fields"] if f != "avatar_image"]
+
+            def cell(v):
+                s = "" if v is None else str(v)
+                # אקסל מוחק 0 מוביל ממספרים — נוסחת טקסט שומרת אותו (עובד גם ב-Google Sheets)
+                if s.isdigit() and s.startswith("0") and len(s) >= 6:
+                    return f'="{s}"'
+                # ערכים מהפורום אינם בטוחים: תא שמתחיל ב-= + - @ מורץ כנוסחה באקסל
+                if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
+                    return "'" + s
+                return s
+            with open(dest, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.writer(f)
+                w.writerow([labels.get(k, k) for k in fields])
+                for r in data["nicks"]:
+                    w.writerow([cell(r.get(k, "")) for k in fields])
+            return {"ok": True, "path": dest, "count": len(data["nicks"])}
+        except Exception as e:
+            logging.exception("export_csv failed")
+            return {"ok": False, "error": str(e)}
+
+    def export_data(self, mode="all", ids=None):
         try:
             from webview import FileDialog
             save_dialog = FileDialog.SAVE
         except ImportError:
             save_dialog = webview.SAVE_DIALOG  # older pywebview
 
-        if mode not in ("all", "has_info", "my_info"):
+        if mode not in ("all", "has_info", "my_info", "selected"):
             mode = "all"
-        suffix = {"all": "", "has_info": "_מידע", "my_info": "_שלי"}[mode]
+        suffix = {"all": "", "has_info": "_מידע", "my_info": "_שלי", "selected": "_נבחרים"}[mode]
 
         result = webview.windows[0].create_file_dialog(
             save_dialog,
@@ -1020,7 +1221,8 @@ del "%~f0"
         if not dest:
             return {"ok": False, "error": "בוטל"}
 
-        data = db.export_data(mode)
+        data = db.export_data("all" if mode == "selected" else mode,
+                              ids if mode == "selected" else None)
         with open(dest, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         return {"ok": True, "path": dest, "count": len(data["nicks"])}
@@ -1063,23 +1265,103 @@ del "%~f0"
         pending = getattr(self, '_pending_import', None)
         if not pending:
             return {"ok": False, "error": "אין קובץ ממתין"}
+        if _import_state["running"]:
+            return {"ok": False, "error": "ייבוא כבר רץ"}
+        data     = pending["data"]
+        path     = pending["path"]
+        mapping  = forum_mapping or {}
+        name     = import_name or os.path.basename(path)
+        manual   = db.get_setting("import_manual_conflicts", "0") == "1"
+        total    = len(data.get("nicks", []))
+        self._pending_import = None
+        _import_state.update({"running": True, "done": False, "error": None,
+                              "processed": 0, "total": total, "result": None})
+
+        def _progress(n):
+            _import_state["processed"] = n
+
+        def _run():
+            try:
+                result = db.import_data(
+                    data, os.path.basename(path), mapping,
+                    import_name=name, import_notes=import_notes, import_trust=import_trust,
+                    manual_conflicts=manual, progress_cb=_progress)
+                if manual and isinstance(result, dict):
+                    _import_state["result"] = {"imported": result["imported"],
+                                               "conflicts": result["conflicts"], "manual": True}
+                else:
+                    imp, conf = result
+                    _import_state["result"] = {"imported": imp, "conflicts": conf, "manual": False}
+            except Exception as e:
+                logging.exception("import failed")
+                _import_state["error"] = str(e)
+            finally:
+                _import_state["processed"] = total
+                _import_state["running"] = False
+                _import_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "started": True, "total": total}
+
+    def get_import_progress(self):
+        return dict(_import_state)
+
+    def apply_import_conflicts(self, items, accept):
+        """'החל על כל השאר' — כל ההחלטות בקריאת גשר אחת"""
         try:
-            data     = pending["data"]
-            path     = pending["path"]
-            mapping  = forum_mapping or {}
-            name     = import_name or os.path.basename(path)
-            manual   = db.get_setting("import_manual_conflicts", "0") == "1"
-            result = db.import_data(
-                data, os.path.basename(path), mapping,
-                import_name=name, import_notes=import_notes, import_trust=import_trust,
-                manual_conflicts=manual)
-            self._pending_import = None
-            if manual and isinstance(result, dict):
-                return {"ok": True, "imported": result["imported"],
-                        "conflicts": result["conflicts"], "manual": True}
-            imp, conf = result
-            return {"ok": True, "imported": imp, "conflicts": conf}
+            return {"ok": True, "count": db.apply_import_conflicts(items or [], bool(accept))}
         except Exception as e:
+            logging.exception("apply_import_conflicts failed")
+            return {"ok": False, "error": str(e)}
+
+    # ── גיבוי ושחזור מלאים ─────────────────────────────────────────
+    def backup_db(self):
+        """שומר עותק מלא של ה-DB (כל הטבלאות, כולל עוגיות והגדרות) לקובץ לבחירת המשתמש."""
+        try:
+            from webview import FileDialog
+            save_dialog = FileDialog.SAVE
+        except ImportError:
+            save_dialog = webview.SAVE_DIALOG
+        import datetime as _dt
+        default = f"tiknick_backup_{_dt.datetime.now():%Y-%m-%d_%H-%M}.db"
+        result = webview.windows[0].create_file_dialog(
+            save_dialog, save_filename=default,
+            file_types=("Tik-Nick backup (*.db)", "All files (*.*)"))
+        if not result:
+            return {"ok": False, "error": "בוטל"}
+        dest = result[0] if isinstance(result, (list, tuple)) else result
+        if not dest:
+            return {"ok": False, "error": "בוטל"}
+        try:
+            n = db.backup_to(dest)
+            return {"ok": True, "path": dest, "nicks": n}
+        except Exception as e:
+            logging.exception("backup_db failed")
+            return {"ok": False, "error": str(e)}
+
+    def restore_db(self):
+        """מחליף את המאגר כולו בגיבוי שנבחר (אחרי אימות ועותק בטיחות של הנוכחי)."""
+        if (_scrape_state["running"] or _import_state["running"] or _source_state["running"]
+                or _chz_state["running"] or _stink_state["running"]):
+            return {"ok": False, "error": "יש פעולה שרצה ברקע — המתן לסיומה לפני שחזור"}
+        try:
+            from webview import FileDialog
+            open_dialog = FileDialog.OPEN
+        except ImportError:
+            open_dialog = webview.OPEN_DIALOG
+        result = webview.windows[0].create_file_dialog(
+            open_dialog, file_types=("Tik-Nick backup (*.db)", "All files (*.*)"))
+        if not result:
+            return {"ok": False, "error": "בוטל"}
+        path = result[0] if isinstance(result, (list, tuple)) else result
+        if not path:
+            return {"ok": False, "error": "בוטל"}
+        try:
+            info = db.restore_from(path)
+            logging.info("DB restored from %s (safety copy: %s)", path, info["safety_backup"])
+            return {"ok": True, **info}
+        except Exception as e:
+            logging.exception("restore_db failed")
             return {"ok": False, "error": str(e)}
 
     def apply_import_conflict(self, nick_id, field, value, source_id, accept):
@@ -1106,13 +1388,44 @@ del "%~f0"
     def get_sources(self):
         return db.get_sources()
 
+    def _run_source_op(self, op, fn):
+        """מריץ פעולת מקור ב-thread רקע עם מעקב התקדמות (get_source_progress)."""
+        if _source_state["running"]:
+            return {"ok": False, "error": "פעולה על מקור עדיין רצה — המתן לסיומה"}
+        _source_state.update({"running": True, "done": False, "error": None,
+                              "processed": 0, "total": 0, "op": op})
+
+        def _progress(done, total):
+            _source_state["processed"] = done
+            _source_state["total"] = total
+
+        def _run():
+            try:
+                fn(_progress)
+            except Exception as e:
+                logging.exception("source op %s failed", op)
+                _source_state["error"] = str(e)
+            finally:
+                _source_state["processed"] = _source_state["total"]
+                _source_state["running"] = False
+                _source_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "started": True}
+
     def update_source(self, source_id, name=None, notes=None, trust=None, absolute=None):
-        db.update_source(int(source_id), name=name, notes=notes,
-                         trust=trust, absolute=absolute)
-        return {"ok": True}
+        sid = int(source_id)
+        return self._run_source_op("update", lambda cb: db.update_source(
+            sid, name=name, notes=notes, trust=trust, absolute=absolute, progress_cb=cb))
 
     def delete_source(self, source_id):
-        return {"ok": db.delete_source(int(source_id))}
+        sid = int(source_id)
+        if sid == 1:
+            return {"ok": False, "error": "לא מוחקים את המקור 'אני'"}
+        return self._run_source_op("delete", lambda cb: db.delete_source(sid, progress_cb=cb))
+
+    def get_source_progress(self):
+        return dict(_source_state)
 
     def get_field_sources(self, nick_id, field_name):
         return db.get_field_sources(int(nick_id), field_name)
@@ -1162,11 +1475,40 @@ del "%~f0"
             return {"ok": False, "error": str(e)}
 
 
+def _msgbox(text, title="Tik-Nick", icon=0x10):
+    """הודעה למשתמש (בעברית) גם כשאין עדיין חלון — ה-EXE רץ בלי קונסולה."""
+    try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, text, title, icon | 0x0)
+    except Exception:
+        pass
+
+def _single_instance_or_exit():
+    """מופע כפול של התוכנה = שני תהליכים על אותו DB (ומסך 'סורק' שמתבלבל) — מונעים."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\TikNick-single-instance")
+        if ctypes.windll.kernel32.GetLastError() == 183:   # ERROR_ALREADY_EXISTS
+            _msgbox("Tik-Nick כבר פתוח.\n\nחפש את החלון הקיים בשורת המשימות.", icon=0x40)
+            os._exit(0)
+    except Exception:
+        pass
+
 if __name__ == "__main__":
     try:
+        _single_instance_or_exit()
         # מסד הנתונים נשמר בתיקייה הניתנת לכתיבה (ליד ה-EXE)
         db.DB_PATH = os.path.join(_DATA_DIR, "tiknick.db")
-        db.init_db()
+        try:
+            db.init_db()
+        except Exception as e:
+            logging.exception("init_db failed")
+            _msgbox("לא ניתן לפתוח את מאגר הנתונים.\n\n"
+                    f"קובץ: {db.DB_PATH}\nשגיאה: {e}\n\n"
+                    "אם הקובץ פגום — שחזר מגיבוי (קובץ .db) או העבר אותו הצידה כדי להתחיל מחדש.")
+            raise
         logging.info("Database ready at %s", db.DB_PATH)
 
         api = API()
@@ -1237,6 +1579,8 @@ if __name__ == "__main__":
                 logging.exception("Centering failed")
 
         window.events.shown += center_window
+        # סגירה נקייה: קיפול ה-WAL לקובץ הראשי
+        window.events.closing += lambda: (db.checkpoint(), True)[1]
         webview.start(debug=False)   # ללא כלי מפתחים למשתמש הסופי
         logging.info("Tik-Nick closed normally")
     except Exception:

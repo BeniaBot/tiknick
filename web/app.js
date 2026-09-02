@@ -90,9 +90,19 @@ async function _origInit() {
     if (el && v?.version) el.textContent = `v${v.version} | Tik-Nick`;
   });
   await applyDisplaySettings();
+  // זיכרון סשן: מיון וחיפוש אחרונים
+  const savedSort = String(DISPLAY.sort || '');
+  if (savedSort.includes(':')) {
+    const [c, d] = savedSort.split(':');
+    if (COLS.some(x => x.key === c) || c === 'has_info') { S.sortCol = c; S.sortDir = d === '-1' ? -1 : 1; }
+  }
+  const lastSearch = String(DISPLAY.last_search || '');
+  const si = document.getElementById('search-input');
+  if (si && lastSearch) si.value = lastSearch;
   buildTableHeader();
+  updateSortIcons();
   await loadForums();
-  await loadNicks();
+  await loadNicks(lastSearch);
   const tableWrap = document.getElementById('table-wrap');
   if (tableWrap) tableWrap.addEventListener('scroll', onTableScroll);
   const cardsWrap = document.getElementById('cards-wrap');
@@ -114,6 +124,10 @@ async function _origInit() {
     const el = document.getElementById('status-time');
     if (el) el.textContent = new Date().toLocaleTimeString('he-IL');
   }, 1000);
+  // אם עדכון קודם ירד אך לא הצליח להחליף את הקובץ — אמור זאת (אחרת נראה כאילו כלום לא קרה)
+  api('consume_update_failure').then(r => {
+    if (r?.failed) toast('העדכון הקודם ירד אך לא הוחל (הקובץ היה נעול). נסה שוב דרך "אודות".', 'error');
+  });
   // בדיקת עדכונים שקטה ברקע (לא חוסמת)
   setTimeout(silentUpdateCheck, 2500);
 }
@@ -506,6 +520,11 @@ async function loadNicks(search = '') {
   S.nicks = rows;
   S.total = total;
   S.cardsRendered = Math.min(S.cardsChunk, S.nicks.length);
+  // רשימה חדשה — חוזרים לראש הגלילה (גם בכרטיסים) כדי שהחלון הווירטואלי יהיה בטווח
+  const cw = document.getElementById('cards-wrap');
+  if (cw) cw.scrollTop = 0;
+  const tw2 = document.getElementById('table-wrap');
+  if (tw2) tw2.scrollTop = 0;
 
   sortNicks();
   renderTable();
@@ -515,6 +534,7 @@ async function loadNicks(search = '') {
 function sortBy(col) {
   if (S.sortCol === col) S.sortDir *= -1;
   else { S.sortCol = col; S.sortDir = 1; }
+  api('set_display_setting', 'sort', `${S.sortCol}:${S.sortDir}`);   // זיכרון בין הפעלות
   sortNicks();
   // גלילה חזרה למעלה — אחרת החלון הווירטואלי מציג את השורות של מיקום הגלילה הישן
   const tw = document.getElementById('table-wrap');
@@ -523,11 +543,15 @@ function sortBy(col) {
   if (cw) cw.scrollTop = 0;
   S.cardsRendered = Math.min(S.cardsChunk, S.nicks.length);
   renderTable();
-  // update header icons
+  updateSortIcons();
+}
+
+function updateSortIcons() {
   document.querySelectorAll('thead th').forEach(th => {
-    th.classList.toggle('sorted', th.dataset.col === col);
+    const active = th.dataset.col === S.sortCol;
+    th.classList.toggle('sorted', active);
     const icon = th.querySelector('.sort-icon');
-    if (icon) icon.textContent = th.dataset.col === col ? (S.sortDir === 1 ? '↑' : '↓') : '↕';
+    if (icon) icon.textContent = active ? (S.sortDir === 1 ? '↑' : '↓') : '↕';
   });
 }
 
@@ -631,8 +655,13 @@ function renderEmptyState() {
       <p>נסו לחפש אחרת, או <b style="color:var(--accent);cursor:pointer"
          onclick="clearAllFilters()">נקו את החיפוש</b></p>`;
   } else {
+    // הפעלה ראשונה: הצע את שתי הדרכים להתחיל — ידנית, או סריקה של פורום
+    const hasForums = S.forums.some(f => (f.url || '').trim());
     box.innerHTML = `<div class="empty-icon">📭</div>
-      <h3>אין ניקים להצגה</h3><p>לחץ "ניק חדש" כדי להתחיל</p>`;
+      <h3>אין ניקים להצגה</h3>
+      <p>לחץ "ניק חדש" כדי להוסיף ידנית, או
+         <b style="color:var(--accent);cursor:pointer" onclick="${hasForums ? 'openInternetSync()' : 'openForumMgr()'}">
+           ${hasForums ? 'סרוק פורום מהאינטרנט' : 'הוסף פורום וסרוק אותו'}</b></p>`;
   }
 }
 
@@ -811,8 +840,71 @@ function renderRep(td, n) {
   td.style.color = n.reputation > 100 ? '#3fb950' : 'inherit';
 }
 
+// ── פעולות על טלפון/מייל: וואטסאפ / חיוג / מייל / העתקה ─────────────────
+function waLink(phone) {
+  let d = String(phone || '').replace(/\D/g, '');
+  if (!d) return '';
+  if (d.startsWith('0')) d = '972' + d.slice(1);       // ישראל
+  return 'https://wa.me/' + d;
+}
+
+// חלון משנה עצמאי — לא עובר דרך openModal, שסוגר את החלון הפתוח.
+// (לחיצה על טלפון בתוך דיאלוג עריכת ניק הייתה מוחקת את הדיאלוג ואת מה שהוקלד בו.)
+function contactMenu(type, value) {
+  const v = String(value || '').trim();
+  if (!v) return;
+  document.getElementById('contact-pop')?.remove();
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay';
+  ov.id = 'contact-pop';
+  ov.style.zIndex = '200';
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+  ov.innerHTML = `
+    <div class="modal modal-sm">
+      <div class="modal-header">
+        <div class="modal-title">${type === 'phone' ? '📞 טלפון' : '📧 מייל'}</div>
+        <button class="modal-close" id="cp-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div style="text-align:center;font-size:20px;font-weight:800;padding:14px 0" dir="ltr">${esc(v)}</div>
+      </div>
+      <div class="modal-footer" id="cp-foot"></div>
+    </div>`;
+  document.body.appendChild(ov);
+  const foot = ov.querySelector('#cp-foot');
+  const add = (label, cls, fn) => {
+    const b = document.createElement('button');
+    b.className = 'btn ' + cls;
+    b.textContent = label;
+    b.onclick = () => { ov.remove(); if (fn) fn(); };
+    foot.appendChild(b);
+  };
+  if (type === 'phone') {
+    add('💬 וואטסאפ', 'btn-primary', () => api('open_url', waLink(v)));
+    add('📞 חיוג', 'btn-ghost', () => api('open_url', 'tel:' + v.replace(/[^\d+]/g, '')));
+  } else {
+    add('📧 שלח מייל', 'btn-primary', () => api('open_url', 'mailto:' + v));
+  }
+  add('📋 העתק', 'btn-ghost', async () => {
+    const r = await api('copy_to_clipboard', v);
+    toast(r?.ok ? 'הועתק ✓' : 'ההעתקה נכשלה', r?.ok ? 'success' : 'error');
+  });
+  add('סגור', 'btn-ghost', null);
+  ov.querySelector('#cp-close').onclick = () => ov.remove();
+}
+
+function contactSpan(type, value) {
+  const s = document.createElement('span');
+  s.className = 'contact-link';
+  s.textContent = value;
+  s.dir = 'ltr';
+  s.title = type === 'phone' ? 'וואטסאפ / חיוג / העתקה' : 'שליחת מייל / העתקה';
+  s.onclick = e => { e.stopPropagation(); contactMenu(type, value); };
+  return s;
+}
+
 function renderPhone(td, n) {
-  td.textContent = n.phone || '';
+  if (n.phone) td.appendChild(contactSpan('phone', n.phone));
   if (n.extra_contacts > 0) {
     const ex = document.createElement('span');
     ex.className = 'cell-extra';
@@ -825,9 +917,7 @@ function renderPhone(td, n) {
 }
 
 function renderEmail(td, n) {
-  if (n.email) {
-    td.textContent = n.email;
-  }
+  if (n.email) td.appendChild(contactSpan('email', n.email));
   if (n.extra_contacts > 0 && !n.phone) {
     const ex = document.createElement('span');
     ex.className = 'cell-extra';
@@ -985,8 +1075,8 @@ async function deleteSelected() {
   if (!S.selectedId) return;
   const nick = S.nicks.find(n => n.id === S.selectedId);
   if (!nick) return;
-  if (!confirm(`למחוק את "${nick.username}" מפורום ${nick.forum}?\n\n` +
-               'יימחקו איתו גם אנשי הקשר, קישורי הזהויות והיסטוריית המידע שלו.')) return;
+  if (!confirm(`להעביר את "${nick.username}" (${nick.forum}) לסל המחזור?\n\n` +
+               'אפשר לבטל מיד, או לשחזר מסל המחזור במשך 30 יום.')) return;
   const r = await api('delete_nick', S.selectedId);
   if (!r?.ok) { toast('המחיקה נכשלה: ' + (r?.error || ''), 'error'); return; }
   S.selectedId = null;
@@ -994,7 +1084,76 @@ async function deleteSelected() {
   document.getElementById('btn-delete').disabled = true;
   if(document.getElementById('stat-sel'))document.getElementById('stat-sel').textContent='0';
   await loadNicks(document.getElementById('search-input').value);
-  toast('ניק נמחק', 'success');
+  toast(`"${nick.username}" הועבר לסל המחזור`, 'success',
+        { actionLabel: '↩ בטל', onAction: () => restoreBatch(r.batch_id) });
+}
+
+// שחזור אצוות מחיקה (מה-toast או מדיאלוג סל המחזור)
+async function restoreBatch(batchId) {
+  if (!batchId) return;
+  const r = await api('restore_trash', batchId);
+  if (!r?.ok) { toast('השחזור נכשל: ' + (r?.error || ''), 'error'); return; }
+  await loadNicks(document.getElementById('search-input').value);
+  const extra = r.skipped ? ` (${r.skipped} דולגו — כבר קיימים)` : '';
+  toast(`שוחזרו ${r.restored} ניקים ✓${extra}`, 'success');
+}
+
+async function openTrash() {
+  const batches = await api('get_trash') || [];
+  const rows = batches.length ? batches.map(b => `
+    <div style="display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--border-soft);font-size:13px">
+      <div style="flex:1;min-width:0">
+        <div><b>${b.count}</b> ניקים · <span style="color:var(--subtext)">${esc(relativeTime(b.deleted_at))}</span></div>
+        <div style="color:var(--subtext);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(b.names || '')}</div>
+      </div>
+      <button class="btn btn-sm btn-primary" data-batch="${esc(b.batch_id)}" onclick="restoreBatch(this.dataset.batch);closeModal()">↩ שחזר</button>
+    </div>`).join('')
+    : '<div style="padding:24px;text-align:center;color:var(--subtext)">סל המחזור ריק</div>';
+  openModal('🗑️ סל מחזור', `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
+      ניקים שנמחקו נשמרים כאן 30 יום, עם אנשי הקשר, הזהויות והיסטוריית המקורות שלהם.
+    </p>${rows}`, [
+    ...(batches.length ? [{ label: 'רוקן סל', cls: 'btn-danger', action: async () => {
+      if (!confirm('לרוקן את סל המחזור לצמיתות?')) return;
+      await api('empty_trash'); closeModal(); toast('סל המחזור רוקן', 'info');
+    }}] : []),
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
+}
+
+async function openDbHealth() {
+  const h = await api('get_db_health');
+  if (!h?.ok) { toast('לא ניתן לקרוא את מצב המאגר: ' + (h?.error || ''), 'error'); return; }
+  const mb = b => (b / 1048576).toFixed(1) + ' MB';
+  const c = h.counts || {};
+  const okQC = h.quick_check === 'ok';
+  const row = (k, v) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border-soft);font-size:13px">
+      <span style="color:var(--subtext)">${k}</span><b dir="ltr">${v}</b></div>`;
+  openModal('🩺 בריאות המאגר', `
+    <div style="padding:10px 12px;border-radius:8px;margin-bottom:12px;font-size:13px;
+         background:${okQC ? 'rgba(52,211,153,.10)' : 'rgba(244,84,76,.10)'}">
+      ${okQC ? '✅ בדיקת תקינות עברה' : '⚠️ בדיקת התקינות מצאה בעיה: ' + esc(h.quick_check)}
+    </div>
+    ${row('גרסה', esc(h.version) + ' · ' + (h.install_type === 'installer' ? 'מותקנת' : 'ניידת'))}
+    ${row('גודל הקובץ', mb(h.size))}
+    ${row('יומן WAL', mb(h.wal))}
+    ${row('ניקים', (c.nicks || 0).toLocaleString())}
+    ${row('ערכי מקורות', (c.field_values || 0).toLocaleString())}
+    ${row('אנשי קשר / זהויות', `${(c.nick_contacts || 0).toLocaleString()} / ${(c.nick_identities || 0).toLocaleString()}`)}
+    ${row('בסל המחזור', (c.trash_nicks || 0).toLocaleString())}
+    ${row('חיפוש מהיר (FTS5)', h.fts ? 'פעיל' : 'לא זמין — LIKE')}
+    <div style="font-size:11.5px;color:var(--subtext);margin-top:10px;word-break:break-all" dir="ltr">${esc(h.path)}</div>
+  `, [
+    { label: '📂 פתח תיקיית נתונים', cls: 'btn-ghost', action: () => api('open_data_folder') },
+    { label: '📄 פתח יומן', cls: 'btn-ghost', action: () => api('open_log') },
+    { label: '🧹 כווץ קובץ', cls: 'btn-ghost', action: async () => {
+      setStatus('מכווץ את המאגר…');
+      const r = await api('vacuum_db');
+      if (r?.ok) { toast(`המאגר כווץ ✓ (${mb(r.size)})`, 'success'); closeModal(); openDbHealth(); }
+      else toast(r?.error || 'הכיווץ נכשל', 'error');
+    }},
+    { label: 'סגור', cls: 'btn-primary', action: closeModal },
+  ], 'modal-sm');
 }
 
 // ══ בחירה מרובה + מחיקה בפועל ═══════════════════════════════════════════
@@ -1035,19 +1194,87 @@ function updateBulkBar() {
 async function deleteBulkSelected() {
   const ids = [...S.multiSelected];
   if (!ids.length) return;
-  if (!confirm(`למחוק ${ids.length} ניקים שנבחרו? פעולה בלתי הפיכה!`)) return;
+  if (!confirm(`להעביר ${ids.length} ניקים שנבחרו לסל המחזור?\n\nאפשר לשחזר אותם מסל המחזור (30 יום).`)) return;
   const res = await api('delete_nicks', ids);
   if (!res?.ok) { toast('המחיקה נכשלה: ' + (res?.error || ''), 'error'); return; }
   S.multiSelected.clear();
   S.selectedId = null;
   await loadNicks(document.getElementById('search-input').value);
-  toast(`${res.count} ניקים נמחקו`, 'success');
+  toast(`${res.count} ניקים הועברו לסל המחזור`, 'success',
+        { actionLabel: '↩ בטל', onAction: () => restoreBatch(res.batch_id) });
 }
 
 // ══ SEARCH ════════════════════════════════════════════════════════════
 function onSearch(val) {
   clearTimeout(S.searchTimer);
-  S.searchTimer = setTimeout(() => loadNicks(val), 200);
+  S.searchTimer = setTimeout(() => {
+    loadNicks(val);
+    api('set_display_setting', 'last_search', val);   // זיכרון בין הפעלות
+  }, 200);
+}
+
+// ── מקלדת ─────────────────────────────────────────────────────────────
+// Ctrl+F או "/" → חיפוש · Enter בחיפוש → פתח תוצאה ראשונה · חיצים → ניווט בשורות
+// Enter → פתח נבחר · Delete → מחק נבחר (עם אישור)
+document.addEventListener('keydown', (e) => {
+  const inInput = /^(INPUT|TEXTAREA|SELECT)$/.test((e.target && e.target.tagName) || '');
+  const search = document.getElementById('search-input');
+  const modalOpen = !!document.getElementById('modal-overlay') || !!document.getElementById('contact-pop');
+  // e.code ולא e.key — בפריסת מקלדת עברית e.key של Ctrl+F הוא 'כ'
+  if (!modalOpen && ((e.ctrlKey && e.code === 'KeyF') || (!inInput && e.key === '/'))) {
+    e.preventDefault(); search?.focus(); search?.select(); return;
+  }
+  if (modalOpen) return;
+  if (e.target === search) {
+    if (e.key === 'Enter' && S.nicks.length) { e.preventDefault(); openNickDialog(S.nicks[0].id); }
+    if (e.key === 'ArrowDown' && S.nicks.length) { e.preventDefault(); search.blur(); selectRow(S.nicks[0].id); }
+    return;
+  }
+  if (inInput) return;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!S.nicks.length) return;
+    e.preventDefault();
+    const idx = S.nicks.findIndex(n => n.id === S.selectedId);
+    const next = Math.min(S.nicks.length - 1, Math.max(0, idx + (e.key === 'ArrowDown' ? 1 : -1)));
+    selectRow(S.nicks[next].id);
+    document.querySelector(`tr[data-id="${S.nicks[next].id}"], .nick-card[data-id="${S.nicks[next].id}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter' && S.selectedId) {
+    e.preventDefault(); openNickDialog(S.selectedId);
+  } else if (e.key === 'Delete' && S.selectedId) {
+    e.preventDefault(); deleteSelected();
+  }
+});
+
+// ── העתקה ללוח ────────────────────────────────────────────────────────
+function nickRowText(n, sep = '\t') {
+  const hidden = hiddenColsSet();
+  return COLS.filter(c => c.key !== '_open' && c.key !== 'identity' && !hidden.has(c.key))
+             .map(c => {
+               const s = String(n[c.key] ?? '').replace(/[\t\r\n]+/g, ' ');
+               // ערך מהפורום שמתחיל ב-= + - @ מורץ כנוסחה כשמדביקים באקסל
+               return /^[=+\-@]/.test(s) ? "'" + s : s;
+             }).join(sep);
+}
+async function copySelectedRows() {
+  const rows = S.nicks.filter(n => S.multiSelected.has(n.id));
+  if (!rows.length) { toast('לא נבחרו ניקים', 'error'); return; }
+  const hidden = hiddenColsSet();
+  const header = COLS.filter(c => c.key !== '_open' && c.key !== 'identity' && !hidden.has(c.key))
+                     .map(c => c.label).join('\t');
+  const text = [header, ...rows.map(n => nickRowText(n))].join('\r\n');
+  const r = await api('copy_to_clipboard', text);
+  toast(r?.ok ? `${rows.length} שורות הועתקו — אפשר להדביק באקסל ✓` : 'ההעתקה נכשלה', r?.ok ? 'success' : 'error');
+}
+async function copyMergedProfile(p) {
+  const lines = [];
+  (p.members || []).forEach(m => lines.push(`${m.username} [${m.forum}]`));
+  lines.push('');
+  (p.fields || []).forEach(f => f.values.forEach(v =>
+    lines.push(`${f.label}: ${v.value}` + ((p.members || []).length > 1 ? ` (${v.username})` : ''))));
+  (p.contacts || []).forEach(c => lines.push(`${c.type === 'phone' ? 'טלפון' : 'מייל'}: ${c.value}${c.label ? ' (' + c.label + ')' : ''}`));
+  const r = await api('copy_to_clipboard', lines.join('\r\n'));
+  toast(r?.ok ? 'הפרופיל הועתק ✓' : 'ההעתקה נכשלה', r?.ok ? 'success' : 'error');
 }
 
 // ══ STATS ═════════════════════════════════════════════════════════════
@@ -1247,7 +1474,8 @@ function contactItemHtml(ct, nickId) {
   return `
     <div class="contact-item" data-cid="${ct.id}">
       <span class="ct-icon">${icon}</span>
-      <span class="ct-val">${esc(ct.value)}</span>
+      <span class="ct-val contact-link" dir="ltr" data-ctype="${esc(ct.type)}" data-cval="${esc(ct.value)}"
+            title="${ct.type === 'phone' ? 'וואטסאפ / חיוג / העתקה' : 'שליחת מייל / העתקה'}">${esc(ct.value)}</span>
       ${lbl}
       ${priv}
       <button class="btn btn-sm btn-ghost btn-icon" title="ערוך"
@@ -1397,6 +1625,11 @@ document.addEventListener('change', (e) => {
   if (sel && typeof window.fmapOnChange === 'function') {
     window.fmapOnChange(sel, sel.dataset.fname);
   }
+});
+// קישורי קשר שנבנו ב-innerHTML (דיאלוג הניק, תצוגה מאוחדת) — האצלה לפי data-*
+document.addEventListener('click', (e) => {
+  const el = e.target.closest && e.target.closest('.contact-link[data-cval]');
+  if (el) { e.stopPropagation(); contactMenu(el.dataset.ctype, el.dataset.cval); }
 });
 // תיוג @: בחירה מההשלמה (mousedown, לפני שה-textarea מאבד פוקוס) ולחיצה/ריחוף על תג
 document.addEventListener('mousedown', (e) => {
@@ -1727,6 +1960,7 @@ async function showMergedProfile(nickId) {
   const p = await api('get_merged_profile', nickId);
   if (!p) { if (box) box.innerHTML = '<div style="padding:14px;color:var(--danger)">לא נמצא</div>'; return; }
   if (box) box.innerHTML = renderMergedProfile(p);
+  S.lastMergedProfile = p;
 }
 
 function renderMergedProfile(p) {
@@ -1770,7 +2004,7 @@ function renderMergedProfile(p) {
     ${p.contacts.map(c => `
       <div style="display:flex;gap:8px;align-items:center;font-size:13px;padding:4px 0">
         <span>${c.type === 'phone' ? '📞' : '📧'}</span>
-        <b>${esc(c.value)}</b>
+        <b class="contact-link" dir="ltr" data-ctype="${esc(c.type)}" data-cval="${esc(c.value)}">${esc(c.value)}</b>
         ${c.label ? `<span style="color:var(--subtext);font-size:11px">${esc(c.label)}</span>` : ''}
         ${c.is_private ? '<span title="סודי">🔒</span>' : ''}
         <span style="color:var(--subtext);font-size:11px;margin-right:auto">${esc(c.username)} [${esc(c.forum)}]</span>
@@ -1787,7 +2021,9 @@ function renderMergedProfile(p) {
           </div>
         </div>
       </div>
-      <div style="margin-bottom:6px">${memberChips}</div>
+      <div style="margin-bottom:6px;display:flex;flex-wrap:wrap;align-items:center">${memberChips}
+        <button class="btn btn-ghost btn-sm" style="margin-right:auto" onclick="copyMergedProfile(S.lastMergedProfile)">📋 העתק פרופיל</button>
+      </div>
       ${fieldRows ? `<div style="margin-top:6px">${fieldRows}</div>`
                   : '<div style="color:var(--subtext);font-size:13px;padding:8px 0">אין פרטים מלאים לניק זה</div>'}
       ${contactsHtml}
@@ -1913,7 +2149,9 @@ async function openForumMgr() {
     if (!f) return;
     await api('update_forum', id, f.name, color, f.url||'');
     await refreshLists();
-    await loadNicks(document.getElementById('search-input').value);
+    // צביעה מחדש מקומית — שינוי צבע לא מצדיק טעינה מחדש של כל המאגר
+    S.forumColors[f.name] = color;
+    renderTable();
   };
 
   window.fmAutoFill = async (val) => {
@@ -2145,15 +2383,35 @@ async function syncSelectedOnline() {
   startScrapeMonitor();
 }
 
+// פעולות על מקור רצות ברקע (הכרעה מחדש לכל הערכים של המקור); כאן ממתינים עם משוב חי
+async function waitSourceOp(labelPrefix) {
+  return new Promise(resolve => {
+    let busy = false;
+    const poll = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const p = await api('get_source_progress');
+        if (!p) return;
+        if (p.total) setStatus(`${labelPrefix} ${p.processed.toLocaleString()} / ${p.total.toLocaleString()} ניקים…`);
+        if (p.done || !p.running) { clearInterval(poll); resolve(p); }
+      } finally { busy = false; }
+    }, 300);
+  });
+}
+
 async function onSrcTrust(sid, val) {
-  // הכרעה מחדש לכל הערכים של המקור — במאגר גדול זה נמשך שניות; תן משוב
   setStatus('מעדכן ערכים לפי דרגת האמינות החדשה…');
-  toast('מעדכן ערכים לפי האמינות החדשה…', 'info');
-  await api('update_source', sid, null, null, parseInt(val), null);
+  const r = await api('update_source', sid, null, null, parseInt(val), null);
+  if (!r?.ok) { toast(r?.error || 'לא ניתן לעדכן כרגע', 'error'); return; }
+  const p = await waitSourceOp('מכריע מחדש');
+  if (p.error) { toast('העדכון נכשל: ' + p.error, 'error'); return; }
   await loadNicks(document.getElementById('search-input').value);
+  toast('דרגת האמינות עודכנה והנתונים הוכרעו מחדש ✓', 'success');
 }
 async function onSrcAbsolute(sid, checked) {
-  await api('update_source', sid, null, null, null, checked);
+  const r = await api('update_source', sid, null, null, null, checked);
+  if (!r?.ok) { toast(r?.error || 'לא ניתן לעדכן כרגע', 'error'); return; }
   const row = document.querySelector(`.sync-item[data-sid="${sid}"]`);
   if (row) {
     const slider = row.querySelector('.src-trust');
@@ -2161,18 +2419,20 @@ async function onSrcAbsolute(sid, checked) {
     if (slider) slider.disabled = checked;
     if (wrap) wrap.style.opacity = checked ? '.4' : '1';
   }
+  const p = await waitSourceOp('מכריע מחדש');
+  if (p.error) { toast('העדכון נכשל: ' + p.error, 'error'); return; }
   await loadNicks(document.getElementById('search-input').value);
 }
 async function onSrcDelete(sid) {
   if (!confirm('למחוק את המקור הזה? כל הערכים שהגיעו ממנו יימחקו, והנתונים ייפלו לערך הבא לפי אמינות.')) return;
   setStatus('מוחק מקור ומכריע מחדש…');
-  toast('מוחק מקור ומעדכן ערכים…', 'info');
   const r = await api('delete_source', sid);
-  if (r?.ok) {
-    document.querySelector(`.sync-item[data-sid="${sid}"]`)?.remove();
-    await loadNicks(document.getElementById('search-input').value);
-    toast('המקור נמחק, הנתונים עודכנו ✓', 'success');
-  }
+  if (!r?.ok) { toast(r?.error || 'לא ניתן למחוק כרגע', 'error'); return; }
+  document.querySelector(`.sync-item[data-sid="${sid}"]`)?.remove();
+  const p = await waitSourceOp('מוחק מקור, מכריע מחדש');
+  if (p.error) { toast('המחיקה נכשלה: ' + p.error, 'error'); return; }
+  await loadNicks(document.getElementById('search-input').value);
+  toast('המקור נמחק, הנתונים עודכנו ✓', 'success');
 }
 
 async function openSyncMgr() {
@@ -2316,16 +2576,19 @@ async function openSyncMgr() {
 
   openModal('⚙️ הגדרות סנכרון', html, [
     { label: '💾 שמור', cls: 'btn-primary', action: async () => {
-      // סעיף 1
+      // סעיף 1+2 — קריאת גשר אחת לכל סעיף (במקום ~40 קריאות סדרתיות)
+      const syncMap = {};
       for (const f of fields) {
         const el = document.getElementById(`st-${f.key}`);
-        if (el) await api('set_sync_setting', f.key, el.checked);
+        if (el) syncMap[f.key] = el.checked;
       }
-      // סעיף 2
+      await api('set_sync_settings', syncMap);
+      const ioMap = {};
       for (let i = 0; i < forumNames.length; i++) {
         const el = document.getElementById(`fio-${i}`);
-        if (el) await api('set_forum_io_flag', el.dataset.forum, el.checked);
+        if (el) ioMap[el.dataset.forum] = el.checked;
       }
+      await api('set_forum_io_flags', ioMap);
       // סעיף 3
       const im = document.getElementById('import-manual');
       if (im) await api('set_setting', 'import_manual_conflicts', im.checked ? '1' : '0');
@@ -2336,12 +2599,40 @@ async function openSyncMgr() {
   ], 'modal-lg');
 }
 
+// ══ BACKUP / RESTORE (קובץ DB שלם) ═══════════════════════════════════
+async function backupDb() {
+  const r = await api('backup_db');
+  if (r?.ok) toast(`גיבוי מלא נשמר ✓ (${r.nicks} ניקים)`, 'success');
+  else if (r?.error !== 'בוטל') toast('הגיבוי נכשל: ' + (r?.error || ''), 'error');
+}
+
+async function restoreDb() {
+  if (!confirm('לשחזר מגיבוי?\n\n' +
+               'המאגר הנוכחי כולו יוחלף בתוכן הגיבוי — ניקים, פורומים, הגדרות ועוגיות.\n' +
+               'עותק בטיחות של המאגר הנוכחי יישמר לצדו לפני ההחלפה.')) return;
+  const r = await api('restore_db');
+  if (!r?.ok) {
+    if (r?.error !== 'בוטל') toast('השחזור נכשל: ' + (r?.error || ''), 'error');
+    return;
+  }
+  S.avatarCache.clear();
+  await applyDisplaySettings();
+  buildTableHeader();
+  await loadForums();
+  const inp = document.getElementById('search-input');
+  if (inp) inp.value = '';
+  await loadNicks('');
+  toast(`המאגר שוחזר ✓ (${r.nicks} ניקים)`, 'success');
+}
+
 // ══ EXPORT / IMPORT ════════════════════════════════════════════════════
 async function exportData() {
   const counts = await api('get_export_counts') || { all: 0, has_info: 0, my_info: 0 };
-  const opt = (mode, icon, title, desc, count) => `
-    <label class="policy-opt" style="display:flex;gap:10px;align-items:flex-start;padding:12px;border:1px solid var(--border-soft);border-radius:10px;margin-bottom:10px;cursor:pointer">
-      <input type="radio" name="expmode" value="${mode}" ${mode === 'all' ? 'checked' : ''} style="margin-top:3px">
+  const selN = S.multiSelected.size;
+  const viewN = S.nicks.length;
+  const opt = (mode, icon, title, desc, count, checked) => `
+    <label class="policy-opt" style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border-soft);border-radius:10px;margin-bottom:8px;cursor:pointer">
+      <input type="radio" name="expmode" value="${mode}" ${checked ? 'checked' : ''} style="margin-top:3px">
       <div style="flex:1">
         <div style="font-weight:700;font-size:13.5px">${icon} ${title}
           <span style="float:left;color:var(--accent-2);font-weight:800">${count}</span></div>
@@ -2349,19 +2640,31 @@ async function exportData() {
       </div>
     </label>`;
   openModal('📤 ייצוא נתונים', `
-    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:14px">
+    <div style="display:flex;gap:6px;margin-bottom:12px;background:var(--card2);padding:4px;border-radius:8px">
+      <label style="flex:1;text-align:center;padding:7px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700">
+        <input type="radio" name="expfmt" value="tiknick" checked> קובץ Tik-Nick (.tiknick)</label>
+      <label style="flex:1;text-align:center;padding:7px;border-radius:6px;cursor:pointer;font-size:13px;font-weight:700">
+        <input type="radio" name="expfmt" value="csv"> CSV לאקסל</label>
+    </div>
+    <p style="color:var(--subtext);font-size:12px;margin-bottom:10px">
       בחר אילו ניקים לייצא. חלים גם כללי הסנכרון (אילו שדות ופורומים כלולים).
     </p>
-    ${opt('all', '📦', 'כל הניקים', 'ייצוא מלא של כל המאגר', counts.all)}
-    ${opt('has_info', '✓', 'רק ניקים עם מידע', 'ניקים עם שם אמיתי / טלפון / מייל / הערות / אנשי קשר / זהות', counts.has_info)}
-    ${opt('my_info', '👤', 'רק מידע שהוספתי בעצמי', 'ניקים שיש בהם ערך שאני הזנתי (מקור "אני") או אנשי קשר / הערות אישיות', counts.my_info)}
+    ${selN ? opt('selected', '☑️', 'הניקים שנבחרו', 'רק השורות המסומנות בטבלה', selN, true) : ''}
+    ${opt('view', '🔍', 'התצוגה הנוכחית', 'מה שמוצג עכשיו אחרי חיפוש/סינון', viewN, !selN)}
+    ${opt('all', '📦', 'כל הניקים', 'ייצוא מלא של כל המאגר', counts.all, false)}
+    ${opt('has_info', '✓', 'רק ניקים עם מידע', 'שם אמיתי / טלפון / מייל / הערות / אנשי קשר / זהות', counts.has_info, false)}
+    ${opt('my_info', '👤', 'רק מידע שהוספתי בעצמי', 'ערך שאני הזנתי (מקור "אני") או אנשי קשר / הערות אישיות', counts.my_info, false)}
   `, [
     { label: '📤 ייצא', cls: 'btn-primary', action: async () => {
-      const mode = document.querySelector('input[name="expmode"]:checked')?.value || 'all';
+      let mode = document.querySelector('input[name="expmode"]:checked')?.value || 'all';
+      const fmt = document.querySelector('input[name="expfmt"]:checked')?.value || 'tiknick';
+      let ids = null;
+      if (mode === 'selected') ids = [...S.multiSelected];
+      if (mode === 'view') { ids = S.nicks.map(n => n.id); mode = 'selected'; }
       closeModal();
-      const res = await api('export_data', mode);
+      const res = await api(fmt === 'csv' ? 'export_csv' : 'export_data', mode, ids);
       if (res?.ok) toast(`יוצאו ${res.count} ניקים ✓`, 'success');
-      else if (res?.error !== 'בוטל') toast('שגיאה בייצוא', 'error');
+      else if (res?.error !== 'בוטל') toast('שגיאה בייצוא: ' + (res?.error || ''), 'error');
     }},
     { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
   ], 'modal-sm');
@@ -2420,22 +2723,53 @@ async function showImportDetailsDialog(res) {
 
 async function proceedImport(res) {
   const unknown = res.unknown_forums || [];
-  if (unknown.length === 0) {
-    const r2 = await api('confirm_import', {}, _pendingImportMeta.name,
-                         _pendingImportMeta.notes, _pendingImportMeta.trust);
-    if (r2?.ok) {
-      await loadNicks(document.getElementById('search-input').value);
-      if (r2.manual && r2.conflicts && r2.conflicts.length) {
-        startImportConflictResolver(r2.conflicts);
-      } else {
-        toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r2.imported} · ערכים שנקלטו: ${r2.conflicts}`, "success");
-      }
-    } else {
-      toast('שגיאה בייבוא: ' + (r2?.error||''), 'error');
-    }
-    return;
-  }
+  if (unknown.length === 0) { await runImport({}); return; }
   showForumMappingDialog(unknown, res.nick_count);
+}
+
+// הייבוא רץ ב-thread רקע בפייתון; כאן חלון התקדמות שנסגר בסיום (בעבר החלון קפא בלי משוב)
+async function runImport(mapping) {
+  const start = await api('confirm_import', mapping || {}, _pendingImportMeta.name,
+                          _pendingImportMeta.notes, _pendingImportMeta.trust);
+  if (!start?.ok) { toast('שגיאה בייבוא: ' + (start?.error || ''), 'error'); return; }
+  openModal('📥 מייבא…', `
+    <div style="text-align:center;padding:24px 16px">
+      <div style="font-size:40px;margin-bottom:14px">📥</div>
+      <div id="import-progress-text" style="font-size:14px;margin-bottom:8px">מתחיל…</div>
+      <div style="font-size:12px;color:var(--subtext)">מייבא ${esc(start.total)} ניקים — נא לא לסגור את התוכנה</div>
+      <div style="height:8px;background:var(--card2);border-radius:99px;overflow:hidden;margin-top:16px">
+        <div id="import-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s"></div>
+      </div>
+    </div>`, [], 'modal-sm', { id: 'import-progress', dismissable: false });
+
+  const p = await new Promise(resolve => {
+    let busy = false;
+    const poll = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const st = await api('get_import_progress');
+        if (!st) return;
+        const pct = st.total ? Math.round(st.processed / st.total * 100) : 0;
+        const t = document.getElementById('import-progress-text');
+        if (t) t.textContent = `${st.processed} מתוך ${st.total} (${pct}%)`;
+        const b = document.getElementById('import-bar');
+        if (b) b.style.width = pct + '%';
+        if (st.done || !st.running) { clearInterval(poll); resolve(st); }
+      } finally { busy = false; }
+    }, 400);
+  });
+
+  if (_currentModalId === 'import-progress') closeModal();
+  if (p.error) { toast('שגיאה בייבוא: ' + p.error, 'error'); return; }
+  const r = p.result || {};
+  await loadForums();
+  await loadNicks(document.getElementById('search-input').value);
+  if (r.manual && r.conflicts && r.conflicts.length) {
+    startImportConflictResolver(r.conflicts);
+  } else {
+    toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r.imported} · ערכים שנקלטו: ${r.conflicts}`, 'success');
+  }
 }
 
 // פתרון ידני של התנגשויות ייבוא — אחד אחד
@@ -2478,7 +2812,8 @@ function showNextImportConflict() {
   `, [
     { label: 'קבל מיובא', cls: 'btn-primary', action: () => resolveImportConflict(true) },
     { label: 'שמור קיים', cls: 'btn-ghost',   action: () => resolveImportConflict(false) },
-  ], 'modal-sm');
+    { label: '⏸️ עצור כאן', cls: 'btn-ghost', action: stopImportConflicts },
+  ], 'modal-sm', { id: 'import-conflict', dismissable: false });
 }
 
 async function resolveImportConflict(accept) {
@@ -2486,14 +2821,23 @@ async function resolveImportConflict(accept) {
   const c = _impConflicts[_impConflictIdx];
   await api('apply_import_conflict', c.nick_id, c.field, c.new_value, c.source_id, accept);
   _impConflictIdx++;
-  if (all) {
-    // החל את אותה בחירה על כל השאר
-    for (; _impConflictIdx < _impConflicts.length; _impConflictIdx++) {
-      const rest = _impConflicts[_impConflictIdx];
-      await api('apply_import_conflict', rest.nick_id, rest.field, rest.new_value, rest.source_id, accept);
-    }
+  if (all && _impConflictIdx < _impConflicts.length) {
+    // החל את אותה בחירה על כל השאר — בקריאה אחת (לא קריאת גשר לכל התנגשות)
+    const rest = _impConflicts.slice(_impConflictIdx);
+    toast(`מחיל על ${rest.length} התנגשויות…`, 'info');
+    const r = await api('apply_import_conflicts', rest, accept);
+    if (!r?.ok) { toast('ההחלה נכשלה: ' + (r?.error || ''), 'error'); return; }
+    _impConflictIdx = _impConflicts.length;
   }
   showNextImportConflict();
+}
+
+function stopImportConflicts() {
+  const done = _impConflictIdx, total = _impConflicts.length;
+  _impConflictIdx = total;
+  closeModal();
+  toast(`הופסק אחרי ${done} מתוך ${total} — ${total - done} הערכים שנותרו לא הוחלו (הקיים נשמר)`, 'info');
+  loadNicks(document.getElementById('search-input').value);
 }
 
 async function showForumMappingDialog(unknownForums, totalNicks) {
@@ -2572,19 +2916,7 @@ async function showForumMappingDialog(unknownForums, totalNicks) {
         // ערך ריק = הוסף כפורום חדש — Python יטפל
       });
       closeModal();
-      const r2 = await api('confirm_import', mapping, _pendingImportMeta.name,
-                           _pendingImportMeta.notes, _pendingImportMeta.trust);
-      if (r2?.ok) {
-        await loadForums();
-        await loadNicks(document.getElementById('search-input').value);
-        if (r2.manual && r2.conflicts && r2.conflicts.length) {
-          startImportConflictResolver(r2.conflicts);
-        } else {
-          toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r2.imported} · ערכים שנקלטו: ${r2.conflicts}`, "success");
-        }
-      } else {
-        toast('שגיאה בייבוא: ' + (r2?.error||''), 'error');
-      }
+      await runImport(mapping);
     }},
     { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
   ]);
@@ -2735,6 +3067,7 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '', opts = {}) {
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.id = 'modal-overlay';
+  overlay.dataset.dismissable = opts.dismissable === false ? '0' : '1';
   // דיאלוגים עם הזנת נתונים אינם נסגרים בלחיצה על הרקע (איבוד עבודה)
   if (opts.dismissable !== false) {
     overlay.onclick = e => { if (e.target === overlay) closeModal(); };
@@ -2767,13 +3100,30 @@ function closeModal() {
   _currentModalId = '';
 }
 
+// Esc סוגר חלון — רק חלונות שאינם הזנת-נתונים (בהם Esc בטעות = איבוד עבודה)
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const pop = document.getElementById('contact-pop');
+  if (pop) { pop.remove(); return; }          // קודם חלון המשנה
+  const ov = document.getElementById('modal-overlay');
+  if (ov && ov.dataset.dismissable !== '0') closeModal();
+});
+
 // ══ TOAST ═════════════════════════════════════════════════════════════
-function toast(msg, type = 'info') {
+function toast(msg, type = 'info', opts = {}) {
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
   el.textContent = msg;
+  // כפתור פעולה (למשל "↩ בטל" אחרי מחיקה)
+  if (opts.actionLabel && typeof opts.onAction === 'function') {
+    const btn = document.createElement('button');
+    btn.className = 'toast-action';
+    btn.textContent = opts.actionLabel;
+    btn.onclick = (e) => { e.stopPropagation(); el.remove(); opts.onAction(); };
+    el.appendChild(btn);
+  }
   document.getElementById('toast-container').appendChild(el);
-  setTimeout(() => el.remove(), 3500);
+  setTimeout(() => el.remove(), opts.ms || (opts.actionLabel ? 7000 : 3500));
 }
 
 // ══ STATUS ════════════════════════════════════════════════════════════
@@ -3013,6 +3363,23 @@ async function openInternetSync() {
              data-platform="${esc(plat)}" data-login="${needsLogin?'1':'0'}">${esc(f.name)}${tag}</option>`;
   }).join('');
 
+  // הפעלה ראשונה: אין עדיין פורומים עם כתובת — הסבר במקום דיאלוג ריק
+  if (!forums.length) {
+    openModal('🌐 סנכרון לאינטרנט', `
+      <div style="text-align:center;padding:18px 10px">
+        <div style="font-size:44px;margin-bottom:12px">🏛️</div>
+        <h3 style="font-size:16px;margin-bottom:8px">עדיין אין פורומים לסריקה</h3>
+        <p style="color:var(--subtext);font-size:13px;line-height:1.7">
+          כדי לסרוק משתמשים מהאינטרנט, קודם מוסיפים פורום.<br>
+          ב"ניהול פורומים" יש רשימה מוכנה של פורומים חרדיים — לחיצה על ➕ מוסיפה פורום עם כתובת וצבע.
+        </p>
+      </div>`, [
+      { label: '🏛️ לניהול פורומים', cls: 'btn-primary', action: () => { closeModal(); openForumMgr(); } },
+      { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+    ], 'modal-sm');
+    return;
+  }
+
   openModal('🌐 סנכרון לאינטרנט', `
     <p style="color:var(--subtext);font-size:13px;line-height:1.6;margin-bottom:16px">
       סורק את רשימת המשתמשים של פורום (NodeBB או Discourse) דרך ה-API הרשמי, ומוסיף/מעדכן
@@ -3055,6 +3422,7 @@ async function openInternetSync() {
     { label: '🌍 סרוק הכל', cls: 'btn-warning', action: doStartScrapeAll },
     { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
   ], 'modal-lg');
+  S.lastScrapes = await api('get_last_scrapes') || {};
   onSyncForumChange();
   // אם סריקה כבר רצה ברקע — הראה זאת במקום דיאלוג שנראה "רדום"
   api('get_scrape_progress').then(p => {
@@ -3190,6 +3558,10 @@ function startScrapeMonitor() {
         if (p.skipped && p.skipped.length) extra += ` · דולגו ${p.skipped.length} פורומים`;
         toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`,
               partial ? 'error' : 'success');
+        // אילו פורומים דולגו ולמה — רק בסריקת "הכל" (ב"סנכרן נבחרים" אלה שמות ניקים)
+        if (p.all_mode && p.skipped && p.skipped.length && !p.cancelled && !isModalOpen()) {
+          showSkippedForums(p.skipped);
+        }
       }
       await _yieldPaint();   // תן לבאנר להיעלם לפני הטעינה הכבדה
       await loadNicks(document.getElementById('search-input').value);
@@ -3222,12 +3594,43 @@ function updateSyncHint() {
   } else {
     hint.innerHTML = '';
   }
+  // נסרק לאחרונה
+  const last = (S.lastScrapes || {})[opt.value];
+  if (last) {
+    hint.innerHTML += (hint.innerHTML ? '<br>' : '') +
+      `<span style="color:var(--subtext)">🕒 נסרק לאחרונה: ${esc(relativeTime(last.replace('T', ' ')))}</span>`;
+  } else if (!hint.innerHTML) {
+    hint.innerHTML = '<span style="color:var(--subtext)">🕒 טרם נסרק</span>';
+  }
 }
 
 // מופעל בהחלפת פורום: עדכן רמז + טען עוגייה שמורה של הפורום החדש
 function onSyncForumChange() {
   updateSyncHint();
   syncPrefillCookie();
+}
+
+function showSkippedForums(skipped) {
+  const names = [...new Set(skipped.map(s => s.forum).filter(Boolean))];
+  const rows = skipped.map(s => `
+    <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border-soft);font-size:13px">
+      <span>⛔</span><b style="min-width:120px">${esc(s.forum)}</b>
+      <span style="color:var(--subtext);flex:1">${esc(s.error || '')}</span>
+    </div>`).join('');
+  openModal(`⛔ ${skipped.length} פורומים דולגו`, `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
+      פורומים אלה לא נסרקו. סיבות נפוצות: הפורום דורש התחברות (הוסף עוגייה),
+      הפורום במצב תחזוקה, או שהפלטפורמה אינה נתמכת לסריקה אוטומטית.
+    </p>
+    ${rows}`, [
+    ...(names.length ? [{ label: '🔁 נסה שוב את אלה', cls: 'btn-primary', action: async () => {
+      closeModal();
+      const r = await api('start_scrape_all', '', null, names);
+      if (!r?.ok) { toast(r?.error || 'לא ניתן להתחיל', 'error'); return; }
+      startScrapeMonitor();
+    }}] : []),
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
 }
 
 async function skipCurrentForum() {
@@ -3404,17 +3807,29 @@ function startChazonishnikMonitor() {
       if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (mine) closeModal(); return; }
       if (p.html) {
         _lastReport.chz = { html: p.html, count: p.count };
+        const msg = scanSummary('נותחו', p.count, p.postcount, p.partial, p.stopped_early, p.limited);
         if (mine || !isModalOpen()) {
           showChazonishnikReport(p.html, p.count);
-          toast('הניתוח הושלם ✓', 'success');
+          toast(msg, p.partial ? 'error' : 'success', { ms: p.partial ? 9000 : 4000 });
         } else {
           // אל תגנוב את המסך מעבודה פתוחה — הדוח נשמר וזמין לפתיחה
-          toast('📊 הדוח מוכן — פתח דרך Chazonishnik', 'success');
+          toast('📊 הדוח מוכן — פתח דרך Chazonishnik · ' + msg, p.partial ? 'error' : 'success');
         }
       } else if (mine) closeModal();
     }
     } finally { busy = false; }
   }, 600);
+}
+
+// דיווח כן על היקף הסריקה: כמה נסרק מתוך כמה, ולמה חסר
+function scanSummary(verb, done, postcount, partial, stoppedEarly, limited) {
+  const d = (done || 0).toLocaleString();
+  if (!postcount) return `${verb} ${d} פוסטים ✓`;
+  const base = `${verb} ${d} מתוך ${postcount.toLocaleString()} פוסטים`;
+  if (limited) return base + ' (לפי ההגבלה שהגדרת)';
+  if (stoppedEarly) return base + ' — נעצר בגלל תקלת רשת, הדוח חלקי';
+  if (partial) return base + ' — השאר בפורומים שדורשים התחברות (הוסף עוגייה)';
+  return base + ' ✓';
 }
 
 function isModalOpen() {
@@ -3560,11 +3975,12 @@ function startStinknikMonitor() {
       if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (mine) closeModal(); return; }
       if (p.html) {
         _lastReport.stink = { html: p.html, count: p.disliked };
+        const msg = scanSummary('נסרקו', p.checked, p.postcount, p.partial, p.stopped_early, p.limited);
         if (mine || !isModalOpen()) {
           showStinknikReport(p.html, p.disliked);
-          toast('הסריקה הושלמה ✓', 'success');
+          toast(msg, p.partial ? 'error' : 'success', { ms: p.partial ? 9000 : 4000 });
         } else {
-          toast('🦨 הדוח מוכן — פתח דרך Stinknik', 'success');
+          toast('🦨 הדוח מוכן — פתח דרך Stinknik · ' + msg, p.partial ? 'error' : 'success');
         }
       } else if (mine) closeModal();
     }
@@ -3615,24 +4031,58 @@ function renderCards() {
   }
   if (empty) empty.style.display = 'none';
 
+  // חלון וירטואלי לפי שורות-גריד: נבנים רק הכרטיסים שבתצוגה (+ מרווח ביטחון),
+  // עם spacers למעלה ולמטה. בעבר הכרטיסים רק נוספו ומעולם לא הוסרו —
+  // גלילה ארוכה במאגר גדול הגיעה למאות אלפי צמתי DOM.
+  const wrap = document.getElementById('cards-wrap');
+  const cols = S.cardsCols || 3, rowH = S.cardsRowH || 280;
+  const total = S.nicks.length, totalRows = Math.ceil(total / cols);
+  const scrollTop = wrap ? wrap.scrollTop : 0, viewH = wrap ? (wrap.clientHeight || 800) : 800;
+  const buffer = 2;
+  // clamp — אחרת אחרי חיפוש שמקטין את הרשימה בזמן שגלולים למטה, החלון יוצא מהטווח והגריד נשאר ריק
+  const startRow = Math.min(Math.max(0, Math.floor(scrollTop / rowH) - buffer),
+                            Math.max(0, totalRows - 1));
+  const endRow = Math.min(totalRows, Math.ceil((scrollTop + viewH) / rowH) + buffer);
+  const start = startRow * cols, end = Math.min(total, endRow * cols);
+
   grid.innerHTML = '';
-  const upTo = Math.min(S.cardsRendered || S.cardsChunk, S.nicks.length);
-  for (let i = 0; i < upTo; i++) {
-    grid.appendChild(buildCardElement(S.nicks[i]));
+  if (startRow > 0) grid.appendChild(cardsSpacer(startRow * rowH));
+  for (let i = start; i < end; i++) grid.appendChild(buildCardElement(S.nicks[i]));
+  if (endRow < totalRows) grid.appendChild(cardsSpacer((totalRows - endRow) * rowH));
+  S.cardsRange = { start, end };
+
+  // מדידה אמיתית (עמודות וגובה שורה) — ואם היא שונה מההנחה, בנייה חוזרת אחת
+  const m = measureCardsLayout();
+  if (m && !_cardsRerender &&
+      (m.cols !== cols || Math.abs(m.rowH - rowH) > rowH * 0.05)) {
+    S.cardsCols = m.cols; S.cardsRowH = m.rowH;
+    _cardsRerender = true;
+    try { renderCards(); } finally { _cardsRerender = false; }
+    return;
   }
   hydrateAvatars();
 }
+let _cardsRerender = false;
 
-function appendMoreCards() {
-  const grid = document.getElementById('cards-grid');
-  if (!grid) return;
-  const from = S.cardsRendered;
-  const to = Math.min(from + S.cardsChunk, S.nicks.length);
-  for (let i = from; i < to; i++) {
-    grid.appendChild(buildCardElement(S.nicks[i]));
-  }
-  S.cardsRendered = to;
-  hydrateAvatars();
+function cardsSpacer(h) {
+  const d = document.createElement('div');
+  d.className = 'cards-spacer';
+  d.style.cssText = `grid-column:1/-1;height:${Math.max(0, Math.round(h))}px;padding:0;margin:0`;
+  return d;
+}
+
+// מספר העמודות = כמה כרטיסים חולקים את ה-offsetTop של הראשון; גובה שורה = מרחק לשורה הבאה
+function measureCardsLayout() {
+  const cards = document.querySelectorAll('#cards-grid .nick-card');
+  if (!cards.length) return null;
+  const top0 = cards[0].offsetTop;
+  let cols = 0;
+  for (const c of cards) { if (c.offsetTop === top0) cols++; else break; }
+  cols = Math.max(1, cols);
+  let rowH = cards[0].offsetHeight + 18;
+  if (cards.length > cols) rowH = cards[cols].offsetTop - top0;
+  if (!(rowH > 40)) rowH = cards[0].offsetHeight + 18;
+  return { cols, rowH };
 }
 
 let _cardsScrollRaf = null;
@@ -3640,10 +4090,16 @@ function onCardsScroll() {
   if (_cardsScrollRaf) return;
   _cardsScrollRaf = requestAnimationFrame(() => {
     _cardsScrollRaf = null;
+    if (DISPLAY.view !== 'cards' || !S.nicks.length) return;
     const wrap = document.getElementById('cards-wrap');
     if (!wrap) return;
-    const nearBottom = wrap.scrollTop + wrap.clientHeight >= wrap.scrollHeight - 600;
-    if (nearBottom && S.cardsRendered < S.nicks.length) appendMoreCards();
+    // בנה מחדש רק אם החלון הנדרש השתנה
+    const cols = S.cardsCols || 3, rowH = S.cardsRowH || 280;
+    const startRow = Math.max(0, Math.floor(wrap.scrollTop / rowH) - 2);
+    const endRow = Math.min(Math.ceil(S.nicks.length / cols),
+                            Math.ceil((wrap.scrollTop + wrap.clientHeight) / rowH) + 2);
+    const start = startRow * cols, end = Math.min(S.nicks.length, endRow * cols);
+    if (!S.cardsRange || S.cardsRange.start !== start || S.cardsRange.end !== end) renderCards();
   });
 }
 

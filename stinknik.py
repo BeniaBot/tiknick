@@ -18,15 +18,34 @@ PAGE_DELAY = 0.4
 MAX_PAGES = 2000
 
 
-def _get_json(url, cookie=None, timeout=15):
+def _get_json(url, cookie=None, timeout=15, retries=3):
+    """GET JSON עם ניסיונות חוזרים וכיבוד Retry-After (429) — בלי זה כל תקלת רשת
+    רגעית קטעה את הסריקה בשקט והדוח הוצג כמלא."""
     req = urllib.request.Request(url)
     req.add_header("User-Agent", _UA)
     req.add_header("Accept", "application/json")
     if cookie:
         val = cookie if cookie.startswith("express.sid=") else f"express.sid={cookie}"
         req.add_header("Cookie", val)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8", "replace"))
+    last = None
+    for attempt in range(1, retries + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < retries:
+                ra = e.headers.get("Retry-After")
+                time.sleep(min(int(ra) if (ra and ra.isdigit()) else attempt * 3, 30))
+                last = e
+                continue
+            if e.code in (401, 403, 404):
+                raise
+            last = e
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            last = e
+        if attempt < retries:
+            time.sleep(attempt * 1.5)
+    raise last
 
 
 def _slug_from_input(user_input):
@@ -38,7 +57,11 @@ def _slug_from_input(user_input):
 
 
 def _resolve_slug(base, user_input, cookie=None):
-    """מנסה למצוא את ה-userslug הקנוני; תומך בשם עם רווחים."""
+    return _resolve_user(base, user_input, cookie)[0]
+
+
+def _resolve_user(base, user_input, cookie=None):
+    """מחזיר (userslug, postcount). ה-postcount משמש לדיווח 'נסרקו X מתוך Y'."""
     raw = _slug_from_input(user_input)
     # וריאציות סלאג סבירות (NodeBB ממיר רווחים למקפים)
     candidates = []
@@ -49,7 +72,7 @@ def _resolve_slug(base, user_input, cookie=None):
     try:
         data = _get_json(f"{base}/api/user/username/{urllib.parse.quote(raw)}", cookie=cookie)
         if isinstance(data, dict) and data.get("userslug"):
-            return data["userslug"]
+            return data["userslug"], int(data.get("postcount") or 0)
     except Exception:
         pass
     # אחר כך: נסה כל וריאציית סלאג עד שאחת נפתרת
@@ -57,11 +80,11 @@ def _resolve_slug(base, user_input, cookie=None):
         try:
             data = _get_json(f"{base}/api/user/{urllib.parse.quote(slug)}", cookie=cookie)
             if isinstance(data, dict) and (data.get("userslug") or data.get("uid")):
-                return data.get("userslug") or slug
+                return (data.get("userslug") or slug), int(data.get("postcount") or 0)
         except Exception:
             continue
     # ברירת מחדל: הצורה עם מקפים (הנפוצה ב-NodeBB) ולא הגולמית
-    return candidates[1] if len(candidates) > 1 else raw
+    return (candidates[1] if len(candidates) > 1 else raw), 0
 
 
 def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
@@ -72,13 +95,14 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
     מחזיר dict: {ok, html, disliked, checked, up, down, rep, error, cancelled}
     """
     base = (base_url or DEFAULT_BASE).rstrip("/")
-    slug = _resolve_slug(base, user_input, cookie=cookie)
+    slug, postcount = _resolve_user(base, user_input, cookie=cookie)
     api = f"{base}/api/user/{urllib.parse.quote(slug)}/posts"
 
     page = 1
     checked = 0
     total_up = total_down = total_rep = 0
     disliked = []
+    stopped_early = False   # נעצר באמצע בגלל שגיאה — הדוח חלקי
 
     while page <= MAX_PAGES:
         if max_posts and checked >= max_posts:
@@ -92,10 +116,12 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
                 if e.code in (401, 403):
                     return {"ok": False, "error": "נדרשת עוגייה / הרשאה"}
                 return {"ok": False, "error": f"שגיאת רשת: {e.code}"}
+            stopped_early = True
             break
         except Exception as e:
             if page == 1:
                 return {"ok": False, "error": f"שגיאה: {e}"}
+            stopped_early = True
             break
 
         posts = data.get("posts", []) if isinstance(data, dict) else []
@@ -129,13 +155,19 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
         page += 1
         time.sleep(PAGE_DELAY)
 
+    # דיווח כן: האם נסרק הכול? (הפרש נובע מפוסטים בפורומים שדורשים התחברות,
+    # מהגבלת כמות שהמשתמש קבע, או מעצירה על שגיאת רשת)
+    limited = bool(max_posts and checked >= max_posts)
+    partial = stopped_early or (bool(postcount) and checked < postcount * 0.95 and not limited)
     disliked.sort(key=lambda p: p["downvotes"], reverse=True)
-    html = _build_html(slug, disliked, checked, total_up, total_down, total_rep)
+    html = _build_html(slug, disliked, checked, total_up, total_down, total_rep, postcount)
     return {"ok": True, "html": html, "disliked": len(disliked),
-            "checked": checked, "up": total_up, "down": total_down, "rep": total_rep}
+            "checked": checked, "up": total_up, "down": total_down, "rep": total_rep,
+            "postcount": postcount, "partial": partial, "stopped_early": stopped_early,
+            "limited": limited}
 
 
-def _build_html(slug, disliked, checked, up, down, rep):
+def _build_html(slug, disliked, checked, up, down, rep, postcount=0):
     if disliked:
         rows = []
         for p in disliked:
@@ -156,7 +188,8 @@ def _build_html(slug, disliked, checked, up, down, rep):
 
     return _TEMPLATE \
         .replace("__SLUG__", _esc(slug)) \
-        .replace("__CHECKED__", str(checked)) \
+        .replace("__SCANNOTE__", f" מתוך {postcount:,}" if postcount else "") \
+        .replace("__CHECKED__", f"{checked:,}") \
         .replace("__UP__", str(up)) \
         .replace("__DOWN__", str(down)) \
         .replace("__REP__", str(rep)) \
@@ -201,7 +234,7 @@ h2{margin-top:36px;color:#e2e8f0;font-size:1.15rem}
 <h1>🦨 Stinknik — דוח דיסלייקים</h1>
 <div class="sub">המשתמש: <b>__SLUG__</b></div>
 <div class="summary-cards">
-<div class="card"><h3>__CHECKED__</h3><p>פוסטים שנסרקו</p></div>
+<div class="card"><h3>__CHECKED__</h3><p>פוסטים שנסרקו__SCANNOTE__</p></div>
 <div class="card"><h3>__UP__</h3><p>👍 לייקים</p></div>
 <div class="card bad"><h3>__DOWN__</h3><p>👎 דיסלייקים</p></div>
 <div class="card bad"><h3>__DISCOUNT__</h3><p>פוסטים עם דיסים</p></div>

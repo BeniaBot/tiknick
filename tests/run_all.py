@@ -3,6 +3,7 @@
 Run:  python tests/run_all.py   (or run_tests.bat from the repo root)
 Benchmarks (bench_*.py) are NOT run here — they build a large temp DB and take a minute+."""
 import os, sys, subprocess, glob
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # קונסולה בעברית/CP1255 לא תפיל הדפסות
 here = os.path.dirname(os.path.abspath(__file__))
 failed = []
 for path in sorted(glob.glob(os.path.join(here, "test_*.py"))):

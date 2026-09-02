@@ -2,6 +2,7 @@
 """Realistic-scale benchmark for Tik-Nick: build a big DB and time the hot paths."""
 import os, sys, time, json, base64, tempfile, random
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # קונסולה בעברית/CP1255 לא תפיל הדפסות
 import database as db
 
 N = int(os.environ.get("BENCH_N", "20000"))
