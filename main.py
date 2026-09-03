@@ -24,6 +24,7 @@ import threading
 import database as db
 import scraper
 import csv_import
+import profile_sheet
 
 
 # ── מצב סריקה פעילה (למעקב התקדמות מהממשק) ─────────────────────────
@@ -67,7 +68,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.7"
+APP_VERSION = "0.8.8"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -257,6 +258,37 @@ class API:
         db.dismiss_identity_suggestion(nick_ids or [])
         return {"ok": True}
 
+    def get_identity_map(self):
+        try:
+            return {"ok": True, **db.get_identity_map()}
+        except Exception as e:
+            logging.exception("get_identity_map failed")
+            return {"ok": False, "error": str(e)}
+
+    def repair_identity_groups(self):
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
+        try:
+            return {"ok": True, "added": db.repair_identity_groups()}
+        except Exception as e:
+            logging.exception("repair_identity_groups failed")
+            return {"ok": False, "error": str(e)}
+
+    def touch_recent(self, nick_id):
+        return {"ok": db.touch_recent(nick_id)}
+
+    def get_recent_views(self, limit=12):
+        try:
+            return db.get_recent_views(int(limit))
+        except Exception:
+            logging.exception("get_recent_views failed")
+            return []
+
+    def clear_recent_views(self):
+        db.clear_recent_views()
+        return {"ok": True}
+
     def get_stats(self):
         try:
             return {"ok": True, **db.get_stats()}
@@ -315,6 +347,117 @@ class API:
             return {"ok": True, **db.restore_trash(batch_id=batch_id)}
         except Exception as e:
             logging.exception("restore_trash failed")
+            return {"ok": False, "error": str(e)}
+
+    # ── פרופיל להדפסה ──────────────────────────────────────────────
+    def _print_dir(self):
+        d = os.path.join(_DATA_DIR, "print")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+    def _purge_print_dir(self, keep=40, max_age_h=24):
+        """הגיליון עלול להכיל טלפונים והערות אישיות — לא משאירים אותו על הדיסק."""
+        import time as _t
+        try:
+            d = self._print_dir()
+            files = []
+            for name in os.listdir(d):
+                full = os.path.join(d, name)
+                try:
+                    files.append((os.path.getmtime(full), full))
+                except OSError:
+                    pass
+            files.sort(reverse=True)
+            now = _t.time()
+            for i, (mt, full) in enumerate(files):
+                if i >= keep or (now - mt) > max_age_h * 3600:
+                    try:
+                        os.remove(full)
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+
+    def _print_data(self, nick_id, whole_group=True, include_history=True):
+        nid = int(nick_id)
+        nick = db.get_nick(nid)
+        if not nick:
+            return None
+        prof = db.get_merged_profile(nid) if whole_group else None
+        members = (prof or {}).get("members") or [{
+            "id": nick["id"], "forum": nick["forum"], "username": nick["username"],
+            "nick_color": nick.get("nick_color", ""), "status": nick.get("status", ""),
+        }]
+        # הניק שביקשו תמיד ראשון, וגם אם הקבוצה נחתכת הוא נשאר בפנים
+        members = sorted(members, key=lambda m: (m.get("id") != nid,))
+        truncated_members = len(members) if len(members) > profile_sheet.MAX_MEMBERS else 0
+        members = members[:profile_sheet.MAX_MEMBERS]
+        for m in members:
+            if not m.get("status"):
+                row = db.get_nick(m.get("id"))
+                m["status"] = (row or {}).get("status", "")
+        hist = db.get_field_history(nid, profile_sheet.MAX_HISTORY + 1) if include_history else []
+        truncated_history = len(hist) if len(hist) > profile_sheet.MAX_HISTORY else 0
+        return {
+            "nick": nick, "members": members,
+            "fields": (prof or {}).get("fields") or [],
+            "contacts": (prof or {}).get("contacts") or db.get_contacts(nid),
+            "history": hist,
+            "truncated_members": truncated_members,
+            "truncated_history": truncated_history,
+        }
+
+    def preview_print_profile(self, nick_id, whole_group=True,
+                              include_private=False, include_history=True):
+        """מחזיר את ה-HTML לתצוגה מקדימה ב-iframe (בלי לכתוב קובץ)."""
+        try:
+            data = self._print_data(nick_id, whole_group, include_history)
+            if not data:
+                return {"ok": False, "error": "הניק לא נמצא"}
+            import datetime as _dt
+            html = profile_sheet.build_sheet(
+                data, include_private=bool(include_private),
+                include_history=bool(include_history),
+                generated=f"{_dt.datetime.now():%d/%m/%Y %H:%M}")
+            return {"ok": True, "html": html}
+        except Exception as e:
+            logging.exception("preview_print_profile failed")
+            return {"ok": False, "error": str(e)}
+
+    def open_print_profile(self, nick_id, whole_group=True,
+                           include_private=False, include_history=True):
+        """
+        כותב את הגיליון לקובץ ומוסר אותו למערכת. אין הדפסה מתוך התוכנה: ה-iframe
+        מוגן ב-sandbox בלי allow-modals, ו-pywebview רץ עם debug=False (בלי Ctrl+P
+        ובלי תפריט הקשר). הדפדפן האמיתי מריץ את window.print() שבקובץ, ושם יש גם
+        "Microsoft Print to PDF".
+        שים לב: המתודה מקבלת מזהה בלבד — לא נתיב ולא HTML. שם הקובץ והתיקייה
+        נבחרים כאן, ולכן JS לא יכול להשפיע על מה שנפתח (ו-open_url נשאר סגור).
+        """
+        try:
+            r = self.preview_print_profile(nick_id, whole_group, include_private,
+                                           include_history)
+            if not r.get("ok"):
+                return r
+            import datetime as _dt
+            # שם הקובץ לפי מזהה ולא לפי שם משתמש — הדפדפן מדפיס את הנתיב בכותרת
+            name = f"tiknick-profile-{int(nick_id)}-{_dt.datetime.now():%H%M%S}.html"
+            path = os.path.join(self._print_dir(), name)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(r["html"])
+            self._purge_print_dir()
+            try:
+                os.startfile(path)          # noqa: S606 — נתיב שנבחר בצד השרת
+                return {"ok": True, "path": path}
+            except Exception:
+                try:
+                    import pathlib
+                    webbrowser.open(pathlib.Path(path).as_uri())
+                    return {"ok": True, "path": path}
+                except Exception as e2:
+                    return {"ok": False, "path": path, "error": str(e2)}
+        except Exception as e:
+            logging.exception("open_print_profile failed")
             return {"ok": False, "error": str(e)}
 
     def get_backup_status(self):

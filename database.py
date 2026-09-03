@@ -366,6 +366,15 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_hist_nick ON field_history(nick_id, changed_at);
 
+            -- ניקים שנצפו לאחרונה. טבלה ולא JSON בהגדרות: CASCADE מנקה לבד
+            -- ניק שנמחק, ואין מרוץ בין שני כותבים על אותה מחרוזת.
+            CREATE TABLE IF NOT EXISTS recent_views (
+                nick_id INTEGER PRIMARY KEY,
+                viewed_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f','now')),
+                FOREIGN KEY (nick_id) REFERENCES nicks(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_recent_at ON recent_views(viewed_at DESC);
+
             -- יומן סריקות + מה השתנה בכל אחת
             CREATE TABLE IF NOT EXISTS scan_runs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -882,6 +891,25 @@ def get_all_nicks(search="", limit=None, offset=0):
     מחזיר dict: {"rows": [...], "total": N}.
     limit=None (ברירת מחדל) מחזיר הכל, לתאימות אחורה עם קריאות ישנות.
     """
+    # בלי חיפוש: הסדר הקיים (has_info קודם) — מי שמדפדף רואה קודם את מה שכבר
+    # העשיר. עם חיפוש זה הפוך: מי שהקליד "לומדעס" רוצה את הניק לומדעס ראשון,
+    # ולא ניק אחר שרק מזכיר אותו בהערות. הרלוונטיות גוברת, ו-has_info נשאר
+    # שובר שוויון בתוך אותה דרגת התאמה.
+    term = (search or "").strip()
+    rank_select, rank_params = "", []
+    if term:
+        rank_select = """,
+                CASE
+                  WHEN n.username = ?                      THEN 0
+                  WHEN n.username LIKE ?                   THEN 1
+                  WHEN n.username LIKE ?                   THEN 2
+                  WHEN n.real_name = ? OR n.full_name = ?  THEN 3
+                  WHEN n.real_name LIKE ? OR n.full_name LIKE ? THEN 4
+                  ELSE 5
+                END AS rank"""
+        rank_params = [term, term + "%", "%" + term + "%",
+                       term, term, term + "%", term + "%"]
+
     with get_connection() as conn:
         base_select = f"""
             SELECT {_list_cols_sql()},
@@ -901,9 +929,12 @@ def get_all_nicks(search="", limit=None, offset=0):
                     SELECT field_name FROM field_values fv WHERE fv.nick_id = n.id
                     GROUP BY field_name HAVING COUNT(DISTINCT value) > 1
                  )) as conflict_fields
+            {rank_select}
             FROM nicks n
         """
-        order_clause = "ORDER BY has_info DESC, n.trust_level DESC, n.updated_at DESC"
+        order_clause = ("ORDER BY rank ASC, has_info DESC, n.trust_level DESC, n.updated_at DESC"
+                        if term else
+                        "ORDER BY has_info DESC, n.trust_level DESC, n.updated_at DESC")
         limit_clause = ""
         params_extra = []
         if limit is not None:
@@ -926,7 +957,7 @@ def get_all_nicks(search="", limit=None, offset=0):
                     limit_clause, params_extra = "LIMIT ? OFFSET 0", [500]
             rows = conn.execute(
                 base_select + where + f" {order_clause} {limit_clause}",
-                params + params_extra).fetchall()
+                rank_params + params + params_extra).fetchall()
         else:
             total = conn.execute("SELECT COUNT(*) FROM nicks").fetchone()[0]
             rows = conn.execute(
@@ -1733,6 +1764,165 @@ def remove_identity(current_nick_id, other_nick_id):
             a, b = min(other_nick_id, other), max(other_nick_id, other)
             conn.execute(
                 "DELETE FROM nick_identities WHERE nick_id_a=? AND nick_id_b=?", (a, b))
+
+# ── נצפו לאחרונה ─────────────────────────────────────────────────────
+RECENT_VIEWS_KEEP = 30
+
+def touch_recent(nick_id):
+    """רושם צפייה בניק. PRIMARY KEY על nick_id = צפייה חוזרת מקדמת, לא מכפילה."""
+    try:
+        with get_connection() as conn:
+            if not conn.execute("SELECT 1 FROM nicks WHERE id=?", (int(nick_id),)).fetchone():
+                return False
+            conn.execute(
+                "INSERT INTO recent_views (nick_id, viewed_at) "
+                "VALUES (?, strftime('%Y-%m-%d %H:%M:%f','now')) "
+                "ON CONFLICT(nick_id) DO UPDATE SET "
+                "viewed_at=strftime('%Y-%m-%d %H:%M:%f','now')", (int(nick_id),))
+            conn.execute(
+                "DELETE FROM recent_views WHERE nick_id NOT IN "
+                "(SELECT nick_id FROM recent_views ORDER BY viewed_at DESC LIMIT ?)",
+                (RECENT_VIEWS_KEEP,))
+        return True
+    except (ValueError, TypeError, sqlite3.Error):
+        return False
+
+def get_recent_views(limit=12):
+    """הניקים שנצפו לאחרונה. ניק שנמחק נעלם לבד דרך CASCADE."""
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT n.id, n.username, n.forum, n.status, n.real_name, n.nick_color,
+                   r.viewed_at
+            FROM recent_views r JOIN nicks n ON n.id = r.nick_id
+            ORDER BY r.viewed_at DESC LIMIT ?""", (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
+
+def clear_recent_views():
+    with get_connection() as conn:
+        conn.execute("DELETE FROM recent_views")
+
+# ── מפת זהויות ───────────────────────────────────────────────────────
+IDENTITY_MAP_LIMIT = 3000
+# שדות שסתירה ביניהם בתוך קבוצה היא מידע אמיתי (או קישור שגוי, או ידיעה חדשה).
+_IDENTITY_CONFLICT_FIELDS = [("real_name", "שם אמיתי"), ("phone", "טלפון"),
+                             ("email", "מייל"), ("full_name", "שם מלא")]
+
+def get_identity_map(limit=IDENTITY_MAP_LIMIT):
+    """
+    כל קבוצות הזהות, בשתי שאילתות: אחת על nick_identities ואחת על הניקים
+    שמופיעים בהן. **לא** סורק את טבלת הניקים כולה, ולא מחזיר avatar_image
+    (כלל מטען הרשימות מ-0.8.3) — רק has_avatar.
+
+    הקיבוץ הוא union-find ולא הנחת קליקה: קבוצה יכולה להיות לא-סגורה אחרי
+    שחזור חלקי מסל המחזור, ואיחוד לפי צמתים נכון לכל צורת גרף.
+    """
+    with get_connection() as conn:
+        edges = conn.execute(
+            "SELECT nick_id_a, nick_id_b FROM nick_identities").fetchall()
+        if not edges:
+            return {"groups": [], "total_groups": 0, "linked_nicks": 0, "truncated": False}
+
+        parent = {}
+        def find(x):
+            root = x
+            while parent.get(root, root) != root:
+                root = parent[root]
+            while parent.get(x, x) != x:      # path compression
+                parent[x], x = root, parent[x]
+            return root
+        for a, b in edges:
+            parent.setdefault(a, a); parent.setdefault(b, b)
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        buckets = {}
+        for nid in parent:
+            buckets.setdefault(find(nid), []).append(nid)
+        groups_ids = [m for m in buckets.values() if len(m) > 1]
+        total_groups = len(groups_ids)
+        linked = sum(len(m) for m in groups_ids)
+        groups_ids.sort(key=len, reverse=True)
+        truncated = len(groups_ids) > limit
+        groups_ids = groups_ids[:limit]
+
+        wanted = sorted({n for m in groups_ids for n in m})
+        rows = {}
+        cols = ("id, forum, username, status, real_name, full_name, phone, email, "
+                "nick_color, updated_at, (avatar_image IS NOT NULL AND avatar_image != '') "
+                "AS has_avatar")
+        for chunk in _chunks(wanted, 400):
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(f"SELECT {cols} FROM nicks WHERE id IN ({ph})", list(chunk)):
+                rows[r["id"]] = dict(r)
+
+    out = []
+    for members in groups_ids:
+        ms = [rows[i] for i in members if i in rows]
+        if len(ms) < 2:
+            continue                       # ניק שנמחק והשאיר קישור יתום
+        ms.sort(key=lambda r: (r["forum"] or "", r["username"] or ""))
+        conflicts = []
+        for key, label in _IDENTITY_CONFLICT_FIELDS:
+            vals = {str(r.get(key) or "").strip() for r in ms}
+            vals.discard("")
+            if len(vals) > 1:
+                conflicts.append(label)
+        out.append({
+            "members": ms,
+            "size": len(ms),
+            "forums": sorted({r["forum"] for r in ms if r["forum"]}),
+            "forum_count": len({r["forum"] for r in ms if r["forum"]}),
+            "banned": sum(1 for r in ms if (r.get("status") or "") == "מורחק"),
+            "conflicts": conflicts,
+            "updated_at": max((r.get("updated_at") or "") for r in ms),
+        })
+    out.sort(key=lambda g: (g["size"], g["forum_count"], g["updated_at"]), reverse=True)
+    return {"groups": out, "total_groups": total_groups, "linked_nicks": linked,
+            "truncated": truncated}
+
+def repair_identity_groups():
+    """
+    משלים קישורים חסרים כך שכל קבוצה תהיה סגורה (כל זוג שמור), כפי ששאר הקוד
+    מניח. קבוצה לא-סגורה יכולה להיווצר משחזור חלקי מסל המחזור.
+    מחזיר כמה קישורים נוספו.
+    """
+    added = 0
+    with get_connection() as conn:
+        edges = conn.execute("SELECT nick_id_a, nick_id_b FROM nick_identities").fetchall()
+        if not edges:
+            return 0
+        parent = {}
+        def find(x):
+            while parent.get(x, x) != x:
+                parent[x] = parent.get(parent[x], parent[x]); x = parent[x]
+            return x
+        have = set()
+        for a, b in edges:
+            parent.setdefault(a, a); parent.setdefault(b, b)
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+            have.add((min(a, b), max(a, b)))
+        buckets = {}
+        for nid in parent:
+            buckets.setdefault(find(nid), []).append(nid)
+        missing = []
+        for members in buckets.values():
+            if len(members) < 3 or len(members) > MAX_IDENTITY_GROUP:
+                continue
+            members.sort()
+            for i in range(len(members)):
+                for j in range(i + 1, len(members)):
+                    pair = (members[i], members[j])
+                    if pair not in have:
+                        missing.append(pair)
+        if missing:
+            conn.executemany(
+                "INSERT OR IGNORE INTO nick_identities (nick_id_a, nick_id_b) VALUES (?,?)",
+                missing)
+            added = len(missing)
+    return added
 
 # ── הגדרות תצוגה ─────────────────────────────────────────────────────
 DEFAULT_DISPLAY = {

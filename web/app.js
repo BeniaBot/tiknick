@@ -799,10 +799,10 @@ function renderUsername(td, n) {
     dot.className = 'uname-dot';
     if (n.has_avatar) {
       dot.classList.add('has-img');
-      dot.style.background = n.nick_color || 'var(--card2)';
+      dot.style.background = safeColor(n.nick_color, 'var(--card2)');
       dot.dataset.avatarId = n.id;   // התמונה נטענת לפי דרישה
     } else {
-      dot.style.background = n.nick_color;
+      dot.style.background = safeColor(n.nick_color, 'var(--card2)');
     }
     td.appendChild(dot);
   }
@@ -1180,6 +1180,11 @@ async function openDbHealth() {
       לשחזור: "♻️ שחזור מגיבוי" בהגדרות, ובחר קובץ מהתיקייה הזו.
     </div>
   `, [
+    { label: '🔧 תקן קבוצות זהות', cls: 'btn-ghost', action: async () => {
+      const r = await api('repair_identity_groups');
+      if (!r?.ok) { toast(r?.error || 'התיקון נכשל', 'error'); return; }
+      toast(r.added ? `${r.added} קישורים חסרים הושלמו ✓` : 'כל קבוצות הזהות תקינות ✓', 'success');
+    }},
     { label: '💾 גבה עכשיו', cls: 'btn-ghost', action: async () => {
       setStatus('מגבה…');
       const r = await api('run_auto_backup', 'manual');
@@ -1453,7 +1458,7 @@ async function openNickDialog(nickId = null) {
         <div class="avatar-preview" id="avatar-preview">
           ${nick?.avatar_image
             ? `<img src="${esc(nick.avatar_image)}" alt="">`
-            : `<span class="avatar-initial" style="background:${esc(nick?.nick_color||'var(--accent)')}">${esc((nick?.username||'?').charAt(0).toUpperCase())}</span>`}
+            : `<span class="avatar-initial" style="background:${esc(safeColor(nick?.nick_color))}">${esc((nick?.username||'?').charAt(0).toUpperCase())}</span>`}
         </div>
         <div class="avatar-controls">
           <input type="file" id="avatar-file" accept="image/*" style="display:none"
@@ -1504,8 +1509,12 @@ async function openNickDialog(nickId = null) {
 
   openModal(title, html, [
     { label: '💾 שמור', cls: 'btn-primary', action: () => saveNick(nickId) },
+    // openModal סוגר את החלון הנוכחי כשלב ראשון ואין לו מחסנית — כפתור שפותח
+    // חלון נוסף מכאן היה מוחק טופס עריכה פתוח. לכן מדפיסים ישירות.
+    ...(nickId ? [{ label: '🖨️ הדפס', cls: 'btn-ghost', action: () => printProfileNow(nickId) }] : []),
     { label: 'ביטול',   cls: 'btn-ghost',   action: closeModal },
   ], 'modal-lg', { id: 'nick-dialog', dismissable: false });
+  if (nickId) api('touch_recent', nickId);
 
   // wire up contacts
   if (nick) wireContactsSection(nick);
@@ -1675,6 +1684,15 @@ document.addEventListener('input', (e) => {
     clearTimeout(_tagTimer);
     _tagTimer = setTimeout(() => onTagInput(e), 180);
   }
+});
+
+document.addEventListener('click', (e) => {
+  const prof = e.target.closest('.idm-prof');
+  if (prof) { idmProfile(parseInt(prof.dataset.gi)); return; }
+  const un = e.target.closest('.idm-unlink');
+  if (un) { idmUnlink(parseInt(un.dataset.nid), parseInt(un.dataset.gi)); return; }
+  const op = e.target.closest('.idm-open');
+  if (op) { closeModal(); openNickDialog(parseInt(op.dataset.nid)); }
 });
 
 // ── חיווט מטפלים דרך data-* במקום onclick מוטבע ────────────────────────
@@ -2025,8 +2043,12 @@ async function showMergedProfile(nickId) {
   if (box) box.innerHTML = '<div style="padding:14px;color:var(--subtext)">טוען…</div>';
   const p = await api('get_merged_profile', nickId);
   if (!p) { if (box) box.innerHTML = '<div style="padding:14px;color:var(--danger)">לא נמצא</div>'; return; }
-  if (box) box.innerHTML = renderMergedProfile(p);
+  if (box) box.innerHTML =
+    `<div style="text-align:left;margin-bottom:6px">
+       <button class="btn btn-sm btn-ghost" onclick="openPrintDialog(${nickId})">🖨️ פרופיל להדפסה</button>
+     </div>` + renderMergedProfile(p);
   S.lastMergedProfile = p;
+  api('touch_recent', nickId);
 }
 
 function renderMergedProfile(p) {
@@ -2034,7 +2056,8 @@ function renderMergedProfile(p) {
   const primary = members[0] || {};
   const initial = esc((primary.username || '?').charAt(0).toUpperCase());
   // nick_color/avatar_image מגיעים מהפורום (לא בטוחים) — חובה esc בתוך innerHTML
-  const avatarBg = esc(primary.nick_color || S.forumColors[primary.forum] || 'var(--accent)');
+  const avatarBg = esc(safeColor(primary.nick_color,
+                       S.forumColors[primary.forum] || 'var(--accent)'));
   const avatarHtml = primary.avatar_image
     ? `<img src="${esc(primary.avatar_image)}" style="width:100%;height:100%;object-fit:cover">`
     : `<span style="width:100%;height:100%;display:grid;place-items:center;font-size:22px;font-weight:800;color:#fff;background:${avatarBg}">${initial}</span>`;
@@ -2897,6 +2920,232 @@ async function dismissSuggestion(i) {
   g._busy = true;
   await api('dismiss_identity_suggestion', g.members.map(m => m.id));
   _dropSuggestion(g);
+}
+
+// ══ פרופיל להדפסה ════════════════════════════════════════════════════
+// אין הדפסה מתוך התוכנה: ה-iframe מוגן ב-sandbox בלי allow-modals, ו-pywebview
+// רץ עם debug=False (בלי Ctrl+P ובלי תפריט הקשר). לכן פייתון כותב קובץ
+// ומוסר אותו למערכת, והדפדפן האמיתי מדפיס אותו.
+async function printProfileNow(nickId, opts = {}) {
+  setStatus('מכין גיליון…');
+  const r = await api('open_print_profile', nickId, opts.group !== false,
+                      !!opts.priv, opts.history !== false);
+  setStatus('');
+  if (r?.ok) toast('הגיליון נפתח בדפדפן — משם אפשר להדפיס או לשמור כ-PDF', 'success');
+  else toast('לא ניתן לפתוח את הגיליון' + (r?.path ? ` — הקובץ נשמר ב: ${r.path}` : ''), 'error');
+}
+
+async function openPrintDialog(nickId) {
+  openModal('🖨️ פרופיל להדפסה', `
+    <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:10px">
+      <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer">
+        <input type="checkbox" id="pr-group" checked> לכלול את כל הזהויות המקושרות</label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer">
+        <input type="checkbox" id="pr-hist" checked> לכלול ציר זמן</label>
+      <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer">
+        <input type="checkbox" id="pr-priv"> 🔒 לכלול הערות אישיות ואנשי קשר סודיים</label>
+    </div>
+    <div style="font-size:11px;color:var(--subtext);margin-bottom:8px">
+      הגיליון נשמר בתיקיית הנתונים ונמחק אוטומטית אחרי יממה.
+    </div>
+    <iframe id="pr-frame" sandbox="allow-scripts" style="width:100%;height:44vh;border:1px solid var(--border-soft);border-radius:8px;background:#fff"></iframe>
+  `, [
+    { label: '🖨️ פתח להדפסה', cls: 'btn-primary', action: () => {
+      printProfileNow(nickId, {
+        group: document.getElementById('pr-group').checked,
+        priv:  document.getElementById('pr-priv').checked,
+        history: document.getElementById('pr-hist').checked });
+    }},
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg', { id: 'print-profile' });
+  ['pr-group', 'pr-hist', 'pr-priv'].forEach(id =>
+    document.getElementById(id).addEventListener('change', () => refreshPrintPreview(nickId)));
+  refreshPrintPreview(nickId);
+}
+
+async function refreshPrintPreview(nickId) {
+  const r = await api('preview_print_profile', nickId,
+                      document.getElementById('pr-group')?.checked !== false,
+                      !!document.getElementById('pr-priv')?.checked,
+                      document.getElementById('pr-hist')?.checked !== false);
+  if (_currentModalId !== 'print-profile') return;   // תשובה מאוחרת לחלון שכבר הוחלף
+  const f = document.getElementById('pr-frame');
+  if (f && r?.ok) f.srcdoc = r.html;
+}
+
+// ══ נצפו לאחרונה ═════════════════════════════════════════════════════
+async function openRecentViews() {
+  const rows = await api('get_recent_views', 30) || [];
+  openModal('🕘 נצפו לאחרונה', rows.length ? `
+    <div style="max-height:56vh;overflow:auto">
+      ${rows.map(r => `
+        <div class="idm-open" data-nid="${r.id}"
+             style="display:flex;gap:8px;align-items:center;padding:7px 4px;cursor:pointer;
+                    border-bottom:1px solid var(--border-soft)">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;
+                background:${esc(S.forumColors[r.forum] || '#8b90a0')}"></span>
+          <b style="font-size:13px">${esc(r.username)}</b>
+          <span style="color:var(--subtext);font-size:12px">${esc(r.forum)}</span>
+          ${(r.status || '') === 'מורחק' ? '<span style="color:var(--danger,#e5484d)">🚫</span>' : ''}
+          ${r.real_name ? `<span style="color:var(--subtext);font-size:12px">· ${esc(r.real_name)}</span>` : ''}
+          <span style="margin-inline-start:auto;color:var(--subtext);font-size:11px">
+            ${esc(relativeTime(String(r.viewed_at).replace(' ', 'T')))}</span>
+        </div>`).join('')}
+    </div>` : `<div style="text-align:center;padding:26px;color:var(--subtext);font-size:13px">
+      עדיין לא נפתח אף ניק.</div>`, [
+    ...(rows.length ? [{ label: '🧹 נקה', cls: 'btn-ghost', action: async () => {
+      await api('clear_recent_views'); closeModal(); toast('הרשימה נוקתה', 'success');
+    }}] : []),
+    { label: 'סגור', cls: 'btn-primary', action: closeModal },
+  ], 'modal-sm', { id: 'recent-views' });
+}
+
+// ══ מפת זהויות ═══════════════════════════════════════════════════════
+let _idMap = null;
+
+async function openIdentityMap() {
+  setStatus('טוען מפת זהויות…');
+  const m = await api('get_identity_map');
+  setStatus('');
+  if (!m?.ok) { toast('שגיאה: ' + (m?.error || ''), 'error'); return; }
+  _idMap = m;
+  const forums = [...new Set(m.groups.flatMap(g => g.forums))].sort(HE_COLLATOR.compare);
+  openModal('🗺️ מפת זהויות', `
+    <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--subtext);
+                margin-bottom:10px">
+      <span><b style="color:var(--accent-2)">${m.total_groups}</b> קבוצות</span>
+      <span><b>${m.linked_nicks}</b> ניקים מקושרים</span>
+      <span><b>${m.groups.length ? m.groups[0].size : 0}</b> הקבוצה הגדולה</span>
+      <span><b>${m.groups.filter(g => g.forum_count > 1).length}</b> חוצות פורומים</span>
+      <span><b>${m.groups.filter(g => g.conflicts.length).length}</b> עם סתירה</span>
+    </div>
+    ${m.truncated ? `<div style="font-size:11.5px;color:var(--subtext);margin-bottom:8px">
+      מוצגות ${m.groups.length} הקבוצות הגדולות בלבד.</div>` : ''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+      <input class="form-input" id="idm-q" placeholder="🔍 ניק / שם / פורום…"
+             oninput="renderIdentityMap()" style="flex:1;min-width:150px;font-size:12px">
+      <select class="form-input" id="idm-size" onchange="renderIdentityMap()" style="width:auto;font-size:12px">
+        <option value="0">כל הקבוצות</option><option value="3">3 ומעלה</option>
+        <option value="4">4 ומעלה</option><option value="6">6 ומעלה</option>
+      </select>
+      <select class="form-input" id="idm-span" onchange="renderIdentityMap()" style="width:auto;font-size:12px">
+        <option value="0">כל פריסה</option><option value="2">חוצות 2 פורומים+</option>
+        <option value="3">חוצות 3 פורומים+</option>
+      </select>
+      <select class="form-input" id="idm-forum" onchange="renderIdentityMap()" style="width:auto;font-size:12px">
+        <option value="">כל פורום</option>
+        ${forums.map(f => `<option value="${esc(f)}">${esc(f)}</option>`).join('')}
+      </select>
+      <label style="display:flex;gap:5px;align-items:center;font-size:12px;cursor:pointer">
+        <input type="checkbox" id="idm-conf" onchange="renderIdentityMap()"> רק עם סתירה</label>
+    </div>
+    <div id="idm-body" style="max-height:56vh;overflow:auto"></div>
+  `, [{ label: 'סגור', cls: 'btn-primary', action: closeModal }], 'modal-lg',
+     { id: 'identity-map' });
+  renderIdentityMap();
+}
+
+// גליף קטן: נקודה לכל חבר על מעגל + מיתרים. SVG בעבודת יד — אין ספרייה בחבילה.
+function idGlyph(g) {
+  const n = Math.min(g.size, 6), R = 15, C = 20;
+  const pts = Array.from({ length: n }, (_, i) => {
+    const t = -Math.PI / 2 + i * 2 * Math.PI / n;
+    return [C + R * Math.cos(t), C + R * Math.sin(t)];
+  });
+  const lines = [];
+  for (let i = 0; i < n; i++)
+    for (let j = i + 1; j < n; j++)
+      lines.push(`<line x1="${pts[i][0].toFixed(1)}" y1="${pts[i][1].toFixed(1)}" x2="${pts[j][0].toFixed(1)}" y2="${pts[j][1].toFixed(1)}" stroke="currentColor" stroke-width="0.7" opacity=".35"/>`);
+  const dots = pts.map((pt, i) => {
+    const col = S.forumColors[(g.members[i] || {}).forum] || '#8b90a0';
+    return `<circle cx="${pt[0].toFixed(1)}" cy="${pt[1].toFixed(1)}" r="3.6" fill="${esc(col)}"/>`;
+  }).join('');
+  const more = g.size > 6
+    ? `<text x="20" y="24" text-anchor="middle" font-size="9" fill="currentColor">+${g.size - 6}</text>` : '';
+  return `<svg width="40" height="40" viewBox="0 0 40 40" style="flex:none;color:var(--subtext)">${lines.join('')}${dots}${more}</svg>`;
+}
+
+function renderIdentityMap() {
+  const box = document.getElementById('idm-body');
+  if (!box || !_idMap) return;
+  const q = (document.getElementById('idm-q')?.value || '').trim().toLowerCase();
+  const minSize = parseInt(document.getElementById('idm-size')?.value || '0');
+  const minSpan = parseInt(document.getElementById('idm-span')?.value || '0');
+  const forum = document.getElementById('idm-forum')?.value || '';
+  const onlyConf = document.getElementById('idm-conf')?.checked;
+
+  const groups = _idMap.groups.filter(g => {
+    if (minSize && g.size < minSize) return false;
+    if (minSpan && g.forum_count < minSpan) return false;
+    if (forum && !g.forums.includes(forum)) return false;
+    if (onlyConf && !g.conflicts.length) return false;
+    if (q && !g.members.some(mm =>
+      (mm.username || '').toLowerCase().includes(q) ||
+      (mm.real_name || '').toLowerCase().includes(q) ||
+      (mm.forum || '').toLowerCase().includes(q))) return false;
+    return true;
+  });
+
+  if (!groups.length) {
+    box.innerHTML = `<div style="text-align:center;padding:28px;color:var(--subtext);font-size:13px">
+      🗺️ אין קבוצות זהות שמתאימות לסינון.<br>
+      <span style="font-size:12px">אפשר להתחיל מ"🔗 הצעות זהות".</span></div>`;
+    return;
+  }
+
+  box.innerHTML = groups.map((g, gi) => `
+    <div style="display:flex;gap:10px;padding:9px 4px;border-bottom:1px solid var(--border-soft)">
+      ${idGlyph(g)}
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:700;margin-bottom:4px">
+          ${g.size} ניקים · ${g.forum_count} פורומים
+          ${g.banned ? `<span style="color:var(--danger,#e5484d)"> · 🚫 ${g.banned} מורחקים</span>` : ''}
+          ${g.conflicts.length ? `<span style="color:var(--warn,#e59b2b)"> · ⚠️ ${esc(g.conflicts.join(' · '))}</span>` : ''}
+          <button class="btn btn-sm btn-ghost idm-prof" data-gi="${gi}" style="float:left;font-size:11px">🔎 פרופיל מאוחד</button>
+        </div>
+        <div>${g.members.map(mm => `
+          <span class="chip" style="display:inline-block;padding:2px 7px;border:1px solid var(--border-soft);
+                border-radius:9px;font-size:11.5px;margin:0 0 4px 4px">
+            <span style="display:inline-block;width:7px;height:7px;border-radius:50%;
+                  margin-left:5px;background:${esc(S.forumColors[mm.forum] || '#8b90a0')}"></span>
+            <b class="idm-open" data-nid="${mm.id}" style="cursor:pointer">${esc(mm.username)}</b>
+            <span style="color:var(--subtext)"> ${esc(mm.forum)}</span>
+            ${(mm.status || '') === 'מורחק' ? ' 🚫' : ''}
+            <span class="idm-unlink" data-nid="${mm.id}" data-gi="${gi}"
+                  style="cursor:pointer;color:var(--danger,#e5484d);margin-right:4px">✕</span>
+          </span>`).join('')}</div>
+        <div id="idm-prof-${gi}"></div>
+      </div>
+    </div>`).join('');
+  box._groups = groups;
+}
+
+async function idmUnlink(nid, gi) {
+  const g = (document.getElementById('idm-body')?._groups || [])[gi];
+  if (!g) return;
+  const who = g.members.find(m => m.id === nid);
+  if (!who) return;
+  if (g.size === 2 && !confirm(`ניתוק "${who.username}" יפרק את הקבוצה כולה. להמשיך?`)) return;
+  const other = g.members.find(m => m.id !== nid);
+  await api('remove_identity', other.id, nid);
+  toast(`${who.username} נותק מהקבוצה`, 'success', {
+    actionLabel: '↩ בטל',
+    onAction: async () => {
+      await api('bulk_link_identities', g.members.map(m => m.id));
+      await openIdentityMap();
+    }, ms: 7000 });
+  await openIdentityMap();
+}
+
+async function idmProfile(gi) {
+  const g = (document.getElementById('idm-body')?._groups || [])[gi];
+  const host = document.getElementById(`idm-prof-${gi}`);
+  if (!g || !host) return;
+  if (host.innerHTML) { host.innerHTML = ''; return; }
+  const p = await api('get_merged_profile', g.members[0].id);
+  if (_currentModalId !== 'identity-map') return;   // המשתמש כבר החליף חלון
+  host.innerHTML = `<div style="margin-top:6px;padding:8px;background:var(--card2);
+       border-radius:8px">${p ? renderMergedProfile(p) : 'לא נמצא'}</div>`;
 }
 
 // ══ סטטיסטיקות ════════════════════════════════════════════════════════
@@ -4975,6 +5224,15 @@ function esc(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
                          .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
                          .replace(/'/g,'&#39;');
+}
+
+// צבע בטוח לתוך style=. esc() מונע בריחה מהמאפיין, אבל ערך כמו
+// 'red;background-image:url(https://forum/track.png)' נשאר תקף בתוך אותו
+// מאפיין והופך לבקשה חיצונית מה-WebView בכל צפייה בפרופיל — כלומר הפורום
+// לומד שאתה מסתכל על המשתמש הזה. nick_color מגיע מהפורום, ולכן: רשימה לבנה.
+function safeColor(v, fallback = 'var(--accent)') {
+  const t = String(v ?? '').trim();
+  return /^#[0-9a-fA-F]{3,8}$/.test(t) || /^[a-zA-Z]{3,20}$/.test(t) ? t : fallback;
 }
 
 // כתובת בטוחה ל-href/src: רק http(s) או data:image. אחרת — לא נפתח כלום.

@@ -20,3 +20,6 @@ dist/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# גיליונות הדפסה זמניים (עלולים להכיל הערות אישיות)
+print/
