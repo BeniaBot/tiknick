@@ -74,7 +74,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.10"
+APP_VERSION = "0.8.11"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -666,6 +666,7 @@ class API:
             "page": 0, "total_pages": 0,
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": forum_name, "cancelled": False, "run_id": None, "auto": False,
+            "user_skipped": False, "aborted": False,
             # אפס מצב רב-פורומי שנותר מ'סרוק הכל'/'סנכרן נבחרים' קודמים
             "all_mode": False, "selected_mode": False,
             "forum_index": 0, "forum_total": 0, "skipped": [],
@@ -740,7 +741,7 @@ class API:
             "page": 0, "total_pages": 0,
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": None, "cancelled": False,
-            "all_mode": True, "selected_mode": False, "run_id": None, "auto": False,   # אפס מצב מ'סנכרן נבחרים' קודם
+            "all_mode": True, "selected_mode": False, "run_id": None, "auto": False, "user_skipped": False, "aborted": False,   # אפס מצב מ'סנכרן נבחרים' קודם
             "forum_index": 0, "forum_total": len(forums),
             "skipped": [], "failed_pages": 0,
         })
@@ -794,6 +795,8 @@ class API:
                     base["updated"] += stats.get("updated", 0)
                     base["failed_pages"] += stats.get("failed_pages", 0)
                     _scrape_state["failed_pages"] = base["failed_pages"]
+                    if stats.get("aborted"):
+                        _scrape_state["aborted"] = True
                     if not stats.get("cancelled") and not stats.get("skipped"):
                         import datetime as _dt
                         db.set_setting(f"last_scrape_{f['name']}",
@@ -809,14 +812,26 @@ class API:
             logging.exception("scrape_all worker crashed")
             _scrape_state["error"] = str(e)
           finally:
-            if _scrape_state.get("auto") and not _scrape_state.get("cancelled"):
-                # ריצה אוטומטית: הצלחה מאפסת את המונה; כישלון חוזר עוצר את
-                # התזמון אחרי 5, כדי לא לנדנד לפורום שנפל או שחסם אותנו.
-                err = _scrape_state.get("error") or ""
-                skipped = _scrape_state.get("skipped") or []
-                if not err and skipped:
-                    err = "; ".join(f"{x.get('forum')}: {x.get('error')}" for x in skipped[:3])
-                db.sched_note_result(not err, err)
+            if _scrape_state.get("auto"):
+                if _scrape_state.get("cancelled") or _scrape_state.get("user_skipped"):
+                    # המשתמש עצר או דילג. אלה לא כותבים last_scrape, ולכן הפורום
+                    # נשאר "מגיע לו" והטיק הבא היה מפעיל אותו שוב בעוד דקה —
+                    # לולאה שנוצרת דווקא מכפתורי השליטה. נודניק, ולא ספירת כישלון.
+                    db.sched_snooze(6)
+                else:
+                    # הצלחה מאפסת את המונה; כישלון חוזר עוצר את התזמון אחרי 5,
+                    # כדי לא לנדנד לפורום שנפל או שחסם אותנו.
+                    err = _scrape_state.get("error") or ""
+                    skipped = _scrape_state.get("skipped") or []
+                    if not err and skipped:
+                        err = "; ".join(f"{x.get('forum')}: {x.get('error')}" for x in skipped[:3])
+                    if not err and _scrape_state.get("aborted"):
+                        # נעצר אחרי 5 עמודים כושלים ברצף — זו לא סריקה שהצליחה,
+                        # ולספור אותה כהצלחה היה מאפס את מונה הכישלונות לנצח.
+                        err = "הסריקה נעצרה אחרי כשלים חוזרים בעמודים"
+                    db.sched_note_result(not err, err)
+            # חייב להתאפס: אחרת ביטול *ידני* מאוחר יותר היה מנמנם את התזמון
+            _scrape_state["auto"] = False
             _scrape_state["running"] = False
             _scrape_state["done"] = True
 
@@ -833,6 +848,7 @@ class API:
         return {"ok": True}
 
     def skip_current_forum(self):
+        _scrape_state["user_skipped"] = True
         """דילוג לפורום הבא (במצב 'סרוק הכל')."""
         _scrape_skip.set()
         return {"ok": True}
@@ -854,7 +870,7 @@ class API:
             "page": 0, "total_pages": len(ids),
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": None, "cancelled": False,
-            "all_mode": False, "selected_mode": True, "run_id": None, "auto": False,
+            "all_mode": False, "selected_mode": True, "run_id": None, "auto": False, "user_skipped": False, "aborted": False,
             "forum_index": 0, "forum_total": 0, "skipped": [], "failed_pages": 0,
         })
 
@@ -913,24 +929,39 @@ class API:
         threading.Thread(target=_run, daemon=True).start()
         return {"ok": True, "count": len(ids)}
 
-    def reset_all(self):
+    def reset_all(self, force=False):
         busy = self._busy()
         if busy:
             return {"ok": False, "error": busy}
+        # auto_backup לעולם לא מרימה חריגה (דיסק מלא לא אמור לחסום עבודה),
+        # ולכן התעלמות מהתוצאה הפכה את הגיבוי-לפני-איפוס למראית עין: דווקא
+        # כשהוא נכשל, האיפוס הבלתי הפיך היה מתבצע בלי רשת ביטחון.
+        if not force:
+            r = db.auto_backup("reset")
+            if not r.get("ok"):
+                return {"ok": False, "needs_confirm": True,
+                        "error": "הגיבוי לפני האיפוס נכשל: " + str(r.get("error", ""))}
         _sched_hold.set()
         try:
-            db.auto_backup("reset")     # אין דרך חזרה מאיפוס — עותק לפני
             db.reset_all()
         finally:
             _sched_hold.clear()
         return {"ok": True}
 
-    def reset_columns(self, columns):
+    def reset_columns(self, columns, force=False):
         busy = self._busy()
         if busy:
             return {"ok": False, "error": busy}
-        db.auto_backup("reset-cols")
-        n = db.reset_columns(columns or [])
+        if not force:
+            r = db.auto_backup("reset-cols")
+            if not r.get("ok"):
+                return {"ok": False, "needs_confirm": True,
+                        "error": "הגיבוי לפני האיפוס נכשל: " + str(r.get("error", ""))}
+        _sched_hold.set()      # איפוס עמודות נוגע בכל 90 אלף השורות
+        try:
+            n = db.reset_columns(columns or [])
+        finally:
+            _sched_hold.clear()
         return {"ok": True, "count": n}
 
     def reset_settings_only(self):
@@ -1671,7 +1702,9 @@ del "%~f0"
         if os.path.splitext(path)[1].lower() in (".csv", ".tsv", ".txt"):
             return self._load_csv_file(path)
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            # utf-8-sig: קובץ שנשמר מעורך שמוסיף BOM נכשל אחרת עם שגיאת
+            # מפענח באנגלית שלא אומרת למשתמש כלום. ל-UTF-8 רגיל זה זהה.
+            with open(path, "r", encoding="utf-8-sig") as f:
                 data = json.load(f)
             unknown = db.get_unknown_forums_in_data(data)
             # שמור data זמנית בזיכרון לשלב 2
@@ -1858,26 +1891,29 @@ del "%~f0"
         if (_scrape_state["running"] or _import_state["running"] or _source_state["running"]
                 or _chz_state["running"] or _stink_state["running"]):
             return {"ok": False, "error": "יש פעולה שרצה ברקע — המתן לסיומה לפני שחזור"}
+        # ה-hold עוטף גם את דיאלוג הקובץ: אם המשתמש מבטל אותו, hold שנשאר דלוק
+        # משתיק את התזמון עד סוף הריצה בלי שום סימן.
         _sched_hold.set()
         try:
-            from webview import FileDialog
-            open_dialog = FileDialog.OPEN
-        except ImportError:
-            open_dialog = webview.OPEN_DIALOG
-        result = webview.windows[0].create_file_dialog(
-            open_dialog, file_types=("Tik-Nick backup (*.db)", "All files (*.*)"))
-        if not result:
-            return {"ok": False, "error": "בוטל"}
-        path = result[0] if isinstance(result, (list, tuple)) else result
-        if not path:
-            return {"ok": False, "error": "בוטל"}
-        try:
-            info = db.restore_from(path)
-            logging.info("DB restored from %s (safety copy: %s)", path, info["safety_backup"])
-            return {"ok": True, **info}
-        except Exception as e:
-            logging.exception("restore_db failed")
-            return {"ok": False, "error": str(e)}
+            try:
+                from webview import FileDialog
+                open_dialog = FileDialog.OPEN
+            except ImportError:
+                open_dialog = webview.OPEN_DIALOG
+            result = webview.windows[0].create_file_dialog(
+                open_dialog, file_types=("Tik-Nick backup (*.db)", "All files (*.*)"))
+            if not result:
+                return {"ok": False, "error": "בוטל"}
+            path = result[0] if isinstance(result, (list, tuple)) else result
+            if not path:
+                return {"ok": False, "error": "בוטל"}
+            try:
+                info = db.restore_from(path)
+                logging.info("DB restored from %s (safety copy: %s)", path, info["safety_backup"])
+                return {"ok": True, **info}
+            except Exception as e:
+                logging.exception("restore_db failed")
+                return {"ok": False, "error": str(e)}
         finally:
             _sched_hold.clear()
 

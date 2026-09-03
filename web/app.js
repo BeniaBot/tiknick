@@ -3252,7 +3252,10 @@ async function dismissSuggestion(i) {
 // מכתובת ביתית היא עומס אמיתי עליהם.
 async function openScheduler() {
   const cfg = await api('get_schedule') || {};
-  const forums = (await api('get_scrapable_forums') || []).filter(f => (f.url || '').trim());
+  // רק פלטפורמות שהסורק באמת יודע לסרוק. XenForo/phpBB נכשלים מיד, וכל טיק
+  // היה סופר עוד כישלון עד שהתזמון כולו נכבה בגלל פורום אחד שלא ניתן לסרוק.
+  const forums = (await api('get_scrapable_forums') || [])
+    .filter(f => (f.url || '').trim() && SCRAPABLE_PLATFORMS.has(f.platform || 'nodebb'));
   const on = !!cfg.enabled;
   const picked = new Set(cfg.forums || []);
   openModal('⏰ סריקה מתוזמנת', `
@@ -4605,7 +4608,14 @@ function removeAvatar() {
   const prev = document.getElementById('avatar-preview');
   const color = document.getElementById('f-nick_color')?.value || 'var(--accent)';
   const uname = document.getElementById('f-username')?.value || '?';
-  prev.innerHTML = `<span class="avatar-initial" style="background:${color}">${esc(uname.charAt(0).toUpperCase())}</span>`;
+  // בלי innerHTML בכלל: הצבע נקבע כמאפיין סגנון, כמו ב-pickNickColor.
+  // כאן זה המסמך הראשי (לא iframe מסונן), ולכן הזרקה כאן חמורה יותר.
+  prev.textContent = '';
+  const initial = document.createElement('span');
+  initial.className = 'avatar-initial';
+  initial.style.background = safeColor(color);
+  initial.textContent = uname.charAt(0).toUpperCase();
+  prev.appendChild(initial);
   document.getElementById('avatar-remove').style.display = 'none';
 }
 
@@ -5468,7 +5478,10 @@ function buildCardElement(n) {
     const st = n.status || 'פעיל';
     const stCls = {'פעיל':'status-active','מורחק':'status-banned','מושעה':'status-suspended'}[st] || '';
     const initial = (n.username || '?').trim().charAt(0).toUpperCase();
-    const nickCol = n.nick_color || color;
+    // safeColor ולא רק esc: esc משאיר ; : ( ) על כנם, כך שערך מהפורום כמו
+    // 'red;background-image:url(https://forum/track.png)' נשאר תקף בתוך אותו
+    // style והופך לבקשה חיצונית בכל ציור של הכרטיס.
+    const nickCol = safeColor(n.nick_color, color);
     const avatarHtml = n.has_avatar
       ? `<div class="card-avatar" style="padding:0;overflow:hidden;background:${esc(nickCol)}">
            <img data-avatar-id="${n.id}" alt="" style="width:100%;height:100%;object-fit:cover"></div>`

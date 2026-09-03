@@ -21,6 +21,26 @@ _BOMS = [(b"\xef\xbb\xbf", "utf-8-sig"),
          (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")]
 
 
+def _text_score(txt):
+    """
+    איזה חלק מהתווים נראה כמו טקסט אמיתי — עברית, ASCII קריא, או רווח.
+    משמש להכרעה בין שני כיווני UTF-16 בלי BOM: הכיוון השגוי מייצר תווים
+    מטווחים אקזוטיים ומקבל ציון נמוך.
+    """
+    if not txt:
+        return 0.0
+    good = 0
+    for ch in txt:
+        o = ord(ch)
+        if 0x0590 <= o <= 0x05FF:          # עברית
+            good += 1
+        elif 0x20 <= o <= 0x7E or o in (9, 10, 13):
+            good += 1
+        elif 0x00C0 <= o <= 0x024F:        # לטינית מורחבת — סביר בשמות
+            good += 1
+    return good / len(txt)
+
+
 def read_text(path):
     """
     מפענח קידוד: BOM ← UTF-16 בלי BOM ← UTF-8 קפדני ← cp1255.
@@ -34,10 +54,22 @@ def read_text(path):
     for bom, enc in _BOMS:
         if raw.startswith(bom):
             return raw.decode(enc, errors="replace"), enc
-    head = raw[:4096]
-    if head.count(b"\x00") > len(head) // 4:          # Excel "Unicode Text" בלי BOM
-        enc = "utf-16-le" if head[1:2] == b"\x00" else "utf-16-be"
-        return raw.decode(enc, errors="replace"), enc
+    # Excel "Unicode Text" בלי BOM. אי אפשר לספור בתי אפס: אות עברית ב-UTF-16
+    # היא שני בתים שאף אחד מהם אינו אפס, כך שקובץ עברי כמעט לא מכיל אפסים
+    # בכלל. במקום ניחוש — מפענחים לשני הכיוונים ובוחרים את זה שנותן טקסט שנראה
+    # כמו טקסט.
+    if len(raw) >= 4 and len(raw) % 2 == 0:
+        best_enc, best_score = None, 0.0
+        for enc in ("utf-16-le", "utf-16-be"):
+            try:
+                txt = raw[:4096].decode(enc, errors="strict")
+            except (UnicodeDecodeError, ValueError):
+                continue
+            score = _text_score(txt)
+            if score > best_score:
+                best_enc, best_score = enc, score
+        if best_enc and best_score >= 0.95:
+            return raw.decode(best_enc, errors="replace"), best_enc
     try:
         return raw.decode("utf-8"), "utf-8"           # קפדני בכוונה
     except UnicodeDecodeError:
@@ -185,8 +217,15 @@ def normalize_rows(headers, rows, mapping, default_forum="כללי", fix_phone=T
     (פורום, שם משתמש) שחוזר בקובץ מאוחד לרשומה אחת — הערך האחרון מנצח —
     אחרת היו נוצרים שני ניקים שסריקה עתידית תתאים רק לאחד מהם.
     """
-    idx = {int(i): f for i, f in (mapping or {}).items()
-           if str(f) and str(f) not in _BLOCKED}
+    idx = {}
+    for i, f in sorted((mapping or {}).items(), key=lambda kv: int(kv[0])):
+        f = str(f or "")
+        if not f or f in _BLOCKED:
+            continue
+        if f in idx.values():
+            # שתי עמודות לאותו שדה: אחת מהן נבלעה, ואיזו — השתנה משורה לשורה
+            raise ValueError(f"שתי עמודות מופו לאותו שדה ({f}) — בחר אחת מהן")
+        idx[int(i)] = f
     if "username" not in idx.values():
         raise ValueError("חובה למפות עמודה ל'שם משתמש'")
     fields = sorted(set(idx.values()) | {"forum", "username"})
@@ -206,8 +245,11 @@ def normalize_rows(headers, rows, mapping, default_forum="כללי", fix_phone=T
         rec["forum"], rec["username"] = forum, username
         if fix_phone and rec.get("phone"):
             p = rec["phone"].strip()
-            # אקסל בולע אפס מוביל: 501234567 → 0501234567
-            if p.isdigit() and len(p) == 9 and p[0] in "5723489":
+            # אקסל בולע אפס מוביל: 501234567 → 0501234567.
+            # רק קידומות ישראליות אמיתיות: "5" נייד, ו-2/3/4/8/9 קווי. "7" לבדו
+            # תפס גם מספרים בני 9 ספרות שאינם טלפון כלל והוסיף להם אפס.
+            if p.isdigit() and len(p) == 9 and (
+                    p.startswith("5") or p[0] in "23489"):
                 rec["phone"] = "0" + p
         key = (forum, username)
         if key in seen:

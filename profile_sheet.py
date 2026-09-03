@@ -202,7 +202,10 @@ def build_sheet(data, include_private=False, include_history=True, generated="")
                  if include_private else "")
 
     values = {
-        "TITLE": f"פרופיל · {heading}",
+        # heading הוא שם משתמש מהפורום. בלי בריחה כאן אפשר לסגור את <title>
+        # ולהחדיר <img src=https://…> לגיליון — בדיוק ההפניה החיצונית שהמודול
+        # הזה מבטיח שאין בו.
+        "TITLE": f"פרופיל · {_esc(heading)}",
         "AVATAR": avatar_html,
         "HEADING": _esc(heading),
         "SUBTITLE": _esc(subtitle),

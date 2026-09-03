@@ -376,7 +376,9 @@ def init_db():
             );
             -- הסדר לפי מונה עולה ולא לפי חותמת זמן: גם ברזולוציית מילישנייה
             -- שתי צפיות רצופות מקבלות את אותו ערך, והגיזום היה שרירותי.
-            CREATE INDEX IF NOT EXISTS idx_recent_seq ON recent_views(seq DESC);
+            -- האינדקס על seq נוצר ב-_migrate ולא כאן: במאגר מ-0.8.8 הטבלה כבר
+            -- קיימת בלי seq, ה-CREATE TABLE הוא no-op, והאינדקס היה מפיל את
+            -- כל init_db — כלומר התוכנה לא נפתחת בכלל אחרי עדכון.
 
             -- יומן סריקות + מה השתנה בכל אחת
             CREATE TABLE IF NOT EXISTS scan_runs (
@@ -643,6 +645,8 @@ def _migrate():
         rvcols = {row[1] for row in conn.execute("PRAGMA table_info(recent_views)")}
         if rvcols and "seq" not in rvcols:
             conn.execute("ALTER TABLE recent_views ADD COLUMN seq INTEGER NOT NULL DEFAULT 0")
+        if rvcols:
+            # אחרי שהעמודה קיימת בוודאות — גם למאגר חדש וגם למאגר מ-0.8.8
             conn.execute("CREATE INDEX IF NOT EXISTS idx_recent_seq ON recent_views(seq DESC)")
         fcols = {row[1] for row in conn.execute("PRAGMA table_info(forums)")}
         if "profile_pattern" not in fcols:
@@ -771,6 +775,33 @@ def add_forum(name, color="#8b90a0", url="", platform=None):
             "VALUES (?,?,?,?,?)",
             (resolved["name"], resolved["color"], resolved["url"], plat, pattern))
 
+_NAME_KEYED_SETTINGS = ("forumio_", "last_scrape_")
+
+def _rename_forum_settings(conn, old_name, new_name):
+    """
+    הגדרות שנשמרות לפי *שם* הפורום חייבות לנוע איתו בשינוי שם. אחרת פורום
+    שהוחרג מייצוא חוזר לייצא בשקט (עם אנשי הקשר שלו, מגרסה 3), וחותמת הסריקה
+    האחרונה נעלמת — כלומר רצפת 12 השעות של התזמון נעקפת.
+    """
+    for prefix in _NAME_KEYED_SETTINGS:
+        row = conn.execute("SELECT value FROM settings WHERE key=?",
+                           (prefix + old_name,)).fetchone()
+        if row is not None:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
+                         (prefix + new_name, row[0]))
+            conn.execute("DELETE FROM settings WHERE key=?", (prefix + old_name,))
+    row = conn.execute("SELECT value FROM settings WHERE key='sched_forums'").fetchone()
+    if row:
+        try:
+            lst = json.loads(row[0])
+        except ValueError:
+            lst = None
+        if isinstance(lst, list) and old_name in lst:
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES ('sched_forums', ?)",
+                (json.dumps([new_name if x == old_name else x for x in lst],
+                            ensure_ascii=False),))
+
 def update_forum(forum_id, name, color, url="", platform=None):
     with get_connection() as conn:
         old_row = conn.execute("SELECT name FROM forums WHERE id=?", (forum_id,)).fetchone()
@@ -783,6 +814,7 @@ def update_forum(forum_id, name, color, url="", platform=None):
                          (name, color, url, forum_id))
         if old_name and old_name != name:
             conn.execute("UPDATE nicks SET forum=? WHERE forum=?", (name, old_name))
+            _rename_forum_settings(conn, old_name, name)
 
 def get_forum_platform(name):
     """מחזיר את פלטפורמת הפורום (nodebb/discourse/...) לפי שם, ברירת מחדל nodebb."""
@@ -1894,6 +1926,12 @@ def sched_due_forums(now=None):
         name = f["name"]
         if name not in cfg["forums"]:
             continue
+        # פורום שהסורק מסרב לו (XenForo/phpBB/custom) נכשל מיד, וכל טיק היה
+        # סופר עוד כישלון — חמש דקות וכל התזמון נכבה בגלל פורום אחד.
+        if (f.get("platform") or "nodebb") not in ("nodebb", "discourse"):
+            continue
+        if not (f.get("url") or "").strip():
+            continue
         last = last_all.get(name) or ""
         hours_since = None
         if last:
@@ -3000,6 +3038,9 @@ def list_backups():
             if not name.startswith("tiknick-") or not name.endswith(".db"):
                 continue
             full = os.path.join(d, name)
+            # גיבוי שהושלם לא משאיר -journal/-wal לצידו
+            if os.path.exists(full + "-journal") or os.path.exists(full + "-wal"):
+                continue
             try:
                 st = os.stat(full)
             except OSError:
@@ -3015,6 +3056,17 @@ def list_backups():
     return out
 
 def _prune_backups(keep=AUTO_BACKUP_KEEP):
+    # שאריות מריצה שנקטעה
+    try:
+        d = backup_dir()
+        for name in os.listdir(d):
+            if name.endswith(".part"):
+                try:
+                    os.remove(os.path.join(d, name))
+                except OSError:
+                    pass
+    except Exception:
+        pass
     files = list_backups()
     total = 0
     for i, f in enumerate(files):
@@ -3045,11 +3097,22 @@ def auto_backup(reason="daily", force=False):
         safe = "".join(c for c in str(reason) if c.isalnum() or c in "-_")[:24] or "auto"
         dest = os.path.join(backup_dir(),
                             f"tiknick-{safe}-{datetime.now():%Y%m%d-%H%M%S}.db")
-        backup_to(dest)
-        size = os.path.getsize(dest)
-        if size <= 0:
-            os.remove(dest)
-            return {"ok": False, "error": "הגיבוי יצא ריק"}
+        # כותבים ל-.part ומשנים שם רק כשהקובץ שלם. הגיבוי היומי רץ ב-thread
+        # daemon, וסגירת החלון קוטלת אותו באמצע — קובץ חלקי (גודל > 0) היה
+        # נספר כגיבוי תקין ואפילו מפנה מקום לגיבוי טוב שנמחק במקומו.
+        part = dest + ".part"
+        try:
+            backup_to(part)
+            size = os.path.getsize(part)
+            if size <= 0:
+                raise ValueError("הגיבוי יצא ריק")
+            os.replace(part, dest)
+        except Exception:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            raise
         if reason == "daily":
             set_setting("last_auto_backup", datetime.now().isoformat(timespec="seconds"))
         _prune_backups()
@@ -3066,6 +3129,33 @@ def backup_status():
             "dir": backup_dir(),
             "files": files}
 
+def _backup_migrates_ok(src_path):
+    """
+    האם הקובץ הזה בכלל ייפתח אחרי המיגרציות? נבדק על *עותק* בתיקייה זמנית, כדי
+    שהתשובה תגיע לפני שדורסים את המאגר החי ולא אחרי.
+    """
+    import shutil as _sh
+    import tempfile as _tf
+    global DB_PATH
+    tmpdir = _tf.mkdtemp(prefix="tiknick_probe_")
+    probe = os.path.join(tmpdir, "probe.db")
+    saved = DB_PATH
+    try:
+        _sh.copyfile(src_path, probe)
+        close_pool()
+        DB_PATH = probe
+        init_db()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
+    finally:
+        close_pool()
+        DB_PATH = saved
+        try:
+            _sh.rmtree(tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+
 def restore_from(src_path):
     """
     שחזור מגיבוי דרך ה-backup API של SQLite — כותב לתוך המאגר החי במקום להחליף
@@ -3073,6 +3163,9 @@ def restore_from(src_path):
     עותק בטיחות של המצב הנוכחי נשמר לצדו לפני הכתיבה.
     """
     n = validate_backup(src_path)
+    ok, why = _backup_migrates_ok(src_path)
+    if not ok:
+        raise ValueError(f"הגיבוי אינו נטען בגרסה הזו ({why}) — לא בוצע שחזור.")
     safety = DB_PATH + f".before-restore-{datetime.now():%Y%m%d-%H%M%S}"
     backup_to(safety)                     # כולל את תוכן ה-WAL
     src = sqlite3.connect(f"file:{src_path}?mode=ro", uri=True)
@@ -3080,7 +3173,27 @@ def restore_from(src_path):
         src.backup(get_connection())      # אטומי תחת הנעילה של SQLite
     finally:
         src.close()
-    init_db()                             # מיגרציות/אינדקסים/FTS על התוכן החדש
+    try:
+        init_db()                         # מיגרציות/אינדקסים/FTS על התוכן החדש
+    except Exception as e:
+        # המאגר החי כבר נדרס בשלב הקודם. גיבוי שלא עובר מיגרציה היה משאיר את
+        # המשתמש בלי הנתונים הישנים *וגם* בלי החדשים, בזמן שהממשק אומר
+        # "השחזור נכשל". מחזירים את עותק הבטיחות למקומו.
+        try:
+            back = sqlite3.connect(f"file:{safety}?mode=ro", uri=True)
+            try:
+                back.backup(get_connection())
+            finally:
+                back.close()
+            init_db()
+            raise ValueError(
+                f"הגיבוי לא נטען ({e}). המאגר הקודם שוחזר — לא אבד מידע.")
+        except ValueError:
+            raise
+        except Exception as e2:
+            raise ValueError(
+                f"הגיבוי לא נטען ({e}), והחזרת המצב הקודם נכשלה ({e2}). "
+                f"עותק הבטיחות שמור כאן: {safety}")
     _prune_safety_backups()
     return {"nicks": n, "safety_backup": safety}
 

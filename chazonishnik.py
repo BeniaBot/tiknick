@@ -513,6 +513,13 @@ __CHARTJS__
 <script>
 const D = __JSON_DATA__;
 const A = D.a, B = D.b, SA = A.stats, SB = B.stats;
+// _json_for_script מגן על הבריחה מבלוק ה-script, אבל אחרי ש-JS פירס את המחרוזת
+// היא שוב מכילה < > אמיתיים — ולכן כל שם משתמש או כותרת נושא שנכנסים ל-innerHTML
+// חייבים בריחה כאן. הדוח החד-משתמשי כבר עושה זאת; ההשוואה לא עשתה.
+function esc(v) {
+  return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
 const DAYS = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"];
 const COL_A = "#f59e0b", COL_B = "#0ea5e9";
 
@@ -520,9 +527,9 @@ const COL_A = "#f59e0b", COL_B = "#0ea5e9";
 const notes = [];
 for (const side of [A, B]) {
   const m = side.meta;
-  if (m.limited) notes.push(side.user + ": נסרקו רק הפוסטים האחרונים לפי ההגבלה שהגדרת.");
-  else if (m.stopped_early) notes.push(side.user + ": הסריקה נעצרה בגלל תקלת רשת — הנתונים חלקיים.");
-  else if (m.partial) notes.push(side.user + ": נסרקו " + side.stats.posts + " מתוך " +
+  if (m.limited) notes.push(esc(side.user) + ": נסרקו רק הפוסטים האחרונים לפי ההגבלה שהגדרת.");
+  else if (m.stopped_early) notes.push(esc(side.user) + ": הסריקה נעצרה בגלל תקלת רשת — הנתונים חלקיים.");
+  else if (m.partial) notes.push(esc(side.user) + ": נסרקו " + side.stats.posts + " מתוך " +
     m.postcount + " פוסטים; השאר כנראה בקטגוריות שדורשות התחברות.");
 }
 if (notes.length) document.getElementById("warn").innerHTML =
@@ -539,10 +546,10 @@ const rows = [
   ["פוסט אחרון שנסרק", SA.last, SB.last],
 ];
 document.getElementById("tbl").innerHTML =
-  "<tr><th></th><th>" + A.user + "</th><th>" + B.user + "</th></tr>" +
+  "<tr><th></th><th>" + esc(A.user) + "</th><th>" + esc(B.user) + "</th></tr>" +
   rows.map(function (r) {
-    return "<tr><td>" + r[0] + "</td><td class=\"va\">" + r[1] +
-           "</td><td class=\"vb\">" + r[2] + "</td></tr>";
+    return "<tr><td>" + esc(r[0]) + "</td><td class=\"va\">" + esc(r[1]) +
+           "</td><td class=\"vb\">" + esc(r[2]) + "</td></tr>";
   }).join("");
 
 const opts = function () {
@@ -571,28 +578,41 @@ new Chart(document.getElementById("c-months"), { type: "line", data: {
              { label: B.user, data: months.map(function (m) { return SB.months[m] || 0; }),
                borderColor: COL_B, backgroundColor: COL_B, tension: .3 }] }, options: opts() });
 
-// סיכום במילים — מה באמת שונה, לא רק גרפים יפים
+// סיכום במילים — מה באמת שונה, לא רק גרפים יפים.
+// "כמה כתב" חייב להיחשב מסך הפוסטים בפורום ולא ממה שנסרק: ההגבלה חותכת את שני
+// המשתמשים לאותו מספר, וכך המשפט היה יוצא "בערך אותה כמות" בדיוק כשההפרש גדול,
+// או אפילו מצביע על ההפוך. אם אין postcount אמין — אומרים במפורש על מה מדובר.
 const out = [];
-const more = SA.posts >= SB.posts ? A : B, less = SA.posts >= SB.posts ? B : A;
-const hi = Math.max(SA.posts, SB.posts), lo = Math.max(1, Math.min(SA.posts, SB.posts));
+const capped = A.meta.limited || B.meta.limited;
+const totA = A.meta.postcount || 0, totB = B.meta.postcount || 0;
+const useTotals = totA > 0 && totB > 0;
+const mA = useTotals ? totA : SA.posts, mB = useTotals ? totB : SB.posts;
+const more = mA >= mB ? A : B, less = mA >= mB ? B : A;
+const hi = Math.max(mA, mB), lo = Math.max(1, Math.min(mA, mB));
 const rat = (hi / lo).toFixed(1);
-out.push("• <b>" + more.user + "</b> כתב " +
-  (rat > 1.15 ? "פי " + rat + " יותר" : "בערך אותה כמות") + " פוסטים מ־<b>" + less.user + "</b>.");
+const basis = useTotals ? " (לפי סך הפוסטים בפורום)"
+                        : (capped ? " (מתוך מה שנסרק בלבד)" : "");
+out.push("• <b>" + esc(more.user) + "</b> כתב " +
+  (rat > 1.15 ? "פי " + rat + " יותר" : "בערך אותה כמות") +
+  " פוסטים מ־<b>" + esc(less.user) + "</b>" + basis + ".");
+if (capped) out.push("• שאר ההשוואה מבוססת על " + Math.min(SA.posts, SB.posts) +
+  "–" + Math.max(SA.posts, SB.posts) + " הפוסטים האחרונים של כל אחד, לפי ההגבלה שהגדרת.");
 if (Math.abs(SA.avg_likes - SB.avg_likes) > 0.2)
-  out.push("• פוסט של <b>" + (SA.avg_likes > SB.avg_likes ? A.user : B.user) +
+  out.push("• פוסט של <b>" + esc(SA.avg_likes > SB.avg_likes ? A.user : B.user) +
     "</b> מקבל בממוצע יותר לייקים (" + Math.max(SA.avg_likes, SB.avg_likes) + " מול " +
     Math.min(SA.avg_likes, SB.avg_likes) + ").");
 if (Math.abs(SA.avg_words - SB.avg_words) > 10)
-  out.push("• <b>" + (SA.avg_words > SB.avg_words ? A.user : B.user) + "</b> כותב ארוך יותר (" +
+  out.push("• <b>" + esc(SA.avg_words > SB.avg_words ? A.user : B.user) + "</b> כותב ארוך יותר (" +
     Math.max(SA.avg_words, SB.avg_words) + " מילים לפוסט מול " +
     Math.min(SA.avg_words, SB.avg_words) + ").");
 out.push(SA.top_hour !== SB.top_hour
-  ? "• שעות השיא שונות: " + A.user + " ב־" + SA.top_hour + ":00, " + B.user + " ב־" + SB.top_hour + ":00."
+  ? "• שעות השיא שונות: " + esc(A.user) + " ב־" + SA.top_hour + ":00, " + esc(B.user) + " ב־" + SB.top_hour + ":00."
   : "• שניהם פעילים בעיקר סביב " + SA.top_hour + ":00.");
-if (SA.top_day === SB.top_day) out.push("• שניהם פעילים במיוחד ביום " + SA.top_day + ".");
+if (SA.top_day === SB.top_day) out.push("• שניהם פעילים במיוחד ביום " + esc(SA.top_day) + ".");
 const shared = SA.top_topics.map(function (t) { return t[0]; }).filter(function (t) {
   return SB.top_topics.some(function (x) { return x[0] === t; });
 });
-if (shared.length) out.push("• נושאים משותפים בין הבולטים: " + shared.slice(0, 3).join(" · ") + ".");
+if (shared.length) out.push("• נושאים משותפים בין הבולטים: " +
+  shared.slice(0, 3).map(esc).join(" · ") + ".");
 document.getElementById("sum").innerHTML = out.join("<br>");
 </script></body></html>"""
