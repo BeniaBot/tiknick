@@ -68,7 +68,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.8"
+APP_VERSION = "0.8.9"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -1790,6 +1790,34 @@ del "%~f0"
 
     def get_source_progress(self):
         return dict(_source_state)
+
+    def pick_field_value(self, nick_id, field_name, value):
+        try:
+            return db.pick_field_value(int(nick_id), field_name, value)
+        except Exception as e:
+            logging.exception("pick_field_value failed")
+            return {"ok": False, "error": str(e)}
+
+    def get_shelved_for_nick(self, nick_id):
+        try:
+            return db.get_shelved_values(int(nick_id))
+        except Exception:
+            logging.exception("get_shelved_for_nick failed")
+            return []
+
+    def promote_shelved_value(self, shelved_id):
+        try:
+            return {"ok": bool(db.promote_shelved(int(shelved_id)))}
+        except Exception as e:
+            logging.exception("promote_shelved_value failed")
+            return {"ok": False, "error": str(e)}
+
+    def get_import_log(self, limit=50):
+        try:
+            return db.get_import_sources()[:int(limit)]
+        except Exception:
+            logging.exception("get_import_log failed")
+            return []
 
     def get_field_sources(self, nick_id, field_name):
         return db.get_field_sources(int(nick_id), field_name)

@@ -302,6 +302,23 @@ body::before{
 #table-wrap{flex:1;overflow:auto;padding:4px 18px 18px;direction:rtl}
 body[data-view="cards"] #table-wrap{display:none}
 table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;direction:rtl}
+/* colgroup הוא מקור האמת לרוחב תחת table-layout:fixed. בלעדיו השורה הראשונה
+   ב-tbody קובעת את הרוחב — והשורה הראשונה שם היא לרוב spacer של הגלילה. */
+#nick-table{table-layout:fixed}
+#nick-table th,#nick-table td{overflow:hidden;text-overflow:ellipsis}
+thead th{position:relative}
+/* RTL: עמודה מתחילה בקצה הימני ומסתיימת בשמאלי — הידית יושבת על הקצה שהיא "מחזיקה" */
+.col-resize{position:absolute;left:0;top:0;bottom:0;width:7px;cursor:col-resize;
+  touch-action:none;z-index:3}
+.col-resize:hover::after,body.col-resizing .col-resize::after{
+  content:"";position:absolute;left:2px;top:6px;bottom:6px;width:2px;background:var(--accent)}
+thead th.col-dragging{opacity:.5}
+#col-drop-line{position:fixed;width:2px;background:var(--accent);z-index:9999;
+  pointer-events:none;border-radius:2px}
+body.col-dragging,body.col-resizing{user-select:none;cursor:col-resize}
+body.col-dragging{cursor:grabbing}
+thead th .th-label{display:inline-block;max-width:100%;overflow:hidden;
+  text-overflow:ellipsis;vertical-align:bottom;touch-action:none}
 thead{position:sticky;top:0;z-index:10}
 thead th{
   background:var(--th-bg);backdrop-filter:blur(12px);padding:14px 16px;

@@ -370,10 +370,13 @@ def init_db():
             -- ניק שנמחק, ואין מרוץ בין שני כותבים על אותה מחרוזת.
             CREATE TABLE IF NOT EXISTS recent_views (
                 nick_id INTEGER PRIMARY KEY,
+                seq INTEGER NOT NULL DEFAULT 0,
                 viewed_at TEXT DEFAULT (strftime('%Y-%m-%d %H:%M:%f','now')),
                 FOREIGN KEY (nick_id) REFERENCES nicks(id) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_recent_at ON recent_views(viewed_at DESC);
+            -- הסדר לפי מונה עולה ולא לפי חותמת זמן: גם ברזולוציית מילישנייה
+            -- שתי צפיות רצופות מקבלות את אותו ערך, והגיזום היה שרירותי.
+            CREATE INDEX IF NOT EXISTS idx_recent_seq ON recent_views(seq DESC);
 
             -- יומן סריקות + מה השתנה בכל אחת
             CREATE TABLE IF NOT EXISTS scan_runs (
@@ -637,6 +640,10 @@ def _migrate():
         if "is_private" not in ctcols:
             conn.execute("ALTER TABLE nick_contacts ADD COLUMN is_private INTEGER DEFAULT 0")
         # migration לפורומים
+        rvcols = {row[1] for row in conn.execute("PRAGMA table_info(recent_views)")}
+        if rvcols and "seq" not in rvcols:
+            conn.execute("ALTER TABLE recent_views ADD COLUMN seq INTEGER NOT NULL DEFAULT 0")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_recent_seq ON recent_views(seq DESC)")
         fcols = {row[1] for row in conn.execute("PRAGMA table_info(forums)")}
         if "profile_pattern" not in fcols:
             conn.execute("ALTER TABLE forums ADD COLUMN profile_pattern TEXT DEFAULT ''")
@@ -972,7 +979,7 @@ FILTERABLE_FIELDS = [
     ("full_name","שם מלא"),("phone","טלפון"),("email","מייל"),("address","כתובת"),
     ("groups","קבוצות"),("status","סטטוס"),("notes","הערות"),("private_notes","הערות אישיות"),
     ("extra_info","פרטים נוספים"),("reputation","מוניטין"),("join_date","תאריך הצטרפות"),
-    ("last_seen","נראה לאחרונה"),
+    ("last_seen","נראה לאחרונה"),("post_count","מספר הודעות"),("trust_level","רמת אמינות"),
 ]
 _FILTERABLE_KEYS = {k for k, _ in FILTERABLE_FIELDS}
 
@@ -1775,13 +1782,15 @@ def touch_recent(nick_id):
             if not conn.execute("SELECT 1 FROM nicks WHERE id=?", (int(nick_id),)).fetchone():
                 return False
             conn.execute(
-                "INSERT INTO recent_views (nick_id, viewed_at) "
-                "VALUES (?, strftime('%Y-%m-%d %H:%M:%f','now')) "
+                "INSERT INTO recent_views (nick_id, seq, viewed_at) VALUES "
+                "(?, (SELECT IFNULL(MAX(seq),0)+1 FROM recent_views), "
+                " strftime('%Y-%m-%d %H:%M:%f','now')) "
                 "ON CONFLICT(nick_id) DO UPDATE SET "
+                "seq=(SELECT IFNULL(MAX(seq),0)+1 FROM recent_views), "
                 "viewed_at=strftime('%Y-%m-%d %H:%M:%f','now')", (int(nick_id),))
             conn.execute(
                 "DELETE FROM recent_views WHERE nick_id NOT IN "
-                "(SELECT nick_id FROM recent_views ORDER BY viewed_at DESC LIMIT ?)",
+                "(SELECT nick_id FROM recent_views ORDER BY seq DESC LIMIT ?)",
                 (RECENT_VIEWS_KEEP,))
         return True
     except (ValueError, TypeError, sqlite3.Error):
@@ -1794,7 +1803,7 @@ def get_recent_views(limit=12):
             SELECT n.id, n.username, n.forum, n.status, n.real_name, n.nick_color,
                    r.viewed_at
             FROM recent_views r JOIN nicks n ON n.id = r.nick_id
-            ORDER BY r.viewed_at DESC LIMIT ?""", (int(limit),)).fetchall()
+            ORDER BY r.seq DESC LIMIT ?""", (int(limit),)).fetchall()
         return [dict(r) for r in rows]
 
 def clear_recent_views():
@@ -1931,6 +1940,7 @@ DEFAULT_DISPLAY = {
     "view":         "table",    # table | cards
     "density":      "normal",   # compact | normal | cozy
     "hidden_cols":  "",         # comma-separated column keys
+    "col_layout":   "",         # JSON: {"order":[keys],"w":{key:px}} — רוחב וסדר עמודות
 }
 
 def get_display_settings():
@@ -2664,9 +2674,10 @@ def promote_shelved(shelved_id):
             return False
         cur = conn.execute(f"SELECT {field} AS v FROM nicks WHERE id=?", (s["nick_id"],)).fetchone()
         old_active = cur["v"] if cur else ""
-        # כתוב את הערך מהמדף לפעיל
-        conn.execute(f"UPDATE nicks SET {field}=?, updated_at=datetime('now') WHERE id=?",
-                     (s["value"], s["nick_id"]))
+        # דרך מנוע המקורות ולא ישירות ל-cache: כתיבה ל-nicks בלי רישום תחת מקור
+        # מתאדה בהכרעה הבאה (אותה משפחת באגים שתוקנה ב-0.8.6).
+        _upsert_field_value(conn, s["nick_id"], field, s["value"], 1)
+        _resolve_fields_conn(conn, s["nick_id"], [field])
         # הסר את הרשומה מהמדף
         conn.execute("DELETE FROM shelved_values WHERE id=?", (shelved_id,))
         # הורד את הערך הפעיל הקודם למדף (אם היה)
@@ -2676,6 +2687,32 @@ def promote_shelved(shelved_id):
                 VALUES (?,?,?,?,?)""",
                 (s["nick_id"], field, str(old_active), "הערך הקודם שלי", get_my_trust()))
         return True
+
+def pick_field_value(nick_id, field_name, value):
+    """
+    "השתמש בערך הזה": רושם את הערך שנבחר תחת מקור "אני" ומכריע מחדש, כך שהוא
+    יוצג — בלי לגעת בערכים של המקורות האחרים, שנשארים ב-field_values ויוצגו
+    בפאנל. הפיך: מחיקת הערך בטופס מחזירה את המנצח הקודם.
+    שדות שהמנוע מכריע בהם לפי כלל משלו (סטטוס מסריקה הוא אבסולוטי) יסרבו,
+    ומחזירים הסבר במקום להיכשל בשקט.
+    """
+    field = str(field_name)
+    if field in _NON_SOURCED or field not in _NICK_FIELDS:
+        return {"ok": False, "error": "לא ניתן לבחור ערך לשדה הזה"}
+    with get_connection() as conn:
+        if not conn.execute("SELECT 1 FROM nicks WHERE id=?", (int(nick_id),)).fetchone():
+            return {"ok": False, "error": "הניק לא נמצא"}
+        _upsert_field_value(conn, int(nick_id), field, str(value), 1)
+        _resolve_fields_conn(conn, int(nick_id), [field])
+        row = conn.execute(f"SELECT {field} AS v FROM nicks WHERE id=?",
+                           (int(nick_id),)).fetchone()
+    shown = (row["v"] if row else "") or ""
+    if str(shown).strip() != str(value).strip():
+        # למשל סטטוס: מקור סריקה אבסולוטי וגובר גם על "אני" — במכוון.
+        return {"ok": False, "shown": shown,
+                "error": f"הערך המוצג נשאר \"{shown}\" — לשדה הזה יש מקור בעל "
+                         f"עדיפות מוחלטת (סטטוס נקבע לפי הסריקה)."}
+    return {"ok": True, "shown": shown}
 
 def force_field_value(nick_id, field_name, value):
     """כותב ערך ישירות ל-cache (nicks) — לבחירה מפורשת שגוברת על הכרעת אמינות."""

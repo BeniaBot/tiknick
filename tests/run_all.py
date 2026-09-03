@@ -17,6 +17,21 @@ for path in sorted(glob.glob(os.path.join(here, "test_*.py"))):
     print(("PASS " if ok else "FAIL ") + name)
     if not ok:
         failed.append(name); print(r.stdout[-3000:]); print(r.stderr[-2000:])
+# חבילות JS (node). אין תשתית בדיקות ל-JS, ולכן הן שולפות פונקציות טהורות
+# מ-app.js ומריצות אותן בארגז חול — בעיקר לגיאומטריית RTL, שקריאה מפספסת.
+for path in sorted(glob.glob(os.path.join(here, "test_*.js"))):
+    name = os.path.basename(path)
+    try:
+        r = subprocess.run(["node", path], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        print("SKIP " + name + " (node לא מותקן)")
+        continue
+    ok = r.returncode == 0
+    print(("PASS " if ok else "FAIL ") + name)
+    if not ok:
+        failed.append(name); print(r.stdout[-3000:]); print(r.stderr[-2000:])
+
 print()
 print("ALL SUITES PASSED" if not failed else "FAILED: " + ", ".join(failed))
 sys.exit(1 if failed else 0)

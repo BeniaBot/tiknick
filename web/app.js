@@ -40,12 +40,214 @@ const COLS = [
   { key: 'address',       label: 'כתובת',           width: 150 },
   { key: 'status',        label: 'סטטוס',           width: 85,  render: renderStatus },
   { key: 'last_seen',     label: 'נראה לאחרונה',    width: 110 },
+  { key: 'join_date',     label: 'תאריך הצטרפות',   width: 110 },
+  { key: 'post_count',    label: 'הודעות',          width: 70,  render: renderNum },
+  { key: 'trust_level',   label: 'אמינות',          width: 65,  render: renderNum },
   { key: 'updated_at',    label: 'עודכן',           width: 130, render: renderUpdated },
   { key: 'extra_info',    label: 'פרטים נוספים',    width: 170 },
   { key: 'notes',         label: 'הערות',           width: 180, render: renderNotes },
   { key: 'private_notes', label: 'הערות אישיות',    width: 175, render: renderPrivate },
   { key: 'identity',      label: 'זהות כפולה',      width: 90,  render: renderIdentity },
 ];
+
+// ══ רוחב וסדר עמודות ══════════════════════════════════════════════════
+// נשמר כ-JSON יחיד ב-display settings. שמות עמודות לא מוכרים נזרקים, וחסרות
+// מתווספות בסוף — כך שהוספת עמודה בגרסה חדשה לא שוברת פריסה שמורה.
+const MIN_COL_W = 46, MAX_COL_W = 640;
+let COL_LAYOUT = { order: null, w: {} };
+
+function loadColLayout(raw) {
+  COL_LAYOUT = { order: null, w: {} };
+  let parsed = null;
+  try { parsed = JSON.parse(raw || 'null'); } catch (e) { parsed = null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return;
+  const known = new Set(COLS.map(c => c.key));
+  if (Array.isArray(parsed.order)) {
+    const seen = new Set();
+    const ord = parsed.order.filter(k => known.has(k) && !seen.has(k) && seen.add(k));
+    COLS.forEach(c => { if (!seen.has(c.key)) ord.push(c.key); });   // עמודה חדשה בסוף
+    COL_LAYOUT.order = ord;
+  }
+  if (parsed.w && typeof parsed.w === 'object') {
+    for (const [k, v] of Object.entries(parsed.w)) {
+      const n = parseInt(v);
+      if (known.has(k) && Number.isFinite(n))
+        COL_LAYOUT.w[k] = Math.max(MIN_COL_W, Math.min(MAX_COL_W, n));
+    }
+  }
+}
+
+function orderedCols() {
+  if (!COL_LAYOUT.order) return COLS.slice();
+  const byKey = new Map(COLS.map(c => [c.key, c]));
+  return COL_LAYOUT.order.map(k => byKey.get(k)).filter(Boolean);
+}
+
+function visibleCols() {
+  const hidden = hiddenColsSet();
+  return orderedCols().filter(c => !hidden.has(c.key));
+}
+
+function colWidth(col) { return COL_LAYOUT.w[col.key] || col.width; }
+
+let _colSaveTimer = null;
+function saveColLayout() {
+  clearTimeout(_colSaveTimer);
+  _colSaveTimer = setTimeout(() => {
+    // נשמרים רק רוחבים שהמשתמש שינה בפועל — לא צילום של ברירות המחדל
+    const w = {};
+    for (const [k, v] of Object.entries(COL_LAYOUT.w)) {
+      const def = COLS.find(c => c.key === k);
+      if (def && v !== def.width) w[k] = v;
+    }
+    const payload = JSON.stringify({ order: COL_LAYOUT.order, w });
+    DISPLAY.col_layout = payload;
+    api('set_display_setting', 'col_layout', payload);
+  }, 250);
+}
+
+async function resetColLayout() {
+  COL_LAYOUT = { order: null, w: {} };
+  DISPLAY.col_layout = '';
+  await api('set_display_setting', 'col_layout', '');
+  buildTableHeader();
+  renderTable();
+  toast('רוחב וסדר העמודות אופסו', 'success');
+}
+
+function applyColMove(key, toIndex) {
+  const order = (COL_LAYOUT.order || COLS.map(c => c.key)).slice();
+  const from = order.indexOf(key);
+  if (from < 0) return;
+  order.splice(from, 1);
+  order.splice(from < toIndex ? toIndex - 1 : toIndex, 0, key);
+  COL_LAYOUT.order = order;
+}
+
+// איזה אינדקס-שחרור מתאים למיקום המצביע. ths[0] הוא הימני ביותר ב-RTL, ולכן
+// עוברים לפי סדר ה-DOM ומחפשים את הראשון שמרכזו שמאלה מהמצביע.
+function dropIndexAt(ths, clientX) {
+  for (let i = 0; i < ths.length; i++) {
+    const r = ths[i].getBoundingClientRect();
+    if (clientX > r.left + r.width / 2) return i;
+  }
+  return ths.length;
+}
+
+function showDropLine(ths, idx) {
+  let line = document.getElementById('col-drop-line');
+  if (!line) {
+    line = document.createElement('div');
+    line.id = 'col-drop-line';
+    document.body.appendChild(line);
+  }
+  const ref = ths[Math.min(idx, ths.length - 1)];
+  if (!ref) return;
+  const r = ref.getBoundingClientRect();
+  // הוספה "לפני" עמודה ב-RTL = הקצה הימני שלה; הוספה בסוף = הקצה השמאלי של האחרונה
+  line.style.left = (idx >= ths.length ? r.left : r.right) + 'px';
+  line.style.top = r.top + 'px';
+  line.style.height = (document.getElementById('table-wrap')?.clientHeight || r.height) + 'px';
+}
+
+function hideDropLine() {
+  document.getElementById('col-drop-line')?.remove();
+}
+
+// מדידה לפי מה שנבנה בפועל ב-DOM (עשרות שורות בחלון הווירטואלי) — לעולם לא
+// לעבור על S.nicks, שהוא 90 אלף.
+function autoFitColumn(key) {
+  const cells = document.querySelectorAll(`#tbody td[data-col="${CSS.escape(key)}"]`);
+  const probe = document.createElement('span');
+  probe.style.cssText = 'position:absolute;visibility:hidden;white-space:nowrap;font-size:13.5px';
+  document.body.appendChild(probe);
+  let max = 0;
+  const th = document.querySelector(`#thead-row th[data-col="${CSS.escape(key)}"]`);
+  if (th) { probe.textContent = th.textContent; max = probe.offsetWidth + 30; }
+  cells.forEach(td => {
+    probe.textContent = td.textContent || '';
+    max = Math.max(max, probe.offsetWidth);
+  });
+  probe.remove();
+  COL_LAYOUT.w[key] = Math.max(MIN_COL_W, Math.min(MAX_COL_W, max + 34));
+  buildTableHeader();
+  renderTableWindow();
+  saveColLayout();
+}
+
+let _colDrag = null;
+
+function startColResize(e, key) {
+  e.preventDefault(); e.stopPropagation();
+  const th = e.target.closest('th');
+  _colDrag = { kind: 'resize', key, startX: e.clientX, startW: th.getBoundingClientRect().width };
+  document.body.classList.add('col-resizing');
+  e.target.setPointerCapture?.(e.pointerId);
+}
+
+function startColMove(e, key) {
+  if (e.button !== 0) return;
+  const th = e.target.closest('th');
+  _colDrag = { kind: 'maybe-move', key, startX: e.clientX, th, moved: false };
+  e.target.setPointerCapture?.(e.pointerId);
+}
+
+function onColPointerMove(e) {
+  if (!_colDrag) return;
+  if (_colDrag.kind === 'resize') {
+    // RTL: הידית על הקצה השמאלי, ולכן גרירה שמאלה (clientX יורד) = רחב יותר
+    const dx = _colDrag.startX - e.clientX;
+    const w = Math.max(MIN_COL_W, Math.min(MAX_COL_W, Math.round(_colDrag.startW + dx)));
+    COL_LAYOUT.w[_colDrag.key] = w;
+    const cg = document.getElementById('nick-colgroup');
+    const idx = visibleCols().findIndex(c => c.key === _colDrag.key);
+    if (cg && idx >= 0 && cg.children[idx + 1]) cg.children[idx + 1].style.width = w + 'px';
+    return;
+  }
+  if (Math.abs(e.clientX - _colDrag.startX) > 5) {
+    if (!_colDrag.moved) {
+      _colDrag.moved = true;
+      _colDrag.kind = 'move';
+      _colDrag.th.classList.add('col-dragging');
+      document.body.classList.add('col-dragging');
+    }
+  }
+  if (_colDrag.kind === 'move') {
+    const ths = [...document.querySelectorAll('#thead-row th[data-col]')];
+    showDropLine(ths, dropIndexAt(ths, e.clientX));
+  }
+}
+
+function endColDrag(e) {
+  if (!_colDrag) return;
+  const d = _colDrag;
+  _colDrag = null;
+  document.body.classList.remove('col-resizing', 'col-dragging');
+  d.th?.classList.remove('col-dragging');
+  hideDropLine();
+  if (d.kind === 'resize') { buildTableHeader(); renderTableWindow(); saveColLayout(); return; }
+  if (d.kind === 'move' && e) {
+    const ths = [...document.querySelectorAll('#thead-row th[data-col]')];
+    const visKeys = ths.map(t => t.dataset.col);
+    const at = dropIndexAt(ths, e.clientX);
+    const fullOrder = COL_LAYOUT.order || COLS.map(c => c.key);
+    // אינדקס מתוך העמודות הנראות → אינדקס בסדר המלא, כדי שעמודות מוסתרות
+    // ישמרו על מקומן היחסי ולא יזחלו לסוף
+    const targetKey = visKeys[at];
+    const toIndex = targetKey ? fullOrder.indexOf(targetKey) : fullOrder.length;
+    applyColMove(d.key, toIndex);
+    buildTableHeader();
+    renderTable();
+    saveColLayout();
+    _suppressSortClick = true;      // ה-click שאחרי הגרירה לא ימיין
+    setTimeout(() => { _suppressSortClick = false; }, 0);
+  }
+}
+
+let _suppressSortClick = false;
+document.addEventListener('pointermove', onColPointerMove);
+document.addEventListener('pointerup', endColDrag);
+document.addEventListener('pointercancel', () => endColDrag(null));
 
 // ══ INIT ══════════════════════════════════════════════════════════════
 // המתן עד ש-pywebview.api מכיל מתודות ממשיות (לא רק אובייקט ריק)
@@ -480,16 +682,31 @@ function buildTableHeader() {
     toggleSelectAll(e.target.checked);
   };
 
-  const hidden = hiddenColsSet();
-  COLS.forEach(col => {
-    if (hidden.has(col.key)) return;
+  const cols = visibleCols();
+  const cg = document.getElementById('nick-colgroup');
+  if (cg) {
+    cg.innerHTML = '<col style="width:34px">' +
+      cols.map(c => `<col style="width:${colWidth(c)}px">`).join('') + '<col>';
+  }
+  cols.forEach(col => {
     const th = document.createElement('th');
-    th.style.minWidth = col.width + 'px';
-    th.innerHTML = `${col.label} <span class="sort-icon">↕</span>`;
-    th.onclick = () => sortBy(col.key);
+    th.style.width = colWidth(col) + 'px';
+    th.innerHTML = `<span class="th-label">${col.label}</span> <span class="sort-icon">↕</span>` +
+                   `<span class="col-resize" title="גרור לשינוי רוחב · לחיצה כפולה = התאמה אוטומטית"></span>`;
     th.dataset.col = col.key;
+    th.onclick = () => { if (!_suppressSortClick) sortBy(col.key); };
+    th.querySelector('.col-resize').addEventListener('pointerdown', e => startColResize(e, col.key));
+    th.querySelector('.col-resize').addEventListener('dblclick', e => {
+      e.stopPropagation(); autoFitColumn(col.key);
+    });
+    th.querySelector('.th-label').addEventListener('pointerdown', e => startColMove(e, col.key));
     tr.appendChild(th);
   });
+  // עמודת מילוי: בלעדיה טבלה צרה מהמסך נמתחת ומבטלת את הרוחבים שנקבעו
+  const filler = document.createElement('th');
+  filler.className = 'th-filler';
+  filler.style.cursor = 'default';
+  tr.appendChild(filler);
 }
 
 async function loadNicks(search = '') {
@@ -589,11 +806,10 @@ function buildNickRow(n) {
   };
   tr.appendChild(tdSel);
 
-  const hiddenCols = _hiddenColsCache || hiddenColsSet();
   const conflictFields = n.conflict_fields ? String(n.conflict_fields).split(',') : [];
-  COLS.forEach(col => {
-    if (hiddenCols.has(col.key)) return;
+  (_visibleColsCache || visibleCols()).forEach(col => {
     const td = document.createElement('td');
+    td.dataset.col = col.key;      // גם ל-renderers גנריים וגם לשינוי רוחב עמודה
     td.title = String(n[col.key] ?? '');
     if (col.render) {
       col.render(td, n);
@@ -613,6 +829,9 @@ function buildNickRow(n) {
     }
     tr.appendChild(td);
   });
+  // תא מילוי מול עמודת המילוי בכותרת — אחרת מספר התאים לא תואם ו-colspan
+  // של ה-spacer בגלילה הווירטואלית שובר את יישור העמודות.
+  tr.appendChild(document.createElement('td'));
 
   tr.onclick    = e => selectRow(n.id, e);
   tr.ondblclick = () => openNickDialog(n.id);
@@ -620,8 +839,7 @@ function buildNickRow(n) {
 }
 
 function visibleColCount() {
-  const hidden = hiddenColsSet();
-  return 1 + COLS.filter(c => !hidden.has(c.key)).length; // +1 = checkbox column
+  return 2 + visibleCols().length;   // תיבת סימון + עמודות + עמודת מילוי
 }
 
 // אחרי חיפוש/סינון/מיון התוצאות שונות לגמרי — גלילה שנשארה עמוק בפנים
@@ -703,7 +921,7 @@ function renderTableWindow() {
 
   S.vRange = { start, end };
   const cols = visibleColCount();
-  _hiddenColsCache = hiddenColsSet();   // פעם אחת לחלון, לא פעם לכל שורה
+  _visibleColsCache = visibleCols();    // פעם אחת לחלון, לא פעם לכל שורה
 
   tbody.innerHTML = '';
 
@@ -843,6 +1061,14 @@ function showTooltipAt(cx, cy, html) {
   tt.style.display = '';
   tt.style.left = Math.min(cx + 12, window.innerWidth  - 300) + 'px';
   tt.style.top  = Math.min(cy + 12, window.innerHeight - 150) + 'px';
+}
+
+// מספרים: LTR ומיושרים, אחרת הם נשברים בתוך טבלה בעברית
+function renderNum(td, n) {
+  const v = n[td.dataset.col || ''] ?? '';
+  td.textContent = v === '' || v === null ? '' : String(v);
+  td.dir = 'ltr';
+  td.style.textAlign = 'center';
 }
 
 function renderRep(td, n) {
@@ -1180,6 +1406,7 @@ async function openDbHealth() {
       לשחזור: "♻️ שחזור מגיבוי" בהגדרות, ובחר קובץ מהתיקייה הזו.
     </div>
   `, [
+    { label: '📥 יומן ייבואים', cls: 'btn-ghost', action: () => { closeModal(); openImportLog(); } },
     { label: '🔧 תקן קבוצות זהות', cls: 'btn-ghost', action: async () => {
       const r = await api('repair_identity_groups');
       if (!r?.ok) { toast(r?.error || 'התיקון נכשל', 'error'); return; }
@@ -1359,8 +1586,10 @@ async function openNickDialog(nickId = null) {
   const identitiesHtml = nick ? renderIdentitiesSection(nick) : '';
   // conflicts HTML
   const conflictsHtml = nick?.conflicts?.length ? renderConflictsSection(nick.conflicts) : '';
-  const shelvedHtml = (nick?.field_sources && Object.keys(nick.field_sources).length)
-    ? renderFieldSourcesSection(nick.field_sources) : '';
+  const shelvedHtml =
+    `<div id="field-sources-host">${(nick?.field_sources && Object.keys(nick.field_sources).length)
+        ? renderFieldSourcesSection(nick.field_sources, nick.id) : ''}</div>`
+    + renderShelvedSection(nick);
 
   const html = `
     <div class="form-grid">
@@ -1687,6 +1916,10 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('click', (e) => {
+  const pv = e.target.closest('.pick-val');
+  if (pv) { pickFieldValue(parseInt(pv.dataset.nid), pv.dataset.field, pv.dataset.value); return; }
+  const sr = e.target.closest('.shelf-restore');
+  if (sr) { restoreShelved(parseInt(sr.dataset.sid), parseInt(sr.dataset.nid)); return; }
   const prof = e.target.closest('.idm-prof');
   if (prof) { idmProfile(parseInt(prof.dataset.gi)); return; }
   const un = e.target.closest('.idm-unlink');
@@ -1917,35 +2150,97 @@ async function resolveConflict(conflictId) {
   await loadNicks(document.getElementById('search-input').value);
 }
 
-function renderFieldSourcesSection(fieldSources) {
+function renderFieldSourcesSection(fieldSources, nickId) {
   const fieldLabel = k => (COLS.find(c => c.key===k)?.label) || k;
   const srcKind = s => s.kind==='me' ? '👤 אני' : s.kind==='scrape' ? '🌐 סריקה' : `📥 ${esc(s.name)}`;
   const blocks = Object.entries(fieldSources).map(([field, srcs]) => {
-    // srcs כבר ממוין: absolute תחילה, ואז trust יורד → הראשון הוא המנצח
-    const winner = srcs[0];
-    const others = srcs.slice(1);
+    // המנצח מסומן בצד השרת (is_winner). אי אפשר להסיק אותו ממיון האמינות:
+    // לסטטוס ולמוניטין יש כללים משלהם, והפאנל היה מציג את ההפך מהמוצג בפועל.
+    // ערכים זהים ממקורות שונים מקובצים לשורה אחת.
+    const byValue = new Map();
+    for (const sr of srcs) {
+      const k = String(sr.value ?? '').trim();
+      if (!byValue.has(k)) byValue.set(k, { value: sr.value, srcs: [], win: false });
+      const e = byValue.get(k);
+      e.srcs.push(sr);
+      if (sr.is_winner) e.win = true;
+    }
+    const entries = [...byValue.values()];
+    if (!entries.some(e => e.win) && entries.length) entries[0].win = true;   // גיבוי
+    entries.sort((a, b) => (b.win ? 1 : 0) - (a.win ? 1 : 0));
     return `
       <div class="conflict-item" style="display:block">
         <div style="font-weight:700;font-size:12.5px;margin-bottom:4px">
           ${esc(fieldLabel(field))}
           <span title="מידע סותר מכמה מקורות" style="cursor:help">⚠️</span>
         </div>
-        <div style="font-size:12.5px;margin-bottom:3px">
-          <span style="color:var(--success)">▸ מוצג:</span> ${esc(winner.value)}
-          <span style="color:var(--subtext);font-size:11px"> (${srcKind(winner)}${winner.absolute?', אבסולוטי':`, אמינות ${winner.trust}`})</span>
-        </div>
-        ${others.map(o => `
-          <div style="font-size:12px;color:var(--subtext);padding-right:14px">
-            ◦ ${esc(o.value)} <span style="font-size:11px">(${srcKind(o)}${o.absolute?', אבסולוטי':`, אמינות ${o.trust}`})</span>
-          </div>`).join('')}
+        ${entries.map(e => {
+          const tags = e.srcs.map(x => `${srcKind(x)}${x.absolute ? ', אבסולוטי' : `, אמינות ${x.trust}`}`).join(' · ');
+          return e.win
+            ? `<div style="font-size:12.5px;margin-bottom:3px">
+                 <span style="color:var(--success)">▸ מוצג:</span> ${esc(e.value)}
+                 <span style="color:var(--subtext);font-size:11px"> (${tags})</span></div>`
+            : `<div style="font-size:12px;color:var(--subtext);padding-right:14px;
+                      display:flex;gap:6px;align-items:center">
+                 <span style="flex:1">◦ ${esc(e.value)}
+                   <span style="font-size:11px">(${tags})</span></span>
+                 <button class="btn btn-sm btn-ghost pick-val" data-nid="${nickId}"
+                         data-field="${esc(field)}" data-value="${esc(e.value)}"
+                         style="font-size:10.5px;padding:1px 7px">השתמש בזה</button>
+               </div>`;
+        }).join('')}
       </div>`;
   }).join('');
   return `
     <div class="section-hdr" style="color:var(--subtext)">⚠️ מידע לפי מקור (אבות)</div>
     <p style="font-size:11.5px;color:var(--subtext);margin-bottom:8px">
-      שדות עם יותר ממקור אחד. המוצג נבחר לפי האמינות הגבוהה. שינוי אמינות מקור בהגדרות סנכרון ישנה את המוצג.
+      שדות עם יותר ממקור אחד. המוצג נבחר לפי האמינות הגבוהה — "השתמש בזה" רושם את
+      הערך על שמך כדי שהוא ינצח, בלי למחוק את השאר.
     </p>
     ${blocks}`;
+}
+
+async function pickFieldValue(nickId, field, value) {
+  const r = await api('pick_field_value', nickId, field, value);
+  if (!r?.ok) { toast(r?.error || 'לא ניתן לבחור את הערך', 'error', { ms: 7000 }); return; }
+  toast('הערך נבחר ✓', 'success');
+  const fresh = await api('get_nick', nickId);
+  if (!fresh) return;
+  const el = document.getElementById(`f-${field}`);
+  if (el) el.value = fresh[field] ?? '';
+  const host = document.getElementById('field-sources-host');
+  if (host) host.innerHTML = (fresh.field_sources && Object.keys(fresh.field_sources).length)
+    ? renderFieldSourcesSection(fresh.field_sources, nickId) : '';
+}
+
+// ── ערכים "על המדף" — נשמרו בהחלפה הפיכה, ועד עכשיו לא הוצגו בשום מקום ──
+function renderShelvedSection(nick) {
+  const rows = nick?.shelved || [];
+  if (!rows.length) return '';
+  const fieldLabel = k => (COLS.find(c => c.key === k)?.label) || k;
+  return `
+    <div class="section-hdr" style="color:var(--subtext)">📥 ערכים על המדף</div>
+    <p style="font-size:11.5px;color:var(--subtext);margin-bottom:8px">
+      ערכים שהוחלפו בעבר ונשמרו בצד. "החזר" מציב את הערך הזה כמוצג, והנוכחי יורד למדף.
+    </p>
+    ${rows.map(r => `
+      <div class="conflict-item" style="display:flex;gap:6px;align-items:center">
+        <span style="flex:1;font-size:12.5px">
+          <b>${esc(fieldLabel(r.field_name))}:</b> ${esc(r.value)}
+          <span style="color:var(--subtext);font-size:11px">
+            (${esc(r.source_name || 'לא ידוע')}${r.source_trust ? `, אמינות ${esc(r.source_trust)}` : ''})</span>
+        </span>
+        <button class="btn btn-sm btn-ghost shelf-restore" data-sid="${r.id}" data-nid="${nick.id}"
+                style="font-size:10.5px;padding:1px 7px">↩ החזר</button>
+      </div>`).join('')}`;
+}
+
+async function restoreShelved(shelvedId, nickId) {
+  const r = await api('promote_shelved_value', shelvedId);
+  if (!r?.ok) { toast(r?.error || 'ההחזרה נכשלה', 'error'); return; }
+  toast('הערך הוחזר ✓', 'success');
+  closeModal();
+  openNickDialog(nickId);
 }
 
 async function saveNick(nickId) {
@@ -2728,6 +3023,26 @@ async function openSyncMgr() {
   // (התנגשויות בסריקה מהאינטרנט נפתרות אוטומטית ע"י מנוע המקורות לפי אמינות —
   //  אין עוד מדיניות נפרדת לסריקה.)
   const sec3 = `
+    <div style="display:flex;flex-direction:column;border:1px solid var(--border-soft);
+         border-radius:12px;overflow:hidden;margin-bottom:14px">
+      <div style="background:var(--card2);padding:12px 16px;font-weight:800;font-size:14px;
+           border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:8px">
+        <span>👤</span> האמינות שלי
+      </div>
+      <div style="padding:16px">
+        <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
+          כמה משקל יש לערך שאתה מזין בעצמך, מול ערך שהגיע מסריקה או מקובץ.
+          10 = תמיד גובר. דיאלוג הייבוא מציג את המספר הזה לשם השוואה.
+        </p>
+        <label class="form-label">אמינות: <b id="my-trust-val">${myTrust}</b> / 10</label>
+        <input type="range" min="1" max="10" value="${myTrust}" id="my-trust" style="width:100%"
+               oninput="document.getElementById('my-trust-val').textContent=this.value">
+        <div style="font-size:11px;color:var(--subtext);margin-top:6px">
+          שינוי כאן מכריע מחדש את כל השדות שיש להם יותר ממקור אחד — פעולה שעשויה
+          לקחת כמה שניות במאגר גדול.
+        </div>
+      </div>
+    </div>
     <div style="display:flex;flex-direction:column;border:1px solid var(--border-soft);border-radius:12px;overflow:hidden">
       <div style="background:var(--card2);padding:12px 16px;font-weight:800;font-size:14px;
            border-bottom:2px solid var(--accent);display:flex;align-items:center;gap:8px">
@@ -2835,6 +3150,15 @@ async function openSyncMgr() {
         if (el) ioMap[el.dataset.forum] = el.checked;
       }
       await api('set_forum_io_flags', ioMap);
+      const mt = document.getElementById('my-trust');
+      if (mt && parseInt(mt.value) !== myTrust) {
+        await api('set_my_trust', parseInt(mt.value));
+        // "אני" הוא מקור ככל מקור אחר — שינוי האמינות שלו מחייב הכרעה מחדש,
+        // אחרת המספר משתנה והתצוגה נשארת על ההכרעה הישנה.
+        await api('update_source', 1, null, null, parseInt(mt.value), null);
+        await waitSourceOp('מעדכן אמינות');
+        await loadNicks(document.getElementById('search-input').value);
+      }
       // סעיף 3
       const im = document.getElementById('import-manual');
       if (im) await api('set_setting', 'import_manual_conflicts', im.checked ? '1' : '0');
@@ -2920,6 +3244,39 @@ async function dismissSuggestion(i) {
   g._busy = true;
   await api('dismiss_identity_suggestion', g.members.map(m => m.id));
   _dropSuggestion(g);
+}
+
+// ══ יומן ייבואים ═════════════════════════════════════════════════════
+// כל ייבוא נרשם ב-import_sources מאז הגרסאות הראשונות, ומעולם לא הוצג.
+async function openImportLog() {
+  const rows = await api('get_import_log', 50) || [];
+  openModal('📥 יומן ייבואים', rows.length ? `
+    <div style="max-height:56vh;overflow:auto">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="position:sticky;top:0;background:var(--card2)">
+          <th style="padding:6px;text-align:right;font-size:11px">מקור</th>
+          <th style="padding:6px;text-align:right;font-size:11px">מתי</th>
+          <th style="padding:6px;text-align:right;font-size:11px">ניקים</th>
+          <th style="padding:6px;text-align:right;font-size:11px">ערכים</th>
+          <th style="padding:6px;text-align:right;font-size:11px">אמינות</th>
+        </tr></thead>
+        <tbody>${rows.map(r => `
+          <tr style="border-bottom:1px solid var(--border-soft)">
+            <td style="padding:5px 6px;font-size:12px">
+              <b>${esc(r.name)}</b>
+              ${r.notes ? `<div style="color:var(--subtext);font-size:11px">${esc(r.notes)}</div>` : ''}
+            </td>
+            <td style="padding:5px 6px;font-size:11.5px;color:var(--subtext)" dir="ltr">
+              ${esc(String(r.created_at || '').replace('T', ' ').slice(0, 16))}</td>
+            <td style="padding:5px 6px;font-size:12px">${esc(r.nick_count ?? 0)}</td>
+            <td style="padding:5px 6px;font-size:12px">${esc(r.conflict_count ?? 0)}</td>
+            <td style="padding:5px 6px;font-size:12px">${esc(r.trust ?? '')}</td>
+          </tr>`).join('')}</tbody>
+      </table>
+    </div>` : `<div style="text-align:center;padding:26px;color:var(--subtext);font-size:13px">
+      עדיין לא בוצע ייבוא.</div>`,
+    [{ label: 'סגור', cls: 'btn-primary', action: closeModal }], 'modal-lg',
+    { id: 'import-log' });
 }
 
 // ══ פרופיל להדפסה ════════════════════════════════════════════════════
@@ -4037,7 +4394,7 @@ function updateForumLink(forumName) {
 // ══ DISPLAY SETTINGS ══════════════════════════════════════════════════
 const DISPLAY = {
   theme: 'dark', accent: 'amber', view: 'table',
-  density: 'normal', hidden_cols: '',
+  density: 'normal', hidden_cols: '', col_layout: '',
 };
 
 const ACCENTS = [
@@ -4054,6 +4411,7 @@ const ACCENTS = [
 async function applyDisplaySettings() {
   const s = await api('get_display_settings');
   if (s) Object.assign(DISPLAY, s);
+  loadColLayout(DISPLAY.col_layout);   // אחרי הטעינה, אחרת נקרא ערך ישן
   applyTheme();
   applyView();
   document.body.dataset.density  = DISPLAY.density;
@@ -4094,7 +4452,7 @@ async function setView(view) {
 
 // חלון וירטואלי בונה ~30 שורות בכל פריים גלילה, וכל שורה בנתה מחדש את קבוצת
 // העמודות המוסתרות מתוך מחרוזת ההגדרות. הקבוצה נבנית פעם אחת לחלון.
-let _hiddenColsCache = null;
+let _visibleColsCache = null;
 
 function hiddenColsSet() {
   return new Set((DISPLAY.hidden_cols || '').split(',').filter(Boolean));
@@ -5102,7 +5460,7 @@ async function openDisplaySettings() {
       ).join('')}
     </div>`;
 
-  const colItems = COLS.filter(cc => cc.key !== '_open').map(cc => {
+  const colItems = orderedCols().filter(cc => cc.key !== '_open').map(cc => {
     const hidden = hiddenColsSet().has(cc.key);
     return `<div class="col-picker-item">
       <input type="checkbox" id="col-${cc.key}" ${hidden?'':'checked'}
@@ -5158,6 +5516,16 @@ async function openDisplaySettings() {
     <div class="settings-section">
       <div class="settings-section-title">📊 עמודות בטבלה</div>
       <div class="col-picker">${colItems}</div>
+      <div style="margin-top:10px">
+        <button class="btn btn-ghost btn-sm" onclick="resetColLayout()">↺ אפס רוחב וסדר עמודות</button>
+        <div style="font-size:11px;color:var(--subtext);margin-top:4px">
+          מחזיר את העמודות לרוחב ולסדר המקוריים · לא נוגע בנתונים
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--subtext);margin-top:8px;line-height:1.6">
+        💡 גרירת שם עמודה בכותרת הטבלה משנה את הסדר; גרירת הקצה השמאלי משנה רוחב,
+        ולחיצה כפולה עליו מתאימה את הרוחב לתוכן.
+      </div>
     </div>`;
 
   openModal('🎨 הגדרות תצוגה', html, [
@@ -5212,7 +5580,9 @@ async function toggleColumn(colKey, visible) {
 
 async function resetDisplay() {
   await api('reset_display_settings');
-  Object.assign(DISPLAY, {theme:'dark',accent:'amber',view:'table',density:'normal',hidden_cols:''});
+  Object.assign(DISPLAY, {theme:'dark',accent:'amber',view:'table',density:'normal',
+                          hidden_cols:'', col_layout:''});
+  loadColLayout('');
   await applyDisplaySettings();
   buildTableHeader();
   renderTable();
