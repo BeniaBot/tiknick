@@ -35,6 +35,9 @@
         <button class="nav-btn" onclick="openUserLookup()">
           <span class="icon">🔎</span> תצוגת משתמש
         </button>
+        <button class="nav-btn" onclick="openIdentitySuggestions()" title="מי מהניקים נראה כאותו אדם">
+          <span class="icon">🔗</span> הצעות זהות
+        </button>
         <button class="nav-btn" id="btn-edit" onclick="editSelected()" disabled>
           <span class="icon">✏️</span> ערוך ניק
         </button>
@@ -76,6 +79,12 @@
         </button>
         <button class="nav-btn" onclick="openChazonishnik()">
           <span class="icon">📖</span> Chazonishnik
+        </button>
+        <button class="nav-btn" onclick="openStats()" title="מבט-על על המאגר">
+          <span class="icon">📊</span> סטטיסטיקות
+        </button>
+        <button class="nav-btn" onclick="openScanRuns()" title="מה השתנה בסריקות האחרונות">
+          <span class="icon">🕒</span> יומן סריקות
         </button>
         <button class="nav-btn" onclick="openStinknik()">
           <span class="icon">🦨</span> Stinknik
@@ -149,7 +158,9 @@
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <button class="btn btn-ghost btn-sm" onclick="addFilterRow()">➕ הוסף פילטר</button>
         <button class="btn btn-ghost btn-sm" onclick="clearFieldFilter()">✕ נקה סינון</button>
+        <button class="btn btn-ghost btn-sm" onclick="saveCurrentFilter()" title="שמור את התנאים הנוכחיים בשם">💾 שמור סינון</button>
         <span id="flt-count" style="font-size:12px;color:var(--accent-2)"></span>
+        <span id="saved-filters" style="display:flex;gap:6px;flex-wrap:wrap;margin-right:auto"></span>
       </div>
     </div>
 
@@ -158,6 +169,9 @@
          background:var(--card2);border-bottom:1px solid var(--border-soft);flex-wrap:wrap;direction:rtl">
       <span class="stat-pill">✅ <b id="bulk-count2">0</b> נבחרו</span>
       <button class="btn btn-ghost btn-sm" onclick="copySelectedRows()" title="העתקה כטבלה — להדבקה באקסל">📋 העתק</button>
+      <button class="btn btn-ghost btn-sm" onclick="bulkLinkSelected()" title="סמן שכולם אותו אדם">🔗 קשר כזהות</button>
+      <button class="btn btn-ghost btn-sm" onclick="bulkMoveForum()" title="העברה לפורום אחר">🏛️ העבר פורום</button>
+      <button class="btn btn-ghost btn-sm" onclick="bulkAddNote()" title="הוספת טקסט להערות">📝 הוסף הערה</button>
       <button class="btn btn-danger btn-sm" onclick="deleteBulkSelected()">🗑️ מחק נבחרים</button>
       <button class="btn btn-warning btn-sm" onclick="bulkEditSelected()">✏️ ערוך שדה</button>
       <button class="btn btn-ghost btn-sm" onclick="syncSelectedOnline()" title="סנכרן את הנבחרים מהאינטרנט (הערך מהאינטרנט מנצח)">🌐 סנכרן</button>

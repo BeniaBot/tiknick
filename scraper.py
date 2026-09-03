@@ -276,6 +276,7 @@ def _map_user(u):
         "groups":       groups,
         "status":       "מורחק" if u.get("banned") else "",
         "join_date":    join_date,
+        "last_seen":    last_online,
         "avatar_url":   avatar,
         "nick_color":   g("icon:bgColor") or "",
         "email":        g("email"),   # כמעט תמיד ריק ב-NodeBB ציבורי
@@ -296,6 +297,10 @@ def _map_discourse_user(u, base):
     created = u.get("created_at") or ""
     if isinstance(created, str) and len(created) >= 10:
         join_date = created[:10]
+    last_seen = ""
+    seen = u.get("last_seen_at") or u.get("last_posted_at") or ""
+    if isinstance(seen, str) and len(seen) >= 10:
+        last_seen = seen[:10]
 
     extra_bits = []
     loc = u.get("location")
@@ -319,6 +324,7 @@ def _map_discourse_user(u, base):
         "groups":      grp,
         "status":      "מורחק" if (u.get("suspended_till") or u.get("silenced")) else "",
         "join_date":   join_date,
+        "last_seen":   last_seen,
         "avatar_url":  avatar,
         "email":       u.get("email") or "",
         "forum_uid":   str(u.get("id") or ""),
@@ -339,7 +345,7 @@ def _map_discourse_dir_item(item, base):
 
 
 def scrape_forum(forum_name, forum_url, db, cookie=None, progress_cb=None,
-                 cancel_flag=None, max_pages=None, skip_flag=None, platform=None):
+                 cancel_flag=None, max_pages=None, skip_flag=None, platform=None, run_id=None):
     """
     סורק את כל המשתמשים בפורום וממזג למאגר. מנתב לפי פלטפורמה (NodeBB/Discourse).
 
@@ -351,10 +357,10 @@ def scrape_forum(forum_name, forum_url, db, cookie=None, progress_cb=None,
     plat = platform or detect_platform(forum_url, cookie)
     if plat == "nodebb":
         return _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
-                              cancel_flag, max_pages, skip_flag)
+                              cancel_flag, max_pages, skip_flag, run_id)
     if plat == "discourse":
         return _scrape_discourse(forum_name, base, db, cookie, progress_cb,
-                                 cancel_flag, max_pages, skip_flag)
+                                 cancel_flag, max_pages, skip_flag, run_id)
     # xenforo/phpbb/custom/unknown — אין API ציבורי לרשימת משתמשים
     names = {"xenforo": "XenForo", "phpbb": "phpBB", "custom": "מערכת ייחודית"}
     label = names.get(plat, "")
@@ -366,7 +372,7 @@ def scrape_forum(forum_name, forum_url, db, cookie=None, progress_cb=None,
 
 
 def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
-                   cancel_flag, max_pages, skip_flag):
+                   cancel_flag, max_pages, skip_flag, run_id=None):
     stats = {"added": 0, "updated": 0, "unchanged": 0, "pages": 0, "cancelled": False}
 
     first = _fetch_json(base + "/api/users", cookie=cookie)
@@ -385,7 +391,7 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
         if not pairs:
             return
         page_stats = db.merge_scraped_users(
-            forum_name, pairs, source_label=f"NodeBB:{forum_name}")
+            forum_name, pairs, source_label=f"NodeBB:{forum_name}", run_id=run_id)
         for key in ("added", "updated", "unchanged"):
             stats[key] += page_stats.get(key, 0)
 
@@ -427,7 +433,7 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
 
 
 def _scrape_discourse(forum_name, base, db, cookie, progress_cb,
-                      cancel_flag, max_pages, skip_flag):
+                      cancel_flag, max_pages, skip_flag, run_id=None):
     """סורק את ספריית המשתמשים של Discourse (directory_items, עימוד 0-בסיס)."""
     stats = {"added": 0, "updated": 0, "unchanged": 0, "pages": 0, "cancelled": False}
 
@@ -452,7 +458,7 @@ def _scrape_discourse(forum_name, base, db, cookie, progress_cb,
         if not pairs:
             return
         page_stats = db.merge_scraped_users(
-            forum_name, pairs, source_label=f"Discourse:{forum_name}")
+            forum_name, pairs, source_label=f"Discourse:{forum_name}", run_id=run_id)
         for key in ("added", "updated", "unchanged"):
             stats[key] += page_stats.get(key, 0)
 

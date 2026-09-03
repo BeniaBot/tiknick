@@ -69,6 +69,7 @@ ALL_NICK_FIELDS = [
     ("extra_info",    "פרטים נוספים",    True),
     ("private_notes", "הערות אישיות",    False),  # ברירת מחדל: לא מסונכרן
     ("trust_level",   "רמת אמינות",      True),
+    ("last_seen",     "נראה לאחרונה",    True),
     ("avatar_url",    "כתובת תמונה",     True),
     ("nick_color",    "צבע ניק",         True),
     ("avatar_image",  "תמונת פרופיל",    False),  # כבד — ברירת מחדל לא מסונכרן
@@ -171,6 +172,7 @@ def init_db():
                 join_date TEXT DEFAULT '',
                 post_count TEXT DEFAULT '',
                 avatar_url TEXT DEFAULT '',
+                last_seen TEXT DEFAULT '',
                 nick_color TEXT DEFAULT '',
                 avatar_image TEXT DEFAULT '',
                 source TEXT DEFAULT 'manual',
@@ -270,6 +272,43 @@ def init_db():
                 UNIQUE(nick_id, field_name, source_id)
             );
 
+            -- היסטוריית שינויים לשדות "מעניינים" (field_values שומר רק את הערך
+            -- האחרון לכל מקור, ולכן בלי זה אין ציר זמן)
+            CREATE TABLE IF NOT EXISTS field_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nick_id INTEGER NOT NULL,
+                field_name TEXT NOT NULL,
+                old_value TEXT DEFAULT '',
+                new_value TEXT DEFAULT '',
+                changed_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (nick_id) REFERENCES nicks(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_hist_nick ON field_history(nick_id, changed_at);
+
+            -- יומן סריקות + מה השתנה בכל אחת
+            CREATE TABLE IF NOT EXISTS scan_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                forum TEXT DEFAULT '',
+                started_at TEXT DEFAULT (datetime('now')),
+                finished_at TEXT DEFAULT '',
+                added INTEGER DEFAULT 0, updated INTEGER DEFAULT 0,
+                unchanged INTEGER DEFAULT 0, failed_pages INTEGER DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS scan_changes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id INTEGER NOT NULL,
+                nick_id INTEGER, forum TEXT DEFAULT '', username TEXT DEFAULT '',
+                kind TEXT DEFAULT 'changed',      -- 'new' | 'changed'
+                field_name TEXT DEFAULT '', old_value TEXT DEFAULT '', new_value TEXT DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_scan_changes_run ON scan_changes(run_id);
+
+            -- הצעות זהות שהמשתמש דחה (לא להציע שוב)
+            CREATE TABLE IF NOT EXISTS identity_dismissed (
+                nick_id_a INTEGER NOT NULL, nick_id_b INTEGER NOT NULL,
+                PRIMARY KEY (nick_id_a, nick_id_b)
+            );
+
             -- סל מחזור: צילום מלא של ניק שנמחק (כולל אנשי קשר, זהויות, מקורות)
             -- כדי ש"בטל" ישחזר הכול. נשמר 30 יום.
             CREATE TABLE IF NOT EXISTS trash_nicks (
@@ -324,9 +363,17 @@ def init_db():
     _migrate()
     _init_fts()
     _backfill_sources()
-    # סל המחזור נשמר 30 יום
+    # סל המחזור נשמר 30 יום; היסטוריה ויומן סריקות — שנה (אחרת גדלים בלי גבול)
     try:
         empty_trash(30)
+        with get_connection() as conn:
+            conn.execute("DELETE FROM field_history WHERE changed_at < datetime('now','-365 days')")
+            old_runs = [r[0] for r in conn.execute(
+                "SELECT id FROM scan_runs WHERE started_at < datetime('now','-365 days')")]
+            for chunk in _chunks(old_runs, 400):
+                ph = ",".join("?" * len(chunk))
+                conn.execute(f"DELETE FROM scan_changes WHERE run_id IN ({ph})", chunk)
+                conn.execute(f"DELETE FROM scan_runs WHERE id IN ({ph})", chunk)
     except Exception:
         pass
     # בלי סטטיסטיקות (sqlite_stat1) המתכנן בוחר אינדקסים לפי ניחוש ברירת מחדל,
@@ -433,7 +480,7 @@ def _phone_norm_sql(col):
     return (f"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({col},'-',''),' ',''),"
             f"'(',''),')',''),'+','')")
 
-def _search_where(search, match_expr):
+def _search_where(search, match_expr, fuzzy=False):
     """
     תנאי החיפוש המהיר המשולב — מחזיר (where_sql, params):
       • עמודות הניק דרך FTS (או LIKE כשאין FTS5),
@@ -446,6 +493,12 @@ def _search_where(search, match_expr):
         params.append(match_expr)
     else:
         s = f"%{search}%"
+        parts.append("(" + " OR ".join(f"n.{c} LIKE ?" for c in _SEARCH_COLS) + ")")
+        params.extend([s] * len(_SEARCH_COLS))
+    if fuzzy:
+        # חיפוש תת-מחרוזת: FTS מוצא רק תחילת מילה, ולכן "כהן" לא מצא "משהכהן".
+        # מופעל רק כשהחיפוש הרגיל כמעט לא החזיר תוצאות (סריקה מלאה — יקר).
+        s = f"%{search.strip()}%"
         parts.append("(" + " OR ".join(f"n.{c} LIKE ?" for c in _SEARCH_COLS) + ")")
         params.extend([s] * len(_SEARCH_COLS))
     parts.append("n.id IN (SELECT nick_id FROM nick_contacts WHERE value LIKE ?)")
@@ -480,7 +533,8 @@ def _migrate():
     with get_connection() as conn:
         existing = {row[1] for row in conn.execute("PRAGMA table_info(nicks)")}
         for col in ["extra_info", "private_notes", "nick_color", "avatar_image", "address",
-                    "scraped_real_name", "scraped_email", "full_name", "forum_uid"]:
+                    "scraped_real_name", "scraped_email", "full_name", "forum_uid",
+                    "last_seen"]:
             if col not in existing:
                 conn.execute(f"ALTER TABLE nicks ADD COLUMN {col} TEXT DEFAULT ''")
         ctcols = {row[1] for row in conn.execute("PRAGMA table_info(nick_contacts)")}
@@ -758,6 +812,14 @@ def get_all_nicks(search="", limit=None, offset=0):
             where, params = _search_where(search, match_expr)
             total = conn.execute(
                 f"SELECT COUNT(*) FROM nicks n {where}", params).fetchone()[0]
+            # כמעט בלי תוצאות? נסה תת-מחרוזת (סלחני יותר בעברית) — בדיוק המצב
+            # שבו המשתמש זקוק לעזרה. זו סריקה מלאה, ולכן מוגבלת בכמות.
+            if total < 5 and len(search.strip()) >= 2:
+                where, params = _search_where(search, match_expr, fuzzy=True)
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM nicks n {where}", params).fetchone()[0]
+                if limit is None:
+                    limit_clause, params_extra = "LIMIT ? OFFSET 0", [500]
             rows = conn.execute(
                 base_select + where + f" {order_clause} {limit_clause}",
                 params + params_extra).fetchall()
@@ -775,6 +837,7 @@ FILTERABLE_FIELDS = [
     ("full_name","שם מלא"),("phone","טלפון"),("email","מייל"),("address","כתובת"),
     ("groups","קבוצות"),("status","סטטוס"),("notes","הערות"),("private_notes","הערות אישיות"),
     ("extra_info","פרטים נוספים"),("reputation","מוניטין"),("join_date","תאריך הצטרפות"),
+    ("last_seen","נראה לאחרונה"),
 ]
 _FILTERABLE_KEYS = {k for k, _ in FILTERABLE_FIELDS}
 
@@ -1010,10 +1073,10 @@ def get_merged_profile(nick_id):
 
 # שדות שממוזגים מסריקה (לא נוגעים ב-private_notes/real_name של המשתמש)
 _SCRAPE_MERGE_FIELDS = ["groups", "reputation", "full_name", "email", "address",
-                        "status", "join_date", "post_count", "avatar_url",
+                        "status", "join_date", "post_count", "avatar_url", "last_seen",
                         "nick_color", "avatar_image", "extra_info", "forum_uid"]
 
-def merge_scraped_users(forum, users, source_label="סריקה"):
+def merge_scraped_users(forum, users, source_label="סריקה", run_id=None):
     """
     ממזג עמוד שלם של משתמשים סרוקים — חיבור וטרנזקציה אחת לכל העמוד,
     במקום שני חיבורים לכל שדה של כל משתמש (עשרות אלפי חיבורים בסריקה מלאה).
@@ -1063,7 +1126,13 @@ def merge_scraped_users(forum, users, source_label="סריקה"):
                 for f, v in new_vals.items():
                     _upsert_field_value(conn, nid, f, v, scrape_sid)
                 if new_vals:
-                    _resolve_fields_conn(conn, nid, list(new_vals))
+                    # ניק חדש — אין "היסטוריה" (הוא נרשם ממילא כ-new ביומן הסריקה),
+                    # ובלעדי זה נוצר אירוע שקרי "פעיל → מורחק" לכל מורחק שנתגלה
+                    _resolve_fields_conn(conn, nid, list(new_vals), history=False)
+                if run_id:
+                    conn.execute(
+                        "INSERT INTO scan_changes (run_id, nick_id, forum, username, kind) "
+                        "VALUES (?,?,?,?,'new')", (run_id, nid, forum, username))
                 stats["added"] += 1
                 continue
 
@@ -1085,13 +1154,24 @@ def merge_scraped_users(forum, users, source_label="סריקה"):
             for f, v in changed.items():
                 _upsert_field_value(conn, nid, f, v, scrape_sid)
             _resolve_fields_conn(conn, nid, list(changed))
+            if run_id:
+                notable = [(run_id, nid, forum, username, "changed", f,
+                            str(old.get(f, "") or ""), str(v))
+                           for f, v in changed.items() if f in _HISTORY_FIELDS]
+                if notable:
+                    conn.executemany(
+                        "INSERT INTO scan_changes (run_id, nick_id, forum, username, kind, "
+                        "field_name, old_value, new_value) VALUES (?,?,?,?,?,?,?,?)", notable)
             stats["updated"] += 1
     return stats
 
 _NICK_FIELDS = ["forum","username","groups","reputation","real_name","full_name","phone","email",
                 "notes","private_notes","extra_info","address","status","join_date","post_count",
-                "avatar_url","nick_color","avatar_image","source","forum_uid","scraped_real_name",
-                "scraped_email","trust_level"]
+                "last_seen","avatar_url","nick_color","avatar_image","source","forum_uid",
+                "scraped_real_name","scraped_email","trust_level"]
+
+# שדות שמתועדים בציר הזמן (השאר — מוניטין/ספירת הודעות — משתנים כל הזמן)
+_HISTORY_FIELDS = {"status", "real_name", "full_name", "phone", "email", "address", "groups"}
 
 def create_nick(data):
     vals = [data.get(f, '') for f in _NICK_FIELDS]
@@ -1686,7 +1766,7 @@ def _winner_for(field_name, frows):
         return (eff, r["created_at"])
     return max(frows, key=score)["value"]
 
-def _resolve_fields_conn(conn, nick_id, field_names):
+def _resolve_fields_conn(conn, nick_id, field_names, history=True):
     """
     מכריע כמה שדות של ניק אחד על חיבור קיים, ומעדכן את ה-cache ב-UPDATE יחיד.
     UPDATE אחד במקום אחד-לשדה חוסך גם את שכתובי ה-FTS החוזרים (הטריגרים
@@ -1716,6 +1796,16 @@ def _resolve_fields_conn(conn, nick_id, field_names):
     changed = [f for f in fields if str(cur_row[f] or "") != str(winners[f] or "")]
     if not changed:
         return
+    # ציר זמן — רק לשדות משמעותיים (ראה _HISTORY_FIELDS)
+    if history:
+        # מילוי ראשוני של שדה כן נרשם ("(ריק) → 050…" הוא מידע אמיתי);
+        # רעש היצירה של ניק חדש נמנע בכך שהקורא מעביר history=False
+        hist = [(nick_id, f, str(cur_row[f] or ""), str(winners[f] or ""))
+                for f in changed if f in _HISTORY_FIELDS]
+        if hist:
+            conn.executemany(
+                "INSERT INTO field_history (nick_id, field_name, old_value, new_value) "
+                "VALUES (?,?,?,?)", hist)
     sets = ", ".join(f"{f}=?" for f in changed)
     conn.execute(
         f"UPDATE nicks SET {sets}, updated_at=datetime('now') WHERE id=?",
@@ -1765,6 +1855,226 @@ def _resolve_fields_bulk(conn, by_nick, progress_cb=None):
                          [winners[f] for f in changed] + [nid])
             updated += 1
     return updated
+
+# ── יומן סריקות ─────────────────────────────────────────────────────
+def start_scan_run(forum):
+    with get_connection() as conn:
+        return conn.execute("INSERT INTO scan_runs (forum) VALUES (?)", (forum,)).lastrowid
+
+def finish_scan_run(run_id, stats):
+    if not run_id:
+        return
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE scan_runs SET finished_at=datetime('now'), added=?, updated=?, "
+            "unchanged=?, failed_pages=? WHERE id=?",
+            (stats.get("added", 0), stats.get("updated", 0), stats.get("unchanged", 0),
+             stats.get("failed_pages", 0), run_id))
+
+def get_scan_runs(limit=30):
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT r.*, (SELECT COUNT(*) FROM scan_changes c WHERE c.run_id=r.id) AS changes
+            FROM scan_runs r ORDER BY r.id DESC LIMIT ?""", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+def get_scan_changes(run_id, limit=500):
+    with get_connection() as conn:
+        # ORDER BY id ולא kind — מיון לפי kind דחף את כל ה-'changed' לפני ה-'new',
+        # וברשימה ארוכה הניקים החדשים נחתכו לגמרי
+        rows = conn.execute(
+            "SELECT * FROM scan_changes WHERE run_id=? ORDER BY id LIMIT ?",
+            (run_id, limit)).fetchall()
+        return [dict(r) for r in rows]
+
+def get_field_history(nick_id, limit=100):
+    """ציר זמן לניק: מה השתנה, ממה למה ומתי."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT field_name, old_value, new_value, changed_at FROM field_history "
+            "WHERE nick_id=? ORDER BY id DESC LIMIT ?", (int(nick_id), limit)).fetchall()
+        return [dict(r) for r in rows]
+
+# ── הצעות זהות: אותו אדם בכמה פורומים ────────────────────────────────
+def _identity_groups_map(conn):
+    """{nick_id: group_key} לכל ניק שכבר מקושר — כדי לא להציע קישור קיים."""
+    parent = {}
+    def find(x):
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x])
+            x = parent[x]
+        return x
+    for a, b in conn.execute("SELECT nick_id_a, nick_id_b FROM nick_identities"):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+    return find
+
+def suggest_identities(limit=60):
+    """
+    מציע ניקים שנראים כאותו אדם: אותו טלפון / מייל / שם אמיתי / שם מלא,
+    בשני ניקים שונים שאינם מקושרים כבר ולא נדחו. מקובץ לפי הערך המשותף.
+    """
+    out = []
+    with get_connection() as conn:
+        find = _identity_groups_map(conn)
+        dismissed = {(a, b) for a, b in conn.execute(
+            "SELECT nick_id_a, nick_id_b FROM identity_dismissed")}
+        checks = [
+            ("phone", "טלפון זהה", _phone_norm_sql("phone")),
+            ("email", "מייל זהה", "lower(trim(email))"),
+            ("real_name", "שם אמיתי זהה", "trim(real_name)"),
+            ("full_name", "שם מלא זהה", "trim(full_name)"),
+        ]
+        for field, reason, expr in checks:
+            # הסינון "יותר מפורום אחד" נעשה ב-SQL: אחרת קבוצות לא-רלוונטיות היו
+            # אוכלות את ה-LIMIT, והדיאלוג היה נראה ריק אף שיש התאמות אמיתיות.
+            # אין LIMIT בשאילתה — עוצרים בפייתון כשנאספו מספיק הצעות (השאילתה זורמת).
+            cur = conn.execute(f"""
+                SELECT {expr} AS k, GROUP_CONCAT(id) AS ids, COUNT(*) AS c
+                FROM nicks
+                WHERE {field} IS NOT NULL AND trim({field}) != '' AND length(trim({field})) >= 3
+                GROUP BY k HAVING c > 1 AND c <= 12 AND COUNT(DISTINCT forum) > 1""")
+            for r in cur:
+                ids = sorted(int(i) for i in str(r["ids"]).split(","))
+                # דלג אם כולם כבר באותה קבוצת זהות
+                if len({find(i) for i in ids}) < 2:
+                    continue
+                # דלג רק אם כל הזוגות בקבוצה נדחו (חבר חדש = הצעה חדשה)
+                pairs = {(ids[i], ids[j]) for i in range(len(ids)) for j in range(i + 1, len(ids))}
+                if pairs <= dismissed:
+                    continue
+                members = [dict(m) for m in conn.execute(
+                    f"SELECT id, username, forum, real_name, full_name, phone, email FROM nicks "
+                    f"WHERE id IN ({','.join('?' * len(ids))})", ids)]
+                out.append({"reason": reason, "field": field,
+                            "value": str(r["k"]), "members": members})
+                if len(out) >= limit:
+                    return out
+    return out
+
+def dismiss_identity_suggestion(nick_ids):
+    """דוחה קבוצה — נשמרים כל הזוגות שבה, כדי שחבר חדש יפתח הצעה חדשה."""
+    ids = sorted(int(i) for i in (nick_ids or []))
+    if len(ids) < 2:
+        return
+    pairs = [(ids[i], ids[j]) for i in range(len(ids)) for j in range(i + 1, len(ids))]
+    with get_connection() as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO identity_dismissed (nick_id_a, nick_id_b) VALUES (?,?)", pairs)
+
+# ── פעולות מרובות ────────────────────────────────────────────────────
+MAX_IDENTITY_GROUP = 50
+
+def bulk_link_identities(nick_ids):
+    """
+    מקשר את כל הניקים שנבחרו לקבוצת זהות אחת — במעבר אחד.
+    (קריאה ל-add_identity לכל חבר בנתה מחדש את כל הקליקה בכל פעם — O(n³);
+    בחירה של מאות ניקים הייתה תוקעת את התוכנה לדקות.)
+    """
+    ids = sorted({int(i) for i in (nick_ids or [])})
+    if len(ids) < 2:
+        return 0
+    with get_connection() as conn:
+        members = set()
+        for i in ids:
+            members |= _identity_group(conn, i)
+        members = sorted(members)
+        if len(members) > MAX_IDENTITY_GROUP:
+            raise ValueError(
+                f"קבוצת זהות של {len(members)} ניקים נראית כטעות — "
+                f"המקסימום הוא {MAX_IDENTITY_GROUP}. בחר פחות ניקים.")
+        pairs = [(members[i], members[j])
+                 for i in range(len(members)) for j in range(i + 1, len(members))]
+        conn.executemany(
+            "INSERT OR IGNORE INTO nick_identities (nick_id_a, nick_id_b) VALUES (?,?)", pairs)
+    return len(members)
+
+def bulk_move_forum(nick_ids, forum):
+    """מעביר ניקים לפורום אחר (bulk_update_field חוסם forum במכוון)."""
+    ids = [int(i) for i in (nick_ids or [])]
+    forum = (forum or "").strip()
+    if not ids or not forum:
+        return 0
+    moved, skipped = 0, 0
+    with get_connection() as conn:
+        if not conn.execute("SELECT 1 FROM forums WHERE name=?", (forum,)).fetchone():
+            conn.execute("INSERT OR IGNORE INTO forums (name,color,url) VALUES (?,?,'')",
+                         (forum, "#8b90a0"))
+        # התנגשות שם בפורום היעד תיצור כפילות ש(forum,username) — סריקה עתידית
+        # תתאים רק לאחת מהן והשנייה תיוותר "יתומה". מדלגים ומדווחים.
+        taken = {r[0] for r in conn.execute(
+            "SELECT username FROM nicks WHERE forum=?", (forum,))}
+        movable = []
+        for chunk in _chunks(ids, 400):
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                    f"SELECT id, username, forum FROM nicks WHERE id IN ({ph})", list(chunk)):
+                if r["forum"] == forum:
+                    continue
+                if r["username"] in taken:
+                    skipped += 1
+                else:
+                    movable.append(r["id"])
+                    taken.add(r["username"])
+        for chunk in _chunks(movable, 400):
+            ph = ",".join("?" * len(chunk))
+            cur = conn.execute(
+                f"UPDATE nicks SET forum=?, updated_at=datetime('now') WHERE id IN ({ph})",
+                [forum] + list(chunk))
+            moved += cur.rowcount
+    return {"moved": moved, "skipped": skipped}
+
+def bulk_append_text(nick_ids, field, text):
+    """מוסיף טקסט לסוף שדה טקסט (הערות/הערות אישיות) בלי למחוק את הקיים."""
+    ids = [int(i) for i in (nick_ids or [])]
+    text = (text or "").strip()
+    if not ids or not text or field not in ("notes", "private_notes", "extra_info"):
+        return 0
+    n = 0
+    with get_connection() as conn:
+        for chunk in _chunks(ids, 400):
+            ph = ",".join("?" * len(chunk))
+            cur = conn.execute(
+                f"UPDATE nicks SET {field} = CASE WHEN {field} IS NULL OR {field}='' THEN ? "
+                f"ELSE {field} || char(10) || ? END, updated_at=datetime('now') "
+                f"WHERE id IN ({ph})", [text, text] + list(chunk))
+            n += cur.rowcount
+        # רישום תחת מקור "אני" כדי שהערך לא יידרס בהכרעה
+        for chunk in _chunks(ids, 400):
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(f"SELECT id, {field} FROM nicks WHERE id IN ({ph})", list(chunk)):
+                _upsert_field_value(conn, r["id"], field, r[field], 1)
+    return n
+
+# ── סטטיסטיקות ───────────────────────────────────────────────────────
+def get_stats():
+    """מבט-על: סה"כ, לפי פורום, מורחקים, עם מידע, ופעילות אחרונה."""
+    with get_connection() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM nicks").fetchone()[0]
+        by_forum = [dict(r) for r in conn.execute(f"""
+            SELECT n.forum,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN n.status='מורחק' THEN 1 ELSE 0 END) AS banned,
+                   SUM(CASE WHEN {_HAS_INFO_SQL} THEN 1 ELSE 0 END) AS with_info
+            FROM nicks n GROUP BY n.forum ORDER BY total DESC""")]
+        totals = {
+            "total": total,
+            "banned": conn.execute("SELECT COUNT(*) FROM nicks WHERE status='מורחק'").fetchone()[0],
+            "with_info": conn.execute(
+                f"SELECT COUNT(*) FROM nicks n WHERE {_HAS_INFO_SQL}").fetchone()[0],
+            "identities": conn.execute("SELECT COUNT(*) FROM nick_identities").fetchone()[0],
+            "contacts": conn.execute("SELECT COUNT(*) FROM nick_contacts").fetchone()[0],
+            "added_7d": conn.execute(
+                "SELECT COUNT(*) FROM nicks WHERE created_at >= datetime('now','-7 days')").fetchone()[0],
+            "updated_7d": conn.execute(
+                "SELECT COUNT(*) FROM nicks WHERE updated_at >= datetime('now','-7 days')").fetchone()[0],
+        }
+        top_groups = [dict(r) for r in conn.execute("""
+            SELECT groups AS name, COUNT(*) AS c FROM nicks
+            WHERE groups IS NOT NULL AND groups != '' GROUP BY groups
+            ORDER BY c DESC LIMIT 8""")]
+    return {"totals": totals, "by_forum": by_forum, "top_groups": top_groups}
 
 def record_field_value(nick_id, field_name, value, source_id):
     """רושם/מעדכן ערך של שדה ממקור מסוים, ואז מכריע מחדש מי מנצח."""
@@ -2071,7 +2381,7 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
                 recorded += 1
             # הכרעה אחת לכל הניק — UPDATE יחיד (ולא אחד לכל שדה)
             if changed_fields:
-                _resolve_fields_conn(conn, nid, changed_fields)
+                _resolve_fields_conn(conn, nid, changed_fields, history=(row is not None))
 
     # עדכן ספירות בלוג הייבוא (import_sources הישן, לתאימות)
     log_import_source(src_name, import_notes, trust, imported, recorded)

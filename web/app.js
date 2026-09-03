@@ -39,6 +39,7 @@ const COLS = [
   { key: 'email',         label: 'מייל',            width: 155, render: renderEmail },
   { key: 'address',       label: 'כתובת',           width: 150 },
   { key: 'status',        label: 'סטטוס',           width: 85,  render: renderStatus },
+  { key: 'last_seen',     label: 'נראה לאחרונה',    width: 110 },
   { key: 'updated_at',    label: 'עודכן',           width: 130, render: renderUpdated },
   { key: 'extra_info',    label: 'פרטים נוספים',    width: 170 },
   { key: 'notes',         label: 'הערות',           width: 180, render: renderNotes },
@@ -1453,6 +1454,7 @@ async function openNickDialog(nickId = null) {
 
     ${conflictsHtml}
     ${shelvedHtml}
+    ${nickId ? '<div id="nick-history"></div>' : ''}
   `;
 
   openModal(title, html, [
@@ -1463,6 +1465,25 @@ async function openNickDialog(nickId = null) {
   // wire up contacts
   if (nick) wireContactsSection(nick);
   if (nick) wireIdentitiesSection(nick);
+  if (nickId) loadNickHistory(nickId);
+}
+
+// ציר זמן: מה השתנה בניק הזה, ממה למה ומתי
+async function loadNickHistory(nickId) {
+  const box = document.getElementById('nick-history');
+  if (!box) return;
+  const hist = await api('get_field_history', nickId, 60) || [];
+  if (!hist.length) return;
+  const label = k => (COLS.find(c => c.key === k)?.label) || k;
+  box.innerHTML = `
+    <div class="section-hdr">🕒 היסטוריית שינויים</div>
+    ${hist.map(h => `
+      <div style="display:flex;gap:8px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--border-soft)">
+        <span style="color:var(--subtext);min-width:92px">${esc(relativeTime(h.changed_at))}</span>
+        <b style="min-width:80px">${esc(label(h.field_name))}</b>
+        <span style="flex:1"><span style="color:var(--subtext)">${esc(h.old_value || '(ריק)')}</span>
+          → <b>${esc(h.new_value || '(ריק)')}</b></span>
+      </div>`).join('')}`;
 }
 
 function contactItemHtml(ct, nickId) {
@@ -2254,6 +2275,69 @@ async function toggleFilterBar() {
   bar.style.display = 'flex';
   const rows = document.getElementById('filter-rows');
   if (rows && !rows.children.length) addFilterRow();
+  refreshSavedFilters();
+}
+
+// ── סינונים שמורים ────────────────────────────────────────────────────
+async function refreshSavedFilters() {
+  const box = document.getElementById('saved-filters');
+  if (!box) return;
+  const items = await api('get_saved_filters') || [];
+  box.innerHTML = items.map((f, i) => `
+    <span class="saved-filter" style="background:var(--card2);border-radius:999px;padding:3px 10px;font-size:12px;cursor:pointer"
+          onclick="applySavedFilter(${i})" title="החל סינון">${esc(f.name)}
+      <b style="color:var(--subtext);margin-right:4px" onclick="event.stopPropagation();removeSavedFilter(${i})">✕</b>
+    </span>`).join('');
+  _savedFilters = items;
+}
+let _savedFilters = [];
+
+async function applySavedFilter(i) {
+  const f = _savedFilters[i];
+  if (!f) return;
+  const rows = document.getElementById('filter-rows');
+  rows.innerHTML = '';
+  for (const c of f.conditions) {
+    addFilterRow();
+    const row = rows.lastElementChild;
+    row.querySelector('.flt-field').value = c.field;
+    row.querySelector('.flt-op').value = c.op;
+    row.querySelector('.flt-value').value = c.value || '';
+    onFilterOpChange(row.querySelector('.flt-op'));
+  }
+  await applyFieldFilter();
+}
+
+async function saveCurrentFilter() {
+  const conditions = [...document.querySelectorAll('#filter-rows .filter-row')].map(r => ({
+    field: r.querySelector('.flt-field').value,
+    op: r.querySelector('.flt-op').value,
+    value: r.querySelector('.flt-value').value.trim(),
+  })).filter(c => c.op === 'empty' || c.op === 'not_empty' || c.value);
+  if (!conditions.length) { toast('אין תנאים לשמור', 'error'); return; }
+  // דיאלוג משלנו ולא prompt() — הנייטיב מציג כפתורים באנגלית ואינו אמין ב-WebView2
+  openModal('💾 שמירת סינון', `
+    <label class="form-label">שם לסינון</label>
+    <input id="flt-name" class="form-input" style="width:100%" placeholder="למשל: בני ברק בלי טלפון">
+  `, [
+    { label: 'שמור', cls: 'btn-primary', action: async () => {
+      const name = document.getElementById('flt-name').value.trim();
+      if (!name) { toast('הזן שם', 'error'); return; }
+      closeModal();
+      await api('save_filter', name, conditions);
+      await refreshSavedFilters();
+      toast('הסינון נשמר ✓', 'success');
+    }},
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
+  setTimeout(() => document.getElementById('flt-name')?.focus(), 60);
+}
+
+async function removeSavedFilter(i) {
+  const f = _savedFilters[i];
+  if (!f) return;
+  await api('delete_saved_filter', f.name);
+  await refreshSavedFilters();
 }
 
 function _fieldOptions() {
@@ -2369,6 +2453,68 @@ async function bulkEditSelected() {
       toast(`${r.count} ניקים עודכנו ✓`, 'success');
       if (_fieldFilterActive) await applyFieldFilter();
       else await loadNicks(document.getElementById('search-input').value);
+    }},
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
+}
+
+// ── פעולות מרובות נוספות ─────────────────────────────────────────────
+async function bulkLinkSelected() {
+  const ids = [...S.multiSelected];
+  if (ids.length < 2) { toast('בחר לפחות שני ניקים', 'error'); return; }
+  if (ids.length > 50) { toast('יותר מדי ניקים לקישור כאדם אחד (מקסימום 50)', 'error'); return; }
+  if (!confirm(`לקשר ${ids.length} ניקים כזהות אחת (אותו אדם)?`)) return;
+  const r = await api('bulk_link_identities', ids);
+  if (!r?.ok) { toast('הקישור נכשל: ' + (r?.error || ''), 'error'); return; }
+  await loadNicks(document.getElementById('search-input').value);
+  toast(`${r.count} ניקים קושרו כזהות אחת ✓`, 'success');
+}
+
+async function bulkMoveForum() {
+  const ids = [...S.multiSelected];
+  if (!ids.length) { toast('לא נבחרו ניקים', 'error'); return; }
+  const opts = S.forums.map(f => `<option value="${esc(f.name)}">${esc(f.name)}</option>`).join('');
+  openModal('🏛️ העברה לפורום אחר', `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
+      ${ids.length} ניקים יועברו לפורום שתבחר.
+    </p>
+    <select id="bulk-forum" class="form-select" style="width:100%">${opts}</select>
+  `, [
+    { label: 'העבר', cls: 'btn-primary', action: async () => {
+      const forum = document.getElementById('bulk-forum').value;
+      const r = await api('bulk_move_forum', ids, forum);
+      closeModal();
+      if (!r?.ok) { toast('ההעברה נכשלה: ' + (r?.error || ''), 'error'); return; }
+      await loadNicks(document.getElementById('search-input').value);
+      const skip = r.skipped ? ` · ${r.skipped} דולגו (כבר קיים שם כזה בפורום)` : '';
+      toast(`${r.count} ניקים הועברו ל"${forum}" ✓${skip}`, r.skipped ? 'info' : 'success');
+    }},
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
+}
+
+async function bulkAddNote() {
+  const ids = [...S.multiSelected];
+  if (!ids.length) { toast('לא נבחרו ניקים', 'error'); return; }
+  openModal('📝 הוספת הערה למרובים', `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
+      הטקסט <b>יתווסף</b> בשורה חדשה להערות של ${ids.length} הניקים — בלי למחוק את הקיים.
+    </p>
+    <select id="bulk-note-field" class="form-select" style="width:100%;margin-bottom:8px">
+      <option value="notes">הערות (מסונכרנות)</option>
+      <option value="private_notes">🔒 הערות אישיות</option>
+    </select>
+    <textarea id="bulk-note-text" class="form-textarea" style="width:100%" placeholder="למשל: נבדק ✓"></textarea>
+  `, [
+    { label: 'הוסף', cls: 'btn-primary', action: async () => {
+      const field = document.getElementById('bulk-note-field').value;
+      const text = document.getElementById('bulk-note-text').value.trim();
+      if (!text) { toast('הזן טקסט', 'error'); return; }
+      const r = await api('bulk_append_text', ids, field, text);
+      closeModal();
+      if (!r?.ok) { toast('ההוספה נכשלה: ' + (r?.error || ''), 'error'); return; }
+      await loadNicks(document.getElementById('search-input').value);
+      toast(`נוסף ל-${r.count} ניקים ✓`, 'success');
     }},
     { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
   ], 'modal-sm');
@@ -2597,6 +2743,171 @@ async function openSyncMgr() {
     }},
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
+}
+
+// ══ הצעות זהות: "מי זה אותו אדם" ══════════════════════════════════════
+async function openIdentitySuggestions() {
+  openModal('🔗 הצעות זהות', '<div style="padding:24px;text-align:center;color:var(--subtext)">מחפש התאמות…</div>',
+            [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg',
+            { id: 'id-suggestions' });
+  const r = await api('suggest_identities', 60);
+  // ייתכן שהמשתמש סגר/החליף חלון בזמן החיפוש — אל תכתוב לתוך חלון אחר
+  if (_currentModalId !== 'id-suggestions') return;
+  const body = document.querySelector('#modal-overlay .modal-body');
+  if (!body) return;
+  if (!r?.ok) { body.innerHTML = `<div style="padding:20px;color:var(--danger)">${esc(r?.error || 'שגיאה')}</div>`; return; }
+  _idSuggestions = r.groups || [];
+  renderIdentitySuggestions();
+}
+
+let _idSuggestions = [];
+
+function renderIdentitySuggestions() {
+  if (_currentModalId !== 'id-suggestions') return;
+  const body = document.querySelector('#modal-overlay .modal-body');
+  if (!body) return;
+  if (!_idSuggestions.length) {
+    body.innerHTML = `<div style="text-align:center;padding:30px;color:var(--subtext)">
+      <div style="font-size:44px;margin-bottom:10px">✓</div>
+      אין הצעות חדשות — כל ההתאמות שנמצאו כבר מקושרות או נדחו</div>`;
+    return;
+  }
+  body.innerHTML = `
+    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
+      ניקים בפורומים שונים שנראים כאותו אדם (אותו טלפון / מייל / שם). קישור יאחד אותם לזהות אחת.
+    </p>` + _idSuggestions.map((g, i) => `
+    <div class="conflict-item" data-sug="${i}" style="display:block">
+      <div style="font-size:12px;color:var(--subtext);margin-bottom:6px">
+        ${esc(g.reason)}: <b dir="auto" style="color:var(--accent-2)">${esc(g.value)}</b>
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+        ${g.members.map(m => `
+          <span style="background:var(--card2);border-radius:999px;padding:4px 11px;font-size:12px">
+            <b>${esc(m.username)}</b>
+            <span style="color:${S.forumColors[m.forum] || '#8b90a0'}"> ${esc(m.forum)}</span>
+            ${m.real_name ? `<span style="color:var(--subtext)"> · ${esc(m.real_name)}</span>` : ''}
+          </span>`).join('')}
+      </div>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm btn-primary" onclick="linkSuggestion(${i})">🔗 קשר כזהות אחת</button>
+        <button class="btn btn-sm btn-ghost" onclick="dismissSuggestion(${i})">✕ לא אותו אדם</button>
+      </div>
+    </div>`).join('');
+}
+
+// הסרה לפי זהות האובייקט ולא לפי אינדקס — לחיצות מהירות ברצף הסיטו אינדקסים
+function _dropSuggestion(g) {
+  const idx = _idSuggestions.indexOf(g);
+  if (idx >= 0) _idSuggestions.splice(idx, 1);
+  renderIdentitySuggestions();
+}
+
+async function linkSuggestion(i) {
+  const g = _idSuggestions[i];
+  if (!g || g._busy) return;
+  g._busy = true;
+  const r = await api('bulk_link_identities', g.members.map(m => m.id));
+  g._busy = false;
+  if (!r?.ok) { toast('הקישור נכשל: ' + (r?.error || ''), 'error'); return; }
+  _dropSuggestion(g);
+  await loadNicks(document.getElementById('search-input').value);
+  toast(`${r.count} ניקים קושרו כזהות אחת ✓`, 'success');
+}
+
+async function dismissSuggestion(i) {
+  const g = _idSuggestions[i];
+  if (!g || g._busy) return;
+  g._busy = true;
+  await api('dismiss_identity_suggestion', g.members.map(m => m.id));
+  _dropSuggestion(g);
+}
+
+// ══ סטטיסטיקות ════════════════════════════════════════════════════════
+async function openStats() {
+  const s = await api('get_stats');
+  if (!s?.ok) { toast('לא ניתן לחשב סטטיסטיקות: ' + (s?.error || ''), 'error'); return; }
+  const t = s.totals || {};
+  const card = (label, val, color) => `
+    <div style="background:var(--card);border:1px solid var(--border-soft);border-radius:12px;padding:12px 14px;flex:1;min-width:120px">
+      <div style="font-size:22px;font-weight:800;color:${color || 'var(--text)'}">${(val || 0).toLocaleString()}</div>
+      <div style="font-size:11.5px;color:var(--subtext)">${label}</div>
+    </div>`;
+  const maxF = Math.max(1, ...(s.by_forum || []).map(f => f.total));
+  const bars = (s.by_forum || []).map(f => `
+    <div style="margin-bottom:8px">
+      <div style="display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:3px">
+        <b>${esc(f.forum)}</b>
+        <span style="color:var(--subtext)">${f.total.toLocaleString()} · עם מידע ${f.with_info || 0}${f.banned ? ` · מורחקים ${f.banned}` : ''}</span>
+      </div>
+      <div style="height:7px;background:var(--card2);border-radius:99px;overflow:hidden">
+        <div style="height:100%;width:${Math.round(f.total / maxF * 100)}%;background:${S.forumColors[f.forum] || 'var(--accent)'}"></div>
+      </div>
+    </div>`).join('');
+  openModal('📊 סטטיסטיקות', `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+      ${card('סה"כ ניקים', t.total)}
+      ${card('עם מידע', t.with_info, 'var(--success)')}
+      ${card('מורחקים', t.banned, 'var(--danger)')}
+      ${card('קישורי זהות', t.identities, 'var(--violet)')}
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+      ${card('אנשי קשר', t.contacts)}
+      ${card('נוספו בשבוע', t.added_7d)}
+      ${card('עודכנו בשבוע', t.updated_7d)}
+    </div>
+    <div class="section-hdr">לפי פורום</div>
+    ${bars || '<div style="color:var(--subtext);font-size:13px">אין נתונים</div>'}
+    ${(s.top_groups || []).length ? `<div class="section-hdr">קבוצות נפוצות</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${s.top_groups.map(g =>
+        `<span style="background:var(--card2);border-radius:999px;padding:4px 11px;font-size:12px">${esc(g.name)} <b>${g.c}</b></span>`).join('')}</div>` : ''}
+  `, [{ label: 'סגור', cls: 'btn-primary', action: closeModal }], 'modal-lg');
+}
+
+// ══ מה השתנה בסריקה ═══════════════════════════════════════════════════
+async function openScanRuns() {
+  const runs = await api('get_scan_runs', 30) || [];
+  const rows = runs.length ? runs.map(r => `
+    <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-soft);font-size:13px">
+      <div style="flex:1;min-width:0">
+        <b>${esc(r.forum)}</b>
+        <span style="color:var(--subtext)"> · ${esc(relativeTime(r.started_at))}</span>
+        <div style="color:var(--subtext);font-size:12px">
+          נוספו ${r.added} · עודכנו ${r.updated}${r.failed_pages ? ` · ${r.failed_pages} עמודים נכשלו` : ''}
+        </div>
+      </div>
+      ${r.changes ? `<button class="btn btn-sm btn-ghost" onclick="openScanChanges(${r.id})">${r.changes} שינויים</button>`
+                  : '<span style="color:var(--subtext);font-size:12px">ללא שינוי</span>'}
+    </div>`).join('')
+    : '<div style="padding:24px;text-align:center;color:var(--subtext)">עדיין לא בוצעו סריקות</div>';
+  openModal('🕒 יומן סריקות', rows, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg');
+}
+
+async function openScanChanges(runId) {
+  const LIMIT = 500;
+  const ch = await api('get_scan_changes', runId, LIMIT) || [];
+  const truncated = ch.length >= LIMIT;
+  const label = k => (COLS.find(c => c.key === k)?.label) || k;
+  const isNew = c => c.kind === 'new';
+  const news = ch.filter(isNew), changes = ch.filter(c => !isNew(c));
+  const bans = changes.filter(c => c.field_name === 'status' && c.new_value === 'מורחק');
+  const html = `
+    ${truncated ? `<div style="padding:8px 12px;background:var(--card2);border-radius:8px;margin-bottom:10px;font-size:12.5px;color:var(--subtext)">
+      מוצגים ${LIMIT} השינויים הראשונים בלבד</div>` : ''}
+    ${bans.length ? `<div style="padding:10px 12px;background:rgba(244,84,76,.10);border-radius:8px;margin-bottom:12px;font-size:13px">
+      🚫 <b>${bans.length}</b> ניקים סומנו כמורחקים בסריקה זו</div>` : ''}
+    ${news.length ? `<div class="section-hdr">ניקים חדשים (${news.length})</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">${news.slice(0, 200).map(c =>
+        `<span style="background:var(--card2);border-radius:999px;padding:3px 10px;font-size:12px">${esc(c.username)}</span>`).join('')}</div>` : ''}
+    ${changes.length ? `<div class="section-hdr">שינויים (${changes.length})</div>
+      ${changes.slice(0, 300).map(c => `
+        <div style="display:flex;gap:8px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--border-soft)">
+          <b style="min-width:110px">${esc(c.username)}</b>
+          <span style="color:var(--subtext);min-width:80px">${esc(label(c.field_name))}</span>
+          <span style="flex:1"><span style="color:var(--subtext)">${esc(c.old_value || '(ריק)')}</span>
+            → <b>${esc(c.new_value || '(ריק)')}</b></span>
+        </div>`).join('')}` : ''}
+    ${!ch.length ? '<div style="padding:24px;text-align:center;color:var(--subtext)">לא נמצאו שינויים</div>' : ''}`;
+  openModal('📋 מה השתנה בסריקה', html, [{ label: 'סגור', cls: 'btn-primary', action: closeModal }], 'modal-lg');
 }
 
 // ══ BACKUP / RESTORE (קובץ DB שלם) ═══════════════════════════════════
@@ -3556,8 +3867,12 @@ function startScrapeMonitor() {
         let extra = '';
         if (partial) extra += ` · ${p.failed_pages} עמודים נכשלו`;
         if (p.skipped && p.skipped.length) extra += ` · דולגו ${p.skipped.length} פורומים`;
+        // בסריקת "הכל" יש רשומת סריקה לכל פורום — מפנים ליומן ולא לרשומה האחרונה
+        const act = p.all_mode ? { actionLabel: '📋 מה השתנה', onAction: openScanRuns, ms: 8000 }
+                  : (p.run_id ? { actionLabel: '📋 מה השתנה',
+                                  onAction: () => openScanChanges(p.run_id), ms: 8000 } : {});
         toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`,
-              partial ? 'error' : 'success');
+              partial ? 'error' : 'success', act);
         // אילו פורומים דולגו ולמה — רק בסריקת "הכל" (ב"סנכרן נבחרים" אלה שמות ניקים)
         if (p.all_mode && p.skipped && p.skipped.length && !p.cancelled && !isModalOpen()) {
           showSkippedForums(p.skipped);

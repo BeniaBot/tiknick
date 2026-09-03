@@ -30,7 +30,7 @@ _scrape_state = {
     "running": False, "done": False, "error": None,
     "page": 0, "total_pages": 0,
     "added": 0, "updated": 0, "unchanged": 0, "failed_pages": 0,
-    "forum": None, "cancelled": False,
+    "forum": None, "cancelled": False, "run_id": None,
     "all_mode": False, "selected_mode": False,
     "forum_index": 0, "forum_total": 0, "skipped": [],
 }
@@ -66,7 +66,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.4"
+APP_VERSION = "0.8.5"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -231,6 +231,76 @@ class API:
             logging.exception("delete_nicks failed")
             return {"ok": False, "error": str(e)}
 
+    # ── תובנות: ציר זמן, יומן סריקות, הצעות זהות, סטטיסטיקות ────────
+    def get_field_history(self, nick_id, limit=100):
+        return db.get_field_history(int(nick_id), int(limit))
+
+    def get_scan_runs(self, limit=30):
+        return db.get_scan_runs(int(limit))
+
+    def get_scan_changes(self, run_id, limit=500):
+        return db.get_scan_changes(int(run_id), int(limit))
+
+    def suggest_identities(self, limit=60):
+        try:
+            return {"ok": True, "groups": db.suggest_identities(int(limit))}
+        except Exception as e:
+            logging.exception("suggest_identities failed")
+            return {"ok": False, "error": str(e)}
+
+    def dismiss_identity_suggestion(self, nick_ids):
+        db.dismiss_identity_suggestion(nick_ids or [])
+        return {"ok": True}
+
+    def get_stats(self):
+        try:
+            return {"ok": True, **db.get_stats()}
+        except Exception as e:
+            logging.exception("get_stats failed")
+            return {"ok": False, "error": str(e)}
+
+    # ── פעולות מרובות ──────────────────────────────────────────────
+    def bulk_link_identities(self, nick_ids):
+        try:
+            return {"ok": True, "count": db.bulk_link_identities(nick_ids or [])}
+        except Exception as e:
+            logging.exception("bulk_link_identities failed")
+            return {"ok": False, "error": str(e)}
+
+    def bulk_move_forum(self, nick_ids, forum):
+        try:
+            r = db.bulk_move_forum(nick_ids or [], forum)
+            return {"ok": True, "count": r["moved"], "skipped": r["skipped"]}
+        except Exception as e:
+            logging.exception("bulk_move_forum failed")
+            return {"ok": False, "error": str(e)}
+
+    def bulk_append_text(self, nick_ids, field, text):
+        try:
+            return {"ok": True, "count": db.bulk_append_text(nick_ids or [], field, text)}
+        except Exception as e:
+            logging.exception("bulk_append_text failed")
+            return {"ok": False, "error": str(e)}
+
+    # ── סינונים שמורים ─────────────────────────────────────────────
+    def get_saved_filters(self):
+        try:
+            return json.loads(db.get_setting("saved_filters", "[]")) or []
+        except Exception:
+            return []
+
+    def save_filter(self, name, conditions):
+        items = [f for f in self.get_saved_filters() if f.get("name") != name]
+        items.append({"name": name, "conditions": conditions or []})
+        # [-30:] ולא [:30] — התקרה צריכה להשליך את הישן, לא את מה שנשמר עכשיו
+        db.set_setting("saved_filters", json.dumps(items[-30:], ensure_ascii=False))
+        return {"ok": True}
+
+    def delete_saved_filter(self, name):
+        items = [f for f in self.get_saved_filters() if f.get("name") != name]
+        db.set_setting("saved_filters", json.dumps(items, ensure_ascii=False))
+        return {"ok": True}
+
     # ── סל מחזור ───────────────────────────────────────────────────
     def get_trash(self):
         return db.list_trash()
@@ -357,7 +427,7 @@ class API:
             "running": True, "done": False, "error": None,
             "page": 0, "total_pages": 0,
             "added": 0, "updated": 0, "unchanged": 0,
-            "forum": forum_name, "cancelled": False,
+            "forum": forum_name, "cancelled": False, "run_id": None,
             # אפס מצב רב-פורומי שנותר מ'סרוק הכל'/'סנכרן נבחרים' קודמים
             "all_mode": False, "selected_mode": False,
             "forum_index": 0, "forum_total": 0, "skipped": [],
@@ -376,14 +446,25 @@ class API:
         def _run():
             try:
                 mp = int(max_pages) if max_pages else None
-                scraper.scrape_forum(
-                    forum_name, forum_url, db,
-                    cookie=cookie or None,
-                    progress_cb=_progress,
-                    cancel_flag=_scrape_cancel,
-                    max_pages=mp,
-                    platform=platform,
-                )
+                run_id = db.start_scan_run(forum_name)
+                _scrape_state["run_id"] = run_id
+                try:
+                    stats = scraper.scrape_forum(
+                        forum_name, forum_url, db,
+                        cookie=cookie or None,
+                        progress_cb=_progress,
+                        cancel_flag=_scrape_cancel,
+                        max_pages=mp,
+                        platform=platform,
+                        run_id=run_id,
+                    )
+                finally:
+                    # תמיד סוגרים את רשומת הסריקה — גם בביטול או בשגיאה
+                    db.finish_scan_run(run_id, {
+                        "added": _scrape_state.get("added", 0),
+                        "updated": _scrape_state.get("updated", 0),
+                        "unchanged": _scrape_state.get("unchanged", 0),
+                        "failed_pages": _scrape_state.get("failed_pages", 0)})
                 _scrape_state["cancelled"] = _scrape_cancel.is_set()
                 if not _scrape_state["cancelled"]:
                     import datetime as _dt
@@ -421,7 +502,7 @@ class API:
             "page": 0, "total_pages": 0,
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": None, "cancelled": False,
-            "all_mode": True, "selected_mode": False,   # אפס מצב מ'סנכרן נבחרים' קודם
+            "all_mode": True, "selected_mode": False, "run_id": None,   # אפס מצב מ'סנכרן נבחרים' קודם
             "forum_index": 0, "forum_total": len(forums),
             "skipped": [], "failed_pages": 0,
         })
@@ -454,15 +535,23 @@ class API:
                     # אין להעביר עוגיית התחברות של פורום אחד לכל שאר הפורומים.
                     fcookie = db.get_cookie_for_url(f["url"]) or None
                     mp = int(max_pages) if max_pages else None
-                    stats = scraper.scrape_forum(
-                        f["name"], f["url"], db,
-                        cookie=fcookie,
-                        progress_cb=_progress,
-                        cancel_flag=_scrape_cancel,
-                        skip_flag=_scrape_skip,
-                        max_pages=mp,
-                        platform=f.get("platform") or "nodebb",
-                    )
+                    run_id = db.start_scan_run(f["name"])
+                    _scrape_state["run_id"] = run_id
+                    try:
+                        stats = scraper.scrape_forum(
+                            f["name"], f["url"], db,
+                            cookie=fcookie,
+                            progress_cb=_progress,
+                            cancel_flag=_scrape_cancel,
+                            skip_flag=_scrape_skip,
+                            max_pages=mp,
+                            platform=f.get("platform") or "nodebb",
+                            run_id=run_id,
+                        )
+                    except Exception:
+                        db.finish_scan_run(run_id, {})   # פורום שנכשל — הרשומה נסגרת
+                        raise
+                    db.finish_scan_run(run_id, stats or {})
                     base["added"]   += stats.get("added", 0)
                     base["updated"] += stats.get("updated", 0)
                     base["failed_pages"] += stats.get("failed_pages", 0)
@@ -514,7 +603,7 @@ class API:
             "page": 0, "total_pages": len(ids),
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": None, "cancelled": False,
-            "all_mode": False, "selected_mode": True,
+            "all_mode": False, "selected_mode": True, "run_id": None,
             "forum_index": 0, "forum_total": 0, "skipped": [], "failed_pages": 0,
         })
 

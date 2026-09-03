@@ -106,6 +106,22 @@ WAL + foreign_keys ON. אינדקסים על username/forum/updated_at/trust_lev
 - ערכות: dark (ברירת מחדל, פחם חם) / light (קרם) / system; 8 מבטאים (ברירת מחדל amber); צפיפות compact/normal/cozy — הכול CSS variables על `data-*` attributes, נשמר ב-settings.
 - `user-select:none` גלובלי, film-grain overlay, אנימציות spring.
 
+## מה נוסף ב-0.8.5 (2026-09-03) — ההצעות מניתוח הפערים
+
+**ליבת המוצר — "מי זה מי":**
+- **הצעות זהות אוטומטיות** (`suggest_identities`): GROUP BY על טלפון מנורמל / מייל / real_name / full_name (לא self-join — O(n) ולא O(n²)); מדלג על קבוצות שכולן כבר מקושרות (union-find דרך `_identity_groups_map`), על קבוצות באותו פורום בלבד, ועל זוגות שנדחו (`identity_dismissed`). UI: "🔗 הצעות זהות" עם קישור/דחייה בלחיצה.
+- **פעולות מרובות**: `bulk_link_identities`, `bulk_move_forum` (bulk_update_field חוסם forum במכוון), `bulk_append_text` (מוסיף שורה להערות במקום לדרוס, ורושם תחת מקור "אני").
+
+**תובנות:**
+- **`field_history`** — טבלה חדשה; הרישום נעשה ב-`_resolve_fields_conn` (choke point יחיד לכל שינוי ערך מנצח), רק ל-`_HISTORY_FIELDS` (status/real_name/full_name/phone/email/address/groups — לא מוניטין/post_count שמשתנים כל הזמן). `_resolve_fields_bulk` **לא** רושם היסטוריה (פעולות מקור נוגעות במאות אלפי שורות). מוצג כציר זמן בדיאלוג הניק.
+- **`scan_runs` + `scan_changes`** — `merge_scraped_users(..., run_id)` רושם ניקים חדשים ושינויים משמעותיים; `start_scan_run`/`finish_scan_run` ב-main. UI: "🕒 יומן סריקות" + toast עם "📋 מה השתנה" אחרי סריקה, כולל הדגשת הרחקות.
+- **`get_stats`** — סה"כ/לפי פורום/מורחקים/עם מידע/זהויות/7 ימים אחרונים + קבוצות נפוצות. UI: "📊 סטטיסטיקות".
+
+**חיפוש ושדות:**
+- **חיפוש סלחני**: FTS הוא prefix-only ולכן "כהן" לא מצא "משהכהן". `_search_where(..., fuzzy=True)` מוסיף LIKE %term% — **רק** כשהחיפוש הרגיל החזיר פחות מ-5 תוצאות (סריקה מלאה יקרה).
+- **`last_seen`** כשדה אמיתי (עמודה, סינון, ייצוא) — ממופה מ-`lastonline` ב-NodeBB ומ-`last_seen_at` ב-Discourse; קודם היה קבור כטקסט בתוך extra_info.
+- **סינונים שמורים** (`saved_filters` ב-settings כ-JSON) — שמירה בשם והחלה בלחיצה מסרגל הסינון.
+
 ## שני באגים שבנימין דיווח (0.8.4) — שורש וסטטוס
 
 1. **"שני תהליכים במקביל — Chazonishnik נעלם כשהפעלתי Stinknik"**: שלושת הבאנרים הצפים היו ממוקמים בדיוק באותו מקום (`bottom:16px;right:16px`), כך שהשני צייר על הראשון. **תוקן**: כולם בתוך `#bg-tasks` (flex column) ונערמים. שים לב שהמוניטורים עצמם (`_chzPoll`/`_stinkPoll`/`_scrapePoll`) תמיד היו עצמאיים — זו הייתה בעיה ויזואלית בלבד, והניתוח כן רץ ברקע.

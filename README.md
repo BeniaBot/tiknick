@@ -5,7 +5,7 @@
 **תוכנת דסקטופ בעברית לניהול ומעקב אחר ניקים (שמות משתמש) בפורומים.**
 כל המידע נשמר מקומית במחשב שלך — פרטיות מלאה.
 
-[![Version](https://img.shields.io/badge/גרסה-0.8.4-f59e0b?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
+[![Version](https://img.shields.io/badge/גרסה-0.8.5-f59e0b?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
 [![Platform](https://img.shields.io/badge/פלטפורמה-Windows%2010%2F11-blue?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 
@@ -30,6 +30,12 @@
 
 ### 🔎 תצוגת משתמש מאוחדת
 הקלדת שם מציגה תצוגה מרוכזת של כל המידע על אותו אדם — כולל מכל הזהויות המקושרות אליו בפורומים השונים.
+
+### 🔗 הצעות זהות אוטומטיות
+התוכנה מוצאת בעצמה ניקים בפורומים שונים שנראים כאותו אדם (אותו טלפון / מייל / שם) ומציעה לקשר אותם בלחיצה.
+
+### 📊 תובנות
+לוח סטטיסטיקות (לפי פורום, מורחקים, עם מידע), יומן סריקות עם דוח **"מה השתנה"** (ניקים חדשים, הרחקות, שינויי שם), וציר זמן לכל ניק.
 
 ### 📖 Chazonishnik
 ניתוח מעמיק של פעילות משתמש בפורום: פוסטים, לייקים, שעות וימי פעילות, מעריצים מובילים ועוד — בדוח אינטראקטיבי עם גרפים (עובד גם אופליין). אפשר להגביל את מספר הפוסטים. *(קרדיט: cfopuser)*
