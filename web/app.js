@@ -499,6 +499,7 @@ async function loadNicks(search = '') {
   const myToken = ++S.loadToken;
   S.currentSearch = search;
   S.multiSelected.clear();
+  S.selectedId = null;      // אחרת "ערוך"/"מחק" פעלו על ניק שכבר לא ברשימה
   setStatus('טוען…');   // משוב מיידי — במאגר גדול הטעינה נמשכת שניות
   // תמונות פרופיל עלולות להשתנות אחרי סריקה/ייבוא — מטמון טרי לכל טעינה
   S.avatarCache.clear();
@@ -588,7 +589,7 @@ function buildNickRow(n) {
   };
   tr.appendChild(tdSel);
 
-  const hiddenCols = hiddenColsSet();
+  const hiddenCols = _hiddenColsCache || hiddenColsSet();
   const conflictFields = n.conflict_fields ? String(n.conflict_fields).split(',') : [];
   COLS.forEach(col => {
     if (hiddenCols.has(col.key)) return;
@@ -621,6 +622,16 @@ function buildNickRow(n) {
 function visibleColCount() {
   const hidden = hiddenColsSet();
   return 1 + COLS.filter(c => !hidden.has(c.key)).length; // +1 = checkbox column
+}
+
+// אחרי חיפוש/סינון/מיון התוצאות שונות לגמרי — גלילה שנשארה עמוק בפנים
+// מציגה טבלה ריקה (החלון הווירטואלי מחשב שורות שכבר לא קיימות).
+function resetScroll() {
+  const wrap = document.getElementById('table-wrap');
+  if (wrap) wrap.scrollTop = 0;
+  const cw = document.getElementById('cards-wrap');
+  if (cw) cw.scrollTop = 0;
+  S.cardsRendered = Math.min(S.cardsChunk, S.nicks.length);
 }
 
 function renderTable() {
@@ -692,6 +703,7 @@ function renderTableWindow() {
 
   S.vRange = { start, end };
   const cols = visibleColCount();
+  _hiddenColsCache = hiddenColsSet();   // פעם אחת לחלון, לא פעם לכל שורה
 
   tbody.innerHTML = '';
 
@@ -1281,8 +1293,12 @@ async function copyMergedProfile(p) {
 // ══ STATS ═════════════════════════════════════════════════════════════
 function updateStats() {
   document.getElementById('stat-total').textContent = S.total || S.nicks.length;
-  document.getElementById('stat-info').textContent  =
-    S.nicks.filter(n => n.has_info).length;
+  // has_info מגיע רק ממסלול get_nicks. filter_nicks_multi לא מחשב אותו, ואז
+  // כל השורות נראו "בלי מידע" והמונה הראה 0 על סינון שהחזיר מאות תוצאות.
+  const el = document.getElementById('stat-info');
+  const known = S.nicks.some(n => n.has_info !== undefined);
+  el.textContent = known ? S.nicks.filter(n => n.has_info).length : '—';
+  el.title = known ? '' : 'לא מחושב בסינון מתקדם';
 }
 
 // ══ NICK DIALOG ═══════════════════════════════════════════════════════
@@ -2410,7 +2426,9 @@ async function _applyFieldFilterNow() {
   S.nicks = results;
   S.total = results.length;
   S.multiSelected.clear();
+  S.selectedId = null;
   sortNicks();
+  resetScroll();
   renderTable();
   updateBulkBar();
   document.getElementById('flt-count').textContent = `${results.length} תוצאות`;
@@ -3538,6 +3556,10 @@ async function setView(view) {
   await api('set_display_setting', 'view', view);
 }
 
+// חלון וירטואלי בונה ~30 שורות בכל פריים גלילה, וכל שורה בנתה מחדש את קבוצת
+// העמודות המוסתרות מתוך מחרוזת ההגדרות. הקבוצה נבנית פעם אחת לחלון.
+let _hiddenColsCache = null;
+
 function hiddenColsSet() {
   return new Set((DISPLAY.hidden_cols || '').split(',').filter(Boolean));
 }
@@ -3862,10 +3884,14 @@ function startScrapeMonitor() {
         toast('שגיאת סריקה: ' + p.error, 'error');
       } else {
         const partial = (p.failed_pages || 0) > 0;
+        // "הוגבלה" = נעצרה בגלל מקסימום עמודים שהמשתמש הגדיר. עד 0.8.5 זה דווח
+        // כ"הושלמה", והמשתמש חשב שסרק פורום שלם כשקיבל רק את העמודים הראשונים.
         const msg = p.cancelled ? 'הסריקה בוטלה'
-                  : partial ? 'הסריקה הסתיימה חלקית' : 'הסריקה הושלמה';
+                  : partial ? 'הסריקה הסתיימה חלקית'
+                  : p.limited ? 'הסריקה נעצרה לפי ההגבלה שהגדרת' : 'הסריקה הושלמה';
         let extra = '';
         if (partial) extra += ` · ${p.failed_pages} עמודים נכשלו`;
+        if (p.limited && !partial) extra += ` · ${p.pages} עמודים`;
         if (p.skipped && p.skipped.length) extra += ` · דולגו ${p.skipped.length} פורומים`;
         // בסריקת "הכל" יש רשומת סריקה לכל פורום — מפנים ליומן ולא לרשומה האחרונה
         const act = p.all_mode ? { actionLabel: '📋 מה השתנה', onAction: openScanRuns, ms: 8000 }

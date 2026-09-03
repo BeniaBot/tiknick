@@ -19,11 +19,11 @@ VSVersionInfo(
         [
           StringStruct('CompanyName', 'Tik-Nick'),
           StringStruct('FileDescription', 'Tik-Nick — ניהול ניקים בפורומים'),
-          StringStruct('FileVersion', '0.8.5.0'),
+          StringStruct('FileVersion', '0.8.6.0'),
           StringStruct('InternalName', 'TikNick'),
           StringStruct('OriginalFilename', 'TikNick.exe'),
           StringStruct('ProductName', 'Tik-Nick'),
-          StringStruct('ProductVersion', '0.8.5.0'),
+          StringStruct('ProductVersion', '0.8.6.0'),
         ]
       )
     ]),

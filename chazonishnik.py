@@ -17,7 +17,10 @@ import concurrent.futures
 from datetime import datetime
 
 DEFAULT_BASE = "https://mitmachim.top"
-CONCURRENCY = 12
+# 12 בקשות במקביל בלי כל השהיה היו מפציצות פורום קטן באלפי בקשות בדקה —
+# הסורק ממתין 0.6 שניות בין עמודים ו-Stinknik 0.4, ואין סיבה שהניתוח יהיה גס יותר.
+CONCURRENCY = 4
+DETAIL_DELAY = 0.15          # השהיה קצרה בכל בקשת פרטים (per worker)
 MAX_PAGES = 1500
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -126,6 +129,7 @@ _DAYS_HE = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "ש�
 
 def _fetch_detail(base, cookie, post):
     try:
+        time.sleep(DETAIL_DELAY)   # נימוס: 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
         pid = post["pid"]
         clean = re.sub(r"<[^<]+?>", "", post.get("content", "") or "")
         words = len(clean.split())

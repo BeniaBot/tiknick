@@ -21,6 +21,7 @@ import urllib.error
 
 USER_AGENT = "Tik-Nick/1.0 (+https://github.com/BeniaBot/tiknick)"
 PAGE_DELAY_SEC = 0.6          # השהיה בין עמודים — לא להעמיס על השרת
+HARD_PAGE_CAP = 4000          # בלם ביטחון: פורום תקול שמחזיר עמודים בלי סוף
 REQUEST_TIMEOUT = 20
 MAX_RETRIES = 3
 
@@ -43,6 +44,26 @@ def _api_base(forum_url):
         url = "https://" + url
     return url
 
+
+# שם עוגיית ההתחברות לכל פלטפורמה — משמש לנרמול מה שהמשתמש הדביק.
+COOKIE_NAMES = {"nodebb": "express.sid", "discourse": "_t"}
+
+def normalize_cookie(cookie, platform="nodebb"):
+    """
+    ההדרכה בממשק מבקשת מהמשתמש להעתיק את *הערך* של express.sid (מחרוזת
+    שמתחילה ב-s%3A), אבל כותרת Cookie חייבת להיות "שם=ערך". עד 0.8.5 הערך
+    נשלח כמו שהוא, השרת התעלם ממנו, והמשתמש נחשב אורח — כל התוכן שדורש
+    התחברות פשוט נעלם, והסריקה דיווחה "הושלמה".
+    מקבל: ערך בלבד, "שם=ערך", או הדבקה של כל שורת ה-Cookie.
+    """
+    c = (cookie or "").strip().strip(";").strip()
+    if not c:
+        return ""
+    name = COOKIE_NAMES.get(platform, "express.sid")
+    # הדבקה של כמה עוגיות, או "שם=ערך" — כבר תקין
+    if "=" in c.split(";")[0]:
+        return c
+    return f"{name}={c}"
 
 def _fetch_json(url, cookie=None):
     """בקשת GET אחת שמחזירה JSON, עם ניסיונות חוזרים וכיבוד Retry-After.
@@ -337,10 +358,12 @@ def _map_discourse_dir_item(item, base):
     u = item.get("user") or {}
     mapped = _map_discourse_user(u, base)
     # ספריית המשתמשים כוללת סטטיסטיקות עשירות יותר מאשר אובייקט המשתמש הבסיסי
+    # _num_str ולא str(x or "") — ירידה ל-0 היא שינוי אמיתי, ו-"" היה נבלע
+    # במיזוג כאילו הערך לא נסרק, כך שהמוניטין הישן נשאר תקוע לנצח.
     if item.get("likes_received") is not None:
-        mapped["reputation"] = str(item.get("likes_received") or "")
+        mapped["reputation"] = _num_str(item.get("likes_received"))
     if item.get("post_count") is not None:
-        mapped["post_count"] = str(item.get("post_count") or "")
+        mapped["post_count"] = _num_str(item.get("post_count"))
     return mapped
 
 
@@ -354,7 +377,10 @@ def scrape_forum(forum_name, forum_url, db, cookie=None, progress_cb=None,
     מחזיר סיכום: {"added","updated","unchanged","pages","cancelled"}
     """
     base = _api_base(forum_url)
-    plat = platform or detect_platform(forum_url, cookie)
+    plat = platform or detect_platform(forum_url, normalize_cookie(cookie))
+    # המשתמש מדביק את *הערך* של העוגייה לפי ההדרכה; כאן הופכים אותו ל"שם=ערך"
+    # לפי הפלטפורמה. בלי זה הכותרת חסרת משמעות והפורום מתייחס אלינו כאורח.
+    cookie = normalize_cookie(cookie, plat)
     if plat == "nodebb":
         return _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
                               cancel_flag, max_pages, skip_flag, run_id)
@@ -380,9 +406,15 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
         raise ScrapeError("מבנה תשובה לא צפוי — ודא שזה פורום NodeBB")
 
     pagination = first.get("pagination") or {}
-    total_pages = pagination.get("pageCount") or 1
+    # pageCount של NodeBB לא אמין — יש התקנות שמחזירות 1 גם כשיש מאות עמודים
+    # (מתועד ב-CLAUDE.md לגבי /api/user/{slug}/posts, ותקף גם כאן). משתמשים בו
+    # להערכת התקדמות בלבד וממשיכים עד עמוד ריק, כמו במסלול Discourse.
+    est_pages = pagination.get("pageCount") or 1
+    total_pages = est_pages
     if max_pages:
         total_pages = min(total_pages, max_pages)
+        if est_pages > max_pages:
+            stats["limited"] = True   # נעצר לבקשת המשתמש — לא "הושלם"
 
     def handle_users(users):
         # ממפים את כל העמוד ואז ממזגים בטרנזקציית DB אחת — מהיר בסדרי גודל
@@ -401,7 +433,15 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
         progress_cb({"page": 1, "total_pages": total_pages, **stats, "done": False})
 
     consecutive_fail = 0
-    for page in range(2, total_pages + 1):
+    page = 1
+    while True:
+        page += 1
+        if max_pages and page > max_pages:
+            stats["limited"] = True
+            break
+        if page > HARD_PAGE_CAP:        # בלם ביטחון מול פורום שמחזיר עמודים לנצח
+            stats["limited"] = True
+            break
         if cancel_flag is not None and cancel_flag.is_set():
             stats["cancelled"] = True
             break
@@ -419,11 +459,19 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
             if consecutive_fail >= 5:
                 stats["aborted"] = True   # הפורום כנראה נפל — אין טעם להמשיך
                 break
+            if page >= est_pages:
+                break                    # נגמרה ההערכה וגם נכשלנו — די
             if progress_cb:
-                progress_cb({"page": page, "total_pages": total_pages, **stats, "done": False})
+                progress_cb({"page": page, "total_pages": max(total_pages, page),
+                             **stats, "done": False})
             continue
-        handle_users(data.get("users", []) if isinstance(data, dict) else [])
+        users = data.get("users", []) if isinstance(data, dict) else []
+        if not users:
+            break                        # עמוד ריק = סוף אמיתי של הרשימה
+        handle_users(users)
         stats["pages"] = page
+        if page > total_pages:
+            total_pages = page           # ההערכה הייתה נמוכה מדי — עדכן את הפס
         if progress_cb:
             progress_cb({"page": page, "total_pages": total_pages, **stats, "done": False})
 

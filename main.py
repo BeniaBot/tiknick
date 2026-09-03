@@ -66,7 +66,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.5"
+APP_VERSION = "0.8.6"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -224,6 +224,10 @@ class API:
 
     def delete_nicks(self, nick_ids):
         """מחיקה מרובה דרך סל המחזור — ניתנת לביטול (restore_trash)"""
+        if len(nick_ids or []) > 50:
+            busy = self._busy()      # מחיקה גדולה באמצע סריקה = התנגשות על אותן שורות
+            if busy:
+                return {"ok": False, "error": busy}
         try:
             r = db.delete_nicks(nick_ids or [])
             return {"ok": True, "count": r["deleted"], "batch_id": r["batch_id"]}
@@ -359,10 +363,21 @@ class API:
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
+    def _busy(self):
+        """פעולה כבדה/הרסנית לא רצה בזמן שמשהו אחר עובד על המאגר.
+        מחזיר הודעה בעברית או None. עד 0.8.5 רק גיבוי/שחזור/vacuum נשמרו כך,
+        ואיפוס/מחיקה/שינוי מקור יכלו לרוץ באמצע סריקה ולהתנגש עליה."""
+        for st, what in ((_scrape_state, "סריקה"), (_import_state, "ייבוא"),
+                         (_source_state, "עדכון מקור"), (_chz_state, "ניתוח חזונישניק"),
+                         (_stink_state, "ניתוח שטינקניק")):
+            if st.get("running"):
+                return f"{what} רצה כרגע ברקע — המתן לסיומה"
+        return None
+
     def vacuum_db(self):
-        if (_scrape_state["running"] or _import_state["running"]
-                or _source_state["running"] or _chz_state["running"] or _stink_state["running"]):
-            return {"ok": False, "error": "יש פעולה שרצה ברקע — המתן לסיומה"}
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
         try:
             return {"ok": True, "size": db.vacuum()}
         except Exception as e:
@@ -663,10 +678,16 @@ class API:
         return {"ok": True, "count": len(ids)}
 
     def reset_all(self):
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
         db.reset_all()
         return {"ok": True}
 
     def reset_columns(self, columns):
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
         n = db.reset_columns(columns or [])
         return {"ok": True, "count": n}
 
@@ -1479,8 +1500,9 @@ del "%~f0"
 
     def _run_source_op(self, op, fn):
         """מריץ פעולת מקור ב-thread רקע עם מעקב התקדמות (get_source_progress)."""
-        if _source_state["running"]:
-            return {"ok": False, "error": "פעולה על מקור עדיין רצה — המתן לסיומה"}
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
         _source_state.update({"running": True, "done": False, "error": None,
                               "processed": 0, "total": 0, "op": op})
 
