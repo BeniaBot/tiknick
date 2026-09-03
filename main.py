@@ -23,6 +23,7 @@ import webbrowser
 import threading
 import database as db
 import scraper
+import csv_import
 
 
 # ── מצב סריקה פעילה (למעקב התקדמות מהממשק) ─────────────────────────
@@ -66,7 +67,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.6"
+APP_VERSION = "0.8.7"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -315,6 +316,19 @@ class API:
         except Exception as e:
             logging.exception("restore_trash failed")
             return {"ok": False, "error": str(e)}
+
+    def get_backup_status(self):
+        return db.backup_status()
+
+    def run_auto_backup(self, reason="manual"):
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
+        return db.auto_backup(str(reason), force=True)
+
+    def set_auto_backup(self, enabled):
+        db.set_setting("auto_backup_enabled", "1" if enabled else "0")
+        return {"ok": True, "enabled": bool(enabled)}
 
     def empty_trash(self):
         try:
@@ -681,6 +695,7 @@ class API:
         busy = self._busy()
         if busy:
             return {"ok": False, "error": busy}
+        db.auto_backup("reset")     # אין דרך חזרה מאיפוס — עותק לפני
         db.reset_all()
         return {"ok": True}
 
@@ -688,6 +703,7 @@ class API:
         busy = self._busy()
         if busy:
             return {"ok": False, "error": busy}
+        db.auto_backup("reset-cols")
         n = db.reset_columns(columns or [])
         return {"ok": True, "count": n}
 
@@ -1335,7 +1351,10 @@ del "%~f0"
                               ids if mode == "selected" else None)
         with open(dest, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        return {"ok": True, "path": dest, "count": len(data["nicks"])}
+        counts = data.get("counts") or {}
+        return {"ok": True, "path": dest, "count": len(data["nicks"]),
+                "contacts": counts.get("contacts", 0),
+                "identity_groups": counts.get("identity_groups", 0)}
 
     def load_import_file(self):
         """שלב 1: פתח קובץ ובדוק פורומים לא מוכרים"""
@@ -1347,30 +1366,118 @@ del "%~f0"
 
         result = webview.windows[0].create_file_dialog(
             open_dialog,
-            file_types=("TikNick (*.tiknick)", "JSON (*.json)", "All files (*.*)")
+            file_types=("קובץ Tik-Nick (*.tiknick;*.json)", "טבלה (*.csv;*.tsv;*.txt)",
+                        "All files (*.*)")
         )
         if not result:
             return {"ok": False, "error": "בוטל"}
         path = result[0] if isinstance(result, (list, tuple)) else result
         if not path:
             return {"ok": False, "error": "בוטל"}
+        if os.path.splitext(path)[1].lower() in (".csv", ".tsv", ".txt"):
+            return self._load_csv_file(path)
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             unknown = db.get_unknown_forums_in_data(data)
             # שמור data זמנית בזיכרון לשלב 2
             self._pending_import = {"data": data, "path": path}
+            groups = data.get("identity_groups") or []
+            contacts = sum(len(n.get("contacts") or [])
+                           for n in data.get("nicks", []) if isinstance(n, dict))
+            try:
+                fver = int(data.get("version", 2))
+            except (TypeError, ValueError):
+                fver = 2
             return {"ok": True, "unknown_forums": unknown,
-                    "nick_count": len(data.get("nicks", []))}
+                    "nick_count": len(data.get("nicks", [])),
+                    "file_version": fver,
+                    "newer_format": fver > db.EXPORT_FORMAT_VERSION,
+                    "contacts": contacts,
+                    "identity_groups": len(groups) if isinstance(groups, list) else 0}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    def _load_csv_file(self, path):
+        """
+        שלב 1 לקובץ טבלה: מפענח, מנחש מפריד, ומציע מיפוי עמודות. עדיין לא נכתב
+        דבר — המשתמש מאשר את המיפוי, ומשם ממשיכים באותה זרימה של .tiknick.
+        """
+        try:
+            parsed = csv_import.parse_file(path)
+        except Exception as e:
+            logging.exception("csv parse failed")
+            return {"ok": False, "error": str(e)}
+        self._pending_csv = {"parsed": parsed, "path": path}
+        return {"ok": True, "kind": "csv", "path": os.path.basename(path),
+                "encoding": parsed["encoding"], "delimiter": parsed["delimiter"],
+                "headers": parsed["headers"], "sample": parsed["sample"],
+                "mapping": parsed["mapping"], "row_count": parsed["row_count"],
+                "fields": csv_import.mappable_fields(),
+                "forums": [f["name"] for f in db.get_forums()]}
+
+    def confirm_csv_mapping(self, mapping=None, default_forum="כללי", fix_phone=True):
+        """שלב 1.5 לקובץ טבלה: הופך את השורות למבנה של .tiknick וממשיך רגיל."""
+        pending = getattr(self, "_pending_csv", None)
+        if not pending:
+            return {"ok": False, "error": "אין קובץ ממתין"}
+        parsed = pending["parsed"]
+        try:
+            data = csv_import.normalize_rows(
+                parsed["headers"], parsed["rows"], mapping or parsed["mapping"],
+                default_forum=default_forum or "כללי", fix_phone=bool(fix_phone))
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        except Exception as e:
+            logging.exception("csv normalize failed")
+            return {"ok": False, "error": str(e)}
+        self._pending_csv = None
+        self._pending_import = {"data": data, "path": pending["path"]}
+        return {"ok": True, "unknown_forums": db.get_unknown_forums_in_data(data),
+                "nick_count": len(data["nicks"]),
+                "skipped_no_username": data["skipped_no_username"],
+                "merged_dupes": data["merged_dupes"],
+                "contacts": 0, "identity_groups": 0,
+                "file_version": 2, "newer_format": False}
 
     def import_data(self):
         """לא בשימוש ישיר — השתמש ב-load_import_file + confirm_import"""
         pass
 
+    def preview_import(self, forum_mapping=None, include_contacts=True,
+                       include_identities=True):
+        """מעבר קריאה-בלבד לפני הייבוא — רץ ב-thread כמו הייבוא עצמו."""
+        pending = getattr(self, "_pending_import", None)
+        if not pending:
+            return {"ok": False, "error": "אין קובץ ממתין"}
+        if _import_state["running"]:
+            return {"ok": False, "error": "ייבוא כבר רץ"}
+        data = pending["data"]
+        total = len(data.get("nicks", []))
+        _import_state.update({"running": True, "done": False, "error": None,
+                              "processed": 0, "total": total, "result": None,
+                              "preview": True})
+
+        def _run():
+            try:
+                _import_state["result"] = db.preview_import(
+                    data, forum_mapping or {}, bool(include_contacts),
+                    bool(include_identities),
+                    progress_cb=lambda n: _import_state.update({"processed": n}))
+            except Exception as e:
+                logging.exception("preview_import failed")
+                _import_state["error"] = str(e)
+            finally:
+                _import_state["processed"] = total
+                _import_state["running"] = False
+                _import_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "started": True, "total": total}
+
     def confirm_import(self, forum_mapping=None, import_name=None,
-                       import_notes="", import_trust=None):
+                       import_notes="", import_trust=None,
+                       include_contacts=True, include_identities=True):
         """שלב 2: בצע ייבוא עם מיפוי פורומים ודרגת אמינות"""
         pending = getattr(self, '_pending_import', None)
         if not pending:
@@ -1395,13 +1502,16 @@ del "%~f0"
                 result = db.import_data(
                     data, os.path.basename(path), mapping,
                     import_name=name, import_notes=import_notes, import_trust=import_trust,
-                    manual_conflicts=manual, progress_cb=_progress)
-                if manual and isinstance(result, dict):
-                    _import_state["result"] = {"imported": result["imported"],
-                                               "conflicts": result["conflicts"], "manual": True}
-                else:
-                    imp, conf = result
-                    _import_state["result"] = {"imported": imp, "conflicts": conf, "manual": False}
+                    manual_conflicts=manual, progress_cb=_progress,
+                    include_contacts=include_contacts, include_identities=include_identities)
+                # db.import_data מחזיר תמיד dict מ-0.8.7
+                _import_state["result"] = {
+                    "imported": result["imported"],
+                    "conflicts": result["conflicts"] if manual else result["recorded"],
+                    "manual": bool(manual),
+                    "contacts": result.get("contacts", 0),
+                    "identities": result.get("identities", 0),
+                    "identities_skipped": result.get("identities_skipped", 0)}
             except Exception as e:
                 logging.exception("import failed")
                 _import_state["error"] = str(e)
@@ -1621,6 +1731,21 @@ if __name__ == "__main__":
                     "אם הקובץ פגום — שחזר מגיבוי (קובץ .db) או העבר אותו הצידה כדי להתחיל מחדש.")
             raise
         logging.info("Database ready at %s", db.DB_PATH)
+
+        # גיבוי יומי — ב-thread, כי 88MB דרך ה-backup API לוקחים כמה שניות
+        # והמשתמש לא אמור להמתין לחלון. כישלון נרשם ללוג ולא עוצר את ההפעלה.
+        def _daily_backup():
+            try:
+                if db.get_setting("auto_backup_enabled", "1") == "0":
+                    return
+                r = db.auto_backup("daily")
+                if r.get("ok") and r.get("path"):
+                    logging.info("auto backup: %s (%d bytes)", r["path"], r.get("bytes", 0))
+                elif not r.get("ok"):
+                    logging.warning("auto backup failed: %s", r.get("error"))
+            except Exception:
+                logging.exception("auto backup crashed")
+        threading.Thread(target=_daily_backup, daemon=True).start()
 
         api = API()
 

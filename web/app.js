@@ -1136,6 +1136,7 @@ async function openTrash() {
 
 async function openDbHealth() {
   const h = await api('get_db_health');
+  const bk = await api('get_backup_status') || {};
   if (!h?.ok) { toast('לא ניתן לקרוא את מצב המאגר: ' + (h?.error || ''), 'error'); return; }
   const mb = b => (b / 1048576).toFixed(1) + ' MB';
   const c = h.counts || {};
@@ -1156,7 +1157,35 @@ async function openDbHealth() {
     ${row('בסל המחזור', (c.trash_nicks || 0).toLocaleString())}
     ${row('חיפוש מהיר (FTS5)', h.fts ? 'פעיל' : 'לא זמין — LIKE')}
     <div style="font-size:11.5px;color:var(--subtext);margin-top:10px;word-break:break-all" dir="ltr">${esc(h.path)}</div>
+
+    <div style="font-size:12px;font-weight:800;margin:16px 0 6px">💾 גיבוי אוטומטי</div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer;margin-bottom:8px">
+      <input type="checkbox" id="bk-on" ${bk.enabled !== false ? 'checked' : ''}
+             onchange="api('set_auto_backup', this.checked)">
+      גיבוי יומי אוטומטי בהפעלת התוכנה, וגיבוי לפני כל פעולת איפוס
+    </label>
+    ${row('גיבויים שמורים', `${bk.count || 0} · ${mb(bk.bytes || 0)}`)}
+    ${row('גיבוי אחרון', bk.last ? esc(String(bk.last).replace('T', ' ')) : 'עדיין לא')}
+    ${(bk.files || []).length ? `
+      <div style="max-height:16vh;overflow:auto;margin-top:6px">
+        ${(bk.files || []).map(f => `
+          <div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;
+                      color:var(--subtext);padding:3px 0" dir="ltr">
+            <span style="overflow:hidden;text-overflow:ellipsis">${esc(f.name)}</span>
+            <span>${mb(f.bytes)}</span>
+          </div>`).join('')}
+      </div>` : ''}
+    <div style="font-size:11px;color:var(--subtext);margin-top:6px;line-height:1.6">
+      נשמרים ${esc(3)} האחרונים בלבד — עותק מלא שוקל כמו המאגר עצמו.
+      לשחזור: "♻️ שחזור מגיבוי" בהגדרות, ובחר קובץ מהתיקייה הזו.
+    </div>
   `, [
+    { label: '💾 גבה עכשיו', cls: 'btn-ghost', action: async () => {
+      setStatus('מגבה…');
+      const r = await api('run_auto_backup', 'manual');
+      if (r?.ok) { toast(`הגיבוי נשמר ✓ (${mb(r.bytes || 0)})`, 'success'); closeModal(); openDbHealth(); }
+      else toast(r?.error || 'הגיבוי נכשל', 'error');
+    }},
     { label: '📂 פתח תיקיית נתונים', cls: 'btn-ghost', action: () => api('open_data_folder') },
     { label: '📄 פתח יומן', cls: 'btn-ghost', action: () => api('open_log') },
     { label: '🧹 כווץ קובץ', cls: 'btn-ghost', action: async () => {
@@ -2599,6 +2628,12 @@ async function onSrcDelete(sid) {
   toast('המקור נמחק, הנתונים עודכנו ✓', 'success');
 }
 
+// מקטעים בקובץ שאינם עמודות של הניק (database.EXTRA_SYNC_KEYS)
+const EXTRA_SYNC = [
+  { key: 'contacts',   label: 'אנשי קשר נוספים (טלפונים/מיילים)' },
+  { key: 'identities', label: 'קישורי זהות (אותו אדם בכמה פורומים)' },
+];
+
 async function openSyncMgr() {
   const fields   = await api('get_all_nick_fields');
   const sync     = await api('get_sync_settings');
@@ -2627,7 +2662,27 @@ async function openSyncMgr() {
             <span class="toggle-slider"></span>
           </label>
         </div>`).join('')}
-    </div>`;
+    </div>
+    <div style="font-size:11px;font-weight:800;color:var(--subtext);margin:14px 0 6px">
+      מקטעים נוספים בקובץ</div>
+    <div class="sync-list" id="sync-extra-list">
+      ${EXTRA_SYNC.map(x => `
+        <div class="sync-item">
+          <span class="sync-label">${esc(x.label)}</span>
+          <span class="sync-badge ${sync[x.key]?'sync-on':'sync-off'}" id="sb-${x.key}">
+            ${sync[x.key] ? '✓ מסונכרן' : '🔒 פרטי'}
+          </span>
+          <label class="toggle">
+            <input type="checkbox" id="st-${x.key}" ${sync[x.key]?'checked':''}
+                   onchange="updateSyncBadge('${x.key}',this.checked)">
+            <span class="toggle-slider"></span>
+          </label>
+        </div>`).join('')}
+    </div>
+    <p style="font-size:11px;color:var(--subtext);margin-top:6px;line-height:1.6">
+      אנשי קשר המסומנים 🔒 סודי לעולם לא ייכללו בקובץ — גם כשהמתג דלוק.
+      קישור זהות נכלל רק כששני הניקים שלו יוצאו.
+    </p>`;
 
   // ── סעיף 2: אילו פורומים לייבא/לייצא ──
   const forumNames = Object.keys(forumIo);
@@ -2745,6 +2800,10 @@ async function openSyncMgr() {
       for (const f of fields) {
         const el = document.getElementById(`st-${f.key}`);
         if (el) syncMap[f.key] = el.checked;
+      }
+      for (const x of EXTRA_SYNC) {
+        const el = document.getElementById(`st-${x.key}`);
+        if (el) syncMap[x.key] = el.checked;
       }
       await api('set_sync_settings', syncMap);
       const ioMap = {};
@@ -2978,6 +3037,10 @@ async function exportData() {
     <p style="color:var(--subtext);font-size:12px;margin-bottom:10px">
       בחר אילו ניקים לייצא. חלים גם כללי הסנכרון (אילו שדות ופורומים כלולים).
     </p>
+    <p id="exp-extra" style="color:var(--subtext);font-size:11.5px;margin:-4px 0 10px;line-height:1.6">
+      בקובץ <b>.tiknick</b> נשמרים גם אנשי הקשר הנוספים (למעט 🔒 סודיים) וקישורי הזהות.
+      ב-<b>CSV</b> נשמרות עמודות בלבד.
+    </p>
     ${selN ? opt('selected', '☑️', 'הניקים שנבחרו', 'רק השורות המסומנות בטבלה', selN, true) : ''}
     ${opt('view', '🔍', 'התצוגה הנוכחית', 'מה שמוצג עכשיו אחרי חיפוש/סינון', viewN, !selN)}
     ${opt('all', '📦', 'כל הניקים', 'ייצוא מלא של כל המאגר', counts.all, false)}
@@ -2992,7 +3055,12 @@ async function exportData() {
       if (mode === 'view') { ids = S.nicks.map(n => n.id); mode = 'selected'; }
       closeModal();
       const res = await api(fmt === 'csv' ? 'export_csv' : 'export_data', mode, ids);
-      if (res?.ok) toast(`יוצאו ${res.count} ניקים ✓`, 'success');
+      if (res?.ok) {
+        let extra = '';
+        if (res.contacts) extra += ` · ${res.contacts} אנשי קשר`;
+        if (res.identity_groups) extra += ` · ${res.identity_groups} קבוצות זהות`;
+        toast(`יוצאו ${res.count} ניקים ✓${extra}`, 'success');
+      }
       else if (res?.error !== 'בוטל') toast('שגיאה בייצוא: ' + (res?.error || ''), 'error');
     }},
     { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
@@ -3009,13 +3077,124 @@ async function importData() {
     if (res.error !== 'בוטל') toast('שגיאה בייבוא: ' + res.error, 'error');
     return;
   }
+  // קובץ טבלה — קודם התאמת עמודות, ורק אז אותה זרימה כמו .tiknick
+  if (res.kind === 'csv') { showCsvMappingDialog(res); return; }
   // שלב 1.5: פרטי הייבוא (שם, הערות, דרגת אמינות)
   showImportDetailsDialog(res);
 }
 
+// ── ייבוא CSV: התאמת עמודות ──────────────────────────────────────────
+// קובץ שהתוכנה עצמה ייצאה נפתר לבד (הכותרות הן בדיוק התוויות שלנו) והמשתמש
+// רק לוחץ "המשך".
+const DELIM_HE = { ',': 'פסיק', '\t': 'טאב', ';': 'נקודה-פסיק', '|': 'קו אנכי' };
+
+async function showCsvMappingDialog(res) {
+  const fields = res.fields || [];
+  const forums = res.forums || [];
+  const opts = (sel) => '<option value="">— לא לייבא —</option>' +
+    fields.map(f => `<option value="${esc(f.key)}" ${sel === f.key ? 'selected' : ''}>${esc(f.label)}</option>`).join('');
+  const rows = (res.headers || []).map((h, i) => `
+    <tr>
+      <td style="padding:4px 6px;font-weight:700;font-size:12.5px;max-width:150px;overflow:hidden;text-overflow:ellipsis">${esc(h || '(ללא כותרת)')}</td>
+      <td style="padding:4px 6px;font-size:11.5px;color:var(--subtext);max-width:150px;overflow:hidden;text-overflow:ellipsis" dir="auto">${esc((res.sample || {})[String(i)] || '')}</td>
+      <td style="padding:4px 6px">
+        <select class="form-input csv-map" data-idx="${i}" style="font-size:12px;padding:4px 6px">
+          ${opts((res.mapping || {})[String(i)])}
+        </select>
+        <div class="csv-note" data-note="${i}" style="font-size:10.5px;color:var(--subtext);margin-top:2px"></div>
+      </td>
+    </tr>`).join('');
+
+  openModal('📥 ייבוא CSV — התאמת עמודות', `
+    <p style="color:var(--subtext);font-size:12px;margin-bottom:10px;line-height:1.7">
+      <b dir="auto">${esc(res.path)}</b> · נמצאו <b>${esc(res.row_count)}</b> שורות ·
+      קידוד: <span dir="ltr">${esc(res.encoding)}</span> ·
+      מפריד: ${esc(DELIM_HE[res.delimiter] || res.delimiter)}
+    </p>
+    <div style="max-height:46vh;overflow:auto;border:1px solid var(--border-soft);border-radius:8px">
+      <table style="width:100%;border-collapse:collapse">
+        <thead><tr style="position:sticky;top:0;background:var(--card2)">
+          <th style="padding:6px;text-align:right;font-size:11px">עמודה בקובץ</th>
+          <th style="padding:6px;text-align:right;font-size:11px">דוגמה</th>
+          <th style="padding:6px;text-align:right;font-size:11px">ייובא לשדה</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <div class="form-group" style="margin-top:12px">
+      <label class="form-label">פורום ברירת מחדל (לשורות בלי פורום)</label>
+      <select class="form-input" id="csv-forum">
+        ${forums.map(f => `<option value="${esc(f)}" ${f === 'כללי' ? 'selected' : ''}>${esc(f)}</option>`).join('')}
+      </select>
+    </div>
+    <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer">
+      <input type="checkbox" id="csv-phone" checked>
+      החזר 0 מוביל למספרי טלפון שאקסל קיצץ
+    </label>
+    <div id="csv-warn" style="color:var(--danger,#e5484d);font-size:12px;margin-top:8px"></div>
+  `, [
+    { label: 'המשך', cls: 'btn-primary', action: async () => {
+      const mapping = {};
+      document.querySelectorAll('.csv-map').forEach(sel => {
+        if (sel.value) mapping[sel.dataset.idx] = sel.value;
+      });
+      if (!Object.values(mapping).includes('username')) {
+        document.getElementById('csv-warn').textContent = "חובה למפות עמודה ל'שם משתמש'";
+        return;
+      }
+      const r = await api('confirm_csv_mapping', mapping,
+                          document.getElementById('csv-forum').value,
+                          document.getElementById('csv-phone').checked);
+      if (!r?.ok) {
+        document.getElementById('csv-warn').textContent = r?.error || 'שגיאה';
+        return;
+      }
+      closeModal();
+      let note = `${r.nick_count} שורות לייבוא`;
+      if (r.merged_dupes) note += ` · אוחדו כפולים ${r.merged_dupes}`;
+      if (r.skipped_no_username) note += ` · דולגו ${r.skipped_no_username} בלי שם משתמש`;
+      if (r.merged_dupes || r.skipped_no_username) toast(note, 'info');
+      showImportDetailsDialog(r);
+    }},
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg', { id: 'csv-mapping' });
+
+  // הערות פר-שדה (סטטוס/מוניטין נקבעים בסריקה) — מוצגות מתחת לבורר שנבחר
+  const notes = {};
+  fields.forEach(f => { if (f.note) notes[f.key] = f.note; });
+  const refreshNotes = () => document.querySelectorAll('.csv-map').forEach(sel => {
+    const el = document.querySelector(`[data-note="${sel.dataset.idx}"]`);
+    if (el) el.textContent = notes[sel.value] || '';
+  });
+  document.querySelectorAll('.csv-map').forEach(sel => sel.addEventListener('change', refreshNotes));
+  refreshNotes();
+}
+
 async function showImportDetailsDialog(res) {
   const myTrust = await api('get_my_trust') ?? 10;
-  openModal('📥 פרטי הייבוא', `
+  const nContacts = res.contacts || 0, nGroups = res.identity_groups || 0;
+  const sectionRow = (id, icon, text) => `
+    <label style="display:flex;gap:8px;align-items:flex-start;font-size:12.5px;
+                  padding:7px 9px;border:1px solid var(--border-soft);border-radius:8px;
+                  margin-bottom:6px;cursor:pointer">
+      <input type="checkbox" id="${id}" checked style="margin-top:2px">
+      <span>${icon} ${text}</span>
+    </label>`;
+  const extras = (nContacts || nGroups) ? `
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;font-weight:800;color:var(--subtext);margin-bottom:6px">
+        מקטעים נוספים בקובץ</div>
+      ${nContacts ? sectionRow('imp-contacts', '📞',
+        `לקלוט <b>${nContacts}</b> אנשי קשר נוספים (טלפונים/מיילים)`) : ''}
+      ${nGroups ? sectionRow('imp-identities', '🔗',
+        `לקלוט <b>${nGroups}</b> קבוצות זהות — הקישור יתבצע רק כששני הצדדים קיימים אצלך`) : ''}
+    </div>` : '';
+  const newer = res.newer_format ? `
+    <div style="background:var(--card2);border-inline-start:3px solid var(--warn,#e59b2b);
+                padding:8px 10px;border-radius:6px;font-size:12px;margin-bottom:12px">
+      ⚠️ הקובץ נוצר בגרסה חדשה יותר של Tik-Nick. מה שהגרסה הזו לא מכירה יידלג.
+    </div>` : '';
+  openModal('📥 פרטי הייבוא', newer + extras + `
     <p style="color:var(--subtext);font-size:13px;margin-bottom:14px">
       תן שם למקור הייבוא ודרגת אמינות. בהתנגשות עם מידע קיים — הערך מהמקור בעל
       האמינות הגבוהה יותר ינצח, והאחר יישמר בצד (יסומן ב-⚠️).
@@ -3038,10 +3217,14 @@ async function showImportDetailsDialog(res) {
     </div>
   `, [
     { label: 'המשך', cls: 'btn-primary', action: () => {
+      const cbC = document.getElementById('imp-contacts');
+      const cbI = document.getElementById('imp-identities');
       _pendingImportMeta = {
         name: document.getElementById('imp-name').value.trim() || 'ייבוא',
         notes: document.getElementById('imp-notes').value.trim(),
         trust: parseInt(document.getElementById('imp-trust').value) || 7,
+        contacts: cbC ? cbC.checked : true,
+        identities: cbI ? cbI.checked : true,
       };
       closeModal();
       proceedImport(res);
@@ -3052,14 +3235,113 @@ async function showImportDetailsDialog(res) {
 
 async function proceedImport(res) {
   const unknown = res.unknown_forums || [];
-  if (unknown.length === 0) { await runImport({}); return; }
+  if (unknown.length === 0) { await showImportPreview({}); return; }
   showForumMappingDialog(unknown, res.nick_count);
+}
+
+// ── תצוגה מקדימה: מה הייבוא באמת יעשה, לפני שהוא עושה משהו ────────────
+// הייבוא אינו הפיך (רק מחיקת ניקים יש לה סל מחזור), ולכן הוא נעצר כאן.
+async function showImportPreview(mapping) {
+  const start = await api('preview_import', mapping || {},
+                          _pendingImportMeta.contacts !== false,
+                          _pendingImportMeta.identities !== false);
+  if (!start?.ok) { toast('שגיאה בתצוגה המקדימה: ' + (start?.error || ''), 'error'); return; }
+
+  openModal('🔎 בודק…', `
+    <div style="text-align:center;padding:22px 16px">
+      <div style="font-size:34px;margin-bottom:12px">🔎</div>
+      <div id="prev-text" style="font-size:14px">בודק ${esc(start.total)} שורות…</div>
+    </div>`, [], 'modal-sm', { id: 'import-preview-wait', dismissable: false });
+
+  const st = await new Promise(resolve => {
+    let busy = false;
+    const poll = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const p = await api('get_import_progress');
+        if (!p) return;
+        const t = document.getElementById('prev-text');
+        if (t && p.total) t.textContent = `בודק ${p.processed} מתוך ${p.total}…`;
+        if (p.done || !p.running) { clearInterval(poll); resolve(p); }
+      } finally { busy = false; }
+    }, 300);
+  });
+
+  if (_currentModalId === 'import-preview-wait') closeModal();
+  if (st.error) { toast('שגיאה בתצוגה המקדימה: ' + st.error, 'error'); return; }
+  const r = st.result || {};
+
+  const line = (icon, label, value, strong) => `
+    <div style="display:flex;justify-content:space-between;padding:6px 2px;
+                border-bottom:1px solid var(--border-soft);font-size:13px">
+      <span>${icon} ${label}</span>
+      <b style="${strong ? 'color:var(--accent-2)' : ''}">${esc(value)}</b>
+    </div>`;
+
+  const conflictRows = (r.samples || []).map(x => `
+    <tr>
+      <td style="padding:3px 6px;font-size:11.5px">${esc(x.username)}
+        <span style="color:var(--subtext)">· ${esc(x.forum)}</span></td>
+      <td style="padding:3px 6px;font-size:11.5px">${esc(x.field)}</td>
+      <td style="padding:3px 6px;font-size:11.5px;color:var(--subtext)" dir="auto">${esc(x.old)}</td>
+      <td style="padding:3px 6px;font-size:11.5px" dir="auto">${esc(x.new)}</td>
+    </tr>`).join('');
+
+  const conflictBlock = r.conflicts ? `
+    <div style="margin-top:12px">
+      <div style="font-size:12px;font-weight:800;margin-bottom:5px">
+        ⚠️ ${esc(r.conflicts)} ערכים יתנגשו עם מידע קיים
+        <span style="font-weight:500;color:var(--subtext)">— ההכרעה לפי אמינות המקור</span>
+      </div>
+      <div style="max-height:24vh;overflow:auto;border:1px solid var(--border-soft);border-radius:8px">
+        <table style="width:100%;border-collapse:collapse">
+          <thead><tr style="position:sticky;top:0;background:var(--card2)">
+            <th style="padding:5px;text-align:right;font-size:10.5px">ניק</th>
+            <th style="padding:5px;text-align:right;font-size:10.5px">שדה</th>
+            <th style="padding:5px;text-align:right;font-size:10.5px">קיים</th>
+            <th style="padding:5px;text-align:right;font-size:10.5px">מהקובץ</th>
+          </tr></thead>
+          <tbody>${conflictRows}</tbody>
+        </table>
+      </div>
+      ${r.conflicts > (r.samples || []).length
+        ? `<div style="font-size:11px;color:var(--subtext);margin-top:4px">מוצגות ${(r.samples||[]).length} דוגמאות ראשונות מתוך ${esc(r.conflicts)}.</div>` : ''}
+    </div>` : '';
+
+  const skipped = (r.skipped_no_username || 0) + (r.skipped_forum || 0);
+  const skipBlock = skipped ? `
+    <div style="margin-top:10px;font-size:12px;color:var(--subtext);line-height:1.7">
+      ${r.skipped_no_username ? `· ${esc(r.skipped_no_username)} שורות בלי שם משתמש יידלגו<br>` : ''}
+      ${r.skipped_forum ? `· ${esc(r.skipped_forum)} שורות מפורומים שכיבית בהגדרות (${esc((r.excluded_forums||[]).join(', '))}) יידלגו` : ''}
+    </div>` : '';
+
+  openModal('🔎 תצוגה מקדימה לייבוא', `
+    <p style="color:var(--subtext);font-size:12px;margin-bottom:10px">
+      עדיין לא נכתב דבר. כך ייראה המאגר אחרי הייבוא:
+    </p>
+    ${line('🆕', 'ניקים חדשים שייווצרו', r.new_nicks || 0, true)}
+    ${line('🔁', 'ניקים קיימים שיתעדכנו', r.existing_nicks || 0)}
+    ${line('📝', 'ערכים שייכתבו', r.values || 0)}
+    ${r.contacts ? line('📞', 'אנשי קשר', r.contacts) : ''}
+    ${r.identity_groups ? line('🔗', 'קבוצות זהות', r.identity_groups) : ''}
+    ${conflictBlock}
+    ${skipBlock}
+  `, [
+    { label: '📥 בצע ייבוא', cls: 'btn-primary', action: async () => {
+      closeModal();
+      await runImport(mapping || {});
+    }},
+    { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg', { id: 'import-preview' });
 }
 
 // הייבוא רץ ב-thread רקע בפייתון; כאן חלון התקדמות שנסגר בסיום (בעבר החלון קפא בלי משוב)
 async function runImport(mapping) {
   const start = await api('confirm_import', mapping || {}, _pendingImportMeta.name,
-                          _pendingImportMeta.notes, _pendingImportMeta.trust);
+                          _pendingImportMeta.notes, _pendingImportMeta.trust,
+                          _pendingImportMeta.contacts !== false,
+                          _pendingImportMeta.identities !== false);
   if (!start?.ok) { toast('שגיאה בייבוא: ' + (start?.error || ''), 'error'); return; }
   openModal('📥 מייבא…', `
     <div style="text-align:center;padding:24px 16px">
@@ -3097,7 +3379,12 @@ async function runImport(mapping) {
   if (r.manual && r.conflicts && r.conflicts.length) {
     startImportConflictResolver(r.conflicts);
   } else {
-    toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r.imported} · ערכים שנקלטו: ${r.conflicts}`, 'success');
+    let extra = '';
+    if (r.contacts) extra += ` · אנשי קשר: ${r.contacts}`;
+    if (r.identities) extra += ` · קישורי זהות: ${r.identities}`;
+    if (r.identities_skipped) extra += ` · ${r.identities_skipped} קבוצות דולגו (הצד השני לא קיים אצלך)`;
+    toast(`הייבוא הושלם ✓ · ניקים חדשים: ${r.imported} · ערכים שנקלטו: ${r.conflicts}${extra}`,
+          'success', { ms: extra ? 8000 : 4000 });
   }
 }
 
@@ -3245,7 +3532,7 @@ async function showForumMappingDialog(unknownForums, totalNicks) {
         // ערך ריק = הוסף כפורום חדש — Python יטפל
       });
       closeModal();
-      await runImport(mapping);
+      await showImportPreview(mapping);   // תמיד תצוגה מקדימה לפני כתיבה
     }},
     { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
   ]);

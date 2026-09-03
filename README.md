@@ -5,7 +5,7 @@
 **תוכנת דסקטופ בעברית לניהול ומעקב אחר ניקים (שמות משתמש) בפורומים.**
 כל המידע נשמר מקומית במחשב שלך — פרטיות מלאה.
 
-[![Version](https://img.shields.io/badge/גרסה-0.8.6-f59e0b?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
+[![Version](https://img.shields.io/badge/גרסה-0.8.7-f59e0b?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
 [![Platform](https://img.shields.io/badge/פלטפורמה-Windows%2010%2F11-blue?style=flat-square)](https://github.com/BeniaBot/tiknick/releases)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 

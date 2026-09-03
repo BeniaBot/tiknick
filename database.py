@@ -75,6 +75,20 @@ ALL_NICK_FIELDS = [
     ("avatar_image",  "תמונת פרופיל",    False),  # כבד — ברירת מחדל לא מסונכרן
 ]
 
+EXPORT_FORMAT_VERSION = 3
+
+# מקטעים בקובץ שאינם עמודות של הניק. דגל הסנכרון שלהם יושב באותה טבלת
+# sync_settings, אבל הם *לא* ב-ALL_NICK_FIELDS: כל מי שקורא את ALL_NICK_FIELDS
+# מניח "שם עמודה בטבלת nicks" (ייצוא, ייבוא, CSV, איפוס עמודות).
+EXTRA_SYNC_KEYS = [
+    ("contacts",   "אנשי קשר נוספים (טלפונים/מיילים)",     True),
+    ("identities", "קישורי זהות (אותו אדם בכמה פורומים)",  True),
+]
+
+CONTACT_TYPES = {"phone", "email"}      # מה שהממשק יודע להציג ולפעול עליו
+MAX_CONTACTS_PER_NICK = 50              # תקרת שפיות מול קובץ פגום/עוין
+MAX_IMPORT_IDENTITY_GROUPS = 5000
+
 _local = threading.local()
 
 # ── בריכת חיבורים ─────────────────────────────────────────────────────
@@ -426,6 +440,11 @@ def init_db():
             conn.execute(
                 "INSERT OR IGNORE INTO sync_settings (field_key, synced) VALUES (?,?)",
                 (field_key, 1 if default_sync else 0))
+        # מקטעים שאינם עמודות (אנשי קשר / זהויות) — אותה טבלה, מפתחות נפרדים
+        for key, _, default_sync in EXTRA_SYNC_KEYS:
+            conn.execute(
+                "INSERT OR IGNORE INTO sync_settings (field_key, synced) VALUES (?,?)",
+                (key, 1 if default_sync else 0))
 
     # Migrations for existing DBs
     _migrate()
@@ -642,7 +661,17 @@ def get_sync_settings():
     for key, _, default in ALL_NICK_FIELDS:
         if key not in result:
             result[key] = default
+    for key, _, default in EXTRA_SYNC_KEYS:
+        if key not in result:
+            result[key] = default
     return result
+
+def sync_enabled(key, default=True):
+    """דגל סנכרון למקטע בקובץ שאינו עמודה (contacts / identities)."""
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT synced FROM sync_settings WHERE field_key=?", (key,)).fetchone()
+    return bool(row[0]) if row else default
 
 def set_sync_setting(field_key, synced: bool):
     with get_connection() as conn:
@@ -1553,6 +1582,56 @@ def delete_contact(contact_id):
     with get_connection() as conn:
         conn.execute("DELETE FROM nick_contacts WHERE id=?", (contact_id,))
 
+def _contact_key(ctype, value):
+    """'050-123-4567', '0501234567' ו-'+972501234567' הם אותו איש קשר."""
+    v = str(value or "").strip()
+    if ctype == "phone":
+        d = _digits(v)
+        if d.startswith("00972"):
+            d = "0" + d[5:]
+        elif d.startswith("972"):
+            d = "0" + d[3:]
+        return ("phone", d)
+    return (str(ctype or ""), v.lower())
+
+def _import_contacts_conn(conn, pairs):
+    """
+    pairs: [(nick_id, [{type,value,label}, …]), …] על חיבור קיים.
+    מוסיף רק מה שאינו קיים (לפי _contact_key) — שליפה אחת למנה של 400 ניקים
+    וכתיבה אחת, כדי שייבוא חוזר של אותו קובץ לא יכפיל דבר. מחזיר כמה נוספו.
+    """
+    ids = sorted({nid for nid, cts in pairs if cts})
+    if not ids:
+        return 0
+    seen = set()
+    for chunk in _chunks(ids, 400):
+        ph = ",".join("?" * len(chunk))
+        for r in conn.execute(
+                f"SELECT nick_id, type, value FROM nick_contacts WHERE nick_id IN ({ph})",
+                list(chunk)):
+            seen.add((r["nick_id"],) + _contact_key(r["type"], r["value"]))
+    to_add = []
+    for nid, cts in pairs:
+        for c in (cts or [])[:MAX_CONTACTS_PER_NICK]:
+            if not isinstance(c, dict):
+                continue
+            ctype = str(c.get("type", "")).strip().lower()
+            value = str(c.get("value", "")).strip()[:200]
+            if ctype not in CONTACT_TYPES or not value:
+                continue
+            key = (nid,) + _contact_key(ctype, value)
+            if key in seen:
+                continue
+            seen.add(key)
+            # אנשי קשר מיובאים תמיד גלויים: "סודי" הוא סימון אישי של מי שקלט,
+            # ולא משהו שקובץ מבחוץ יכול לקבוע.
+            to_add.append((nid, ctype, value, str(c.get("label", "") or "")[:60], 0))
+    if to_add:
+        conn.executemany(
+            "INSERT INTO nick_contacts (nick_id, type, value, label, is_private) "
+            "VALUES (?,?,?,?,?)", to_add)
+    return len(to_add)
+
 # ── התנגשויות ────────────────────────────────────────────────────────
 def get_conflicts(nick_id):
     with get_connection() as conn:
@@ -1579,6 +1658,27 @@ def get_identities(nick_id):
             )
         """, (nick_id, nick_id, nick_id)).fetchall()
         return [dict(r) for r in rows]
+
+def _identity_group_many(conn, nick_ids):
+    """
+    הסגור הטרנזיטיבי של קבוצת ניקים ב-BFS אחד. ה-frontier נחתך למנות של 400
+    (=800 פרמטרים) — מגבלת SQLite היא 999, וקבוצה גדולה הייתה מפילה את השאילתה.
+    """
+    group = {int(n) for n in nick_ids}
+    frontier = set(group)
+    while frontier:
+        new = set()
+        for chunk in _chunks(sorted(frontier), 400):
+            ph = ",".join(["?"] * len(chunk))
+            for a, b in conn.execute(f"""
+                SELECT nick_id_a, nick_id_b FROM nick_identities
+                WHERE nick_id_a IN ({ph}) OR nick_id_b IN ({ph})
+            """, list(chunk) * 2):
+                for x in (a, b):
+                    if x not in group:
+                        group.add(x); new.add(x)
+        frontier = new
+    return group
 
 def _identity_group(conn, nick_id):
     """מחזיר את כל ה-IDs בקבוצת הזהות של ניק (כולל עצמו), דרך סגור טרנזיטיבי."""
@@ -1731,6 +1831,53 @@ def count_export_modes():
             "has_info": row["info_c"] or 0,
             "my_info": row["mine_c"] or 0}
 
+def _contacts_for_export(conn):
+    """
+    אנשי הקשר הניתנים לשיתוף, מקובצים לפי nick_id, בשאילתה אחת.
+    is_private=1 לא יוצא לעולם: הממשק מבטיח "🔒 סודי (לא יסונכרן בייצוא)",
+    וזו הבטחה מוחלטת שאינה תלויה בשום מתג.
+    """
+    out = {}
+    for r in conn.execute(
+            "SELECT nick_id, type, value, label FROM nick_contacts "
+            "WHERE is_private=0 AND value != '' ORDER BY nick_id, type, id"):
+        rec = {"type": r["type"], "value": r["value"]}
+        if r["label"]:
+            rec["label"] = r["label"]
+        out.setdefault(r["nick_id"], []).append(rec)
+    return out
+
+def _identity_groups_for_export(conn, id_key):
+    """
+    קבוצות זהות כרשימות של {forum, username} — id-ים חסרי משמעות במאגר אחר.
+    id_key: {nick_id: (forum, username)} של הניקים שיוצאו בפועל.
+    קישור נכלל רק אם *שני* צדדיו יוצאו; אחרת הקובץ היה חושף פורום+שם משתמש
+    של ניק שהוחרג במכוון (פורום מכובה, מצב ייצוא, בחירה) — דליפת פרטיות.
+    parent/union-find בסריקה אחת, בלי self-join.
+    """
+    parent = {}
+    def find(x):
+        while parent.get(x, x) != x:
+            parent[x] = parent.get(parent[x], parent[x]); x = parent[x]
+        return x
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+    for a, b in conn.execute("SELECT nick_id_a, nick_id_b FROM nick_identities"):
+        if a in id_key and b in id_key:
+            parent.setdefault(a, a); parent.setdefault(b, b); union(a, b)
+    groups = {}
+    for nid in parent:
+        groups.setdefault(find(nid), []).append(nid)
+    out = []
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        out.append([{"forum": id_key[n][0], "username": id_key[n][1]}
+                    for n in sorted(members)])
+    return out
+
 def export_data(mode="all", ids=None):
     """
     mode: 'all' | 'has_info' (רק ניקים עם מידע מעניין) | 'my_info' (רק ניקים עם מידע שהוספתי בעצמי)
@@ -1739,6 +1886,8 @@ def export_data(mode="all", ids=None):
     exportable = get_exportable_fields()
     io_flags = get_forum_io_flags()   # forum_name -> included?
     id_set = {int(i) for i in ids} if ids is not None else None
+    keep = {}       # nick_id -> the record already in `records` (לצירוף אנשי קשר)
+    id_key = {}     # nick_id -> (forum, username)  — לזהויות
     with get_connection() as conn:
         rows = conn.execute(_EXPORT_QUERY).fetchall()
     records = []
@@ -1753,17 +1902,39 @@ def export_data(mode="all", ids=None):
             continue
         if mode == "my_info" and not d.get("_my_info"):
             continue
-        records.append({f: d.get(f, '') for f in exportable})
+        rec = {f: d.get(f, '') for f in exportable}
+        records.append(rec)
+        keep[d["id"]] = rec
+        id_key[d["id"]] = (d.get("forum", ""), d.get("username", ""))
+
+    contacts_n = groups_out = 0
+    with get_connection() as conn:
+        if sync_enabled("contacts"):
+            by_nick = _contacts_for_export(conn)
+            for nid, rec in keep.items():
+                cts = by_nick.get(nid)
+                if cts:
+                    rec["contacts"] = cts[:MAX_CONTACTS_PER_NICK]
+                    contacts_n += len(rec["contacts"])
+        identity_groups = (_identity_groups_for_export(conn, id_key)
+                           if sync_enabled("identities") else [])
+        groups_out = len(identity_groups)
     return {
-        "version": 2,
+        # exported_fields מכיל שמות עמודות בלבד — זו ההבטחה שמחזיקה תאימות
+        # לאחור: גרסה ישנה קוראת nicks[] ו-exported_fields ומתעלמת מהשאר.
+        "version": EXPORT_FORMAT_VERSION,
         "exported_at": datetime.now().isoformat(),
         "exported_fields": exportable,
         "export_mode": mode,
         "nicks": records,
+        "identity_groups": identity_groups,
+        "counts": {"nicks": len(records), "contacts": contacts_n, "identity_groups": groups_out},
     }
 
 def get_unknown_forums_in_data(data):
-    """מחזיר שמות פורומים בקובץ הייבוא שאינם קיימים במסד"""
+    """מחזיר שמות פורומים בקובץ הייבוא שאינם קיימים במסד.
+    במכוון סורק רק nicks[]: פורומים שמוזכרים ב-identity_groups הם תמיד תת-קבוצה
+    שלהם (קישור מיוצא רק כששני צדדיו ברשימת הניקים), ולכן אין מה למפות בנפרד."""
     existing = set(get_forum_names())
     incoming = {n.get("forum","").strip() for n in data.get("nicks",[]) if n.get("forum","").strip()}
     return sorted(incoming - existing)
@@ -2111,22 +2282,28 @@ def bulk_link_identities(nick_ids):
     (קריאה ל-add_identity לכל חבר בנתה מחדש את כל הקליקה בכל פעם — O(n³);
     בחירה של מאות ניקים הייתה תוקעת את התוכנה לדקות.)
     """
+    with get_connection() as conn:
+        return _link_identity_group_conn(conn, nick_ids)
+
+def _link_identity_group_conn(conn, nick_ids, cap=None):
+    """
+    מאחד קבוצת ניקים לקבוצת זהות אחת על חיבור קיים (כולל מיזוג עם קבוצות
+    קיימות). הייבוא לא יכול לקרוא ל-add_identity פר-זוג: היא פותחת with משלה
+    ומחשבת מחדש את הסגור לכל זוג.
+    """
     ids = sorted({int(i) for i in (nick_ids or [])})
     if len(ids) < 2:
         return 0
-    with get_connection() as conn:
-        members = set()
-        for i in ids:
-            members |= _identity_group(conn, i)
-        members = sorted(members)
-        if len(members) > MAX_IDENTITY_GROUP:
-            raise ValueError(
-                f"קבוצת זהות של {len(members)} ניקים נראית כטעות — "
-                f"המקסימום הוא {MAX_IDENTITY_GROUP}. בחר פחות ניקים.")
-        pairs = [(members[i], members[j])
-                 for i in range(len(members)) for j in range(i + 1, len(members))]
-        conn.executemany(
-            "INSERT OR IGNORE INTO nick_identities (nick_id_a, nick_id_b) VALUES (?,?)", pairs)
+    members = sorted(_identity_group_many(conn, ids))
+    limit = MAX_IDENTITY_GROUP if cap is None else cap
+    if len(members) > limit:
+        raise ValueError(
+            f"קבוצת זהות של {len(members)} ניקים נראית כטעות — "
+            f"המקסימום הוא {limit}. בחר פחות ניקים.")
+    pairs = [(members[i], members[j])
+             for i in range(len(members)) for j in range(i + 1, len(members))]
+    conn.executemany(
+        "INSERT OR IGNORE INTO nick_identities (nick_id_a, nick_id_b) VALUES (?,?)", pairs)
     return len(members)
 
 def bulk_move_forum(nick_ids, forum):
@@ -2422,6 +2599,93 @@ def validate_backup(src_path):
         raise ValueError("הקובץ אינו גיבוי תקין של Tik-Nick")
     return n
 
+# ── גיבוי אוטומטי ─────────────────────────────────────────────────────
+# המאגר האמיתי הוא 88MB, והתיקייה יושבת על C: שצפוף. לכן: מעט עותקים,
+# תקרת נפח קשיחה, וספירה שהמשתמש רואה — ולא "נשמור הכל ליתר ביטחון".
+AUTO_BACKUP_KEEP = 3
+AUTO_BACKUP_MAX_BYTES = 1024 * 1024 * 1024      # 1GB לכל התיקייה
+AUTO_BACKUP_MIN_HOURS = 20                      # "יומי" בלי להיתקע על הפעלה כפולה
+
+def backup_dir():
+    d = os.path.join(os.path.dirname(os.path.abspath(DB_PATH)), "backups")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+def list_backups():
+    """הגיבויים האוטומטיים, החדש ראשון."""
+    out = []
+    try:
+        d = backup_dir()
+        for name in os.listdir(d):
+            if not name.startswith("tiknick-") or not name.endswith(".db"):
+                continue
+            full = os.path.join(d, name)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            out.append({"path": full, "name": name, "bytes": st.st_size,
+                        "_ts": st.st_mtime,
+                        "mtime": datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds")})
+    except Exception:
+        return []
+    # מיון לפי הזמן המדויק (float) ואז לפי שם — שני גיבויים באותה שנייה חייבים
+    # סדר יציב, אחרת הגיזום מוחק אחד מהם באקראי במקום את הישן.
+    out.sort(key=lambda x: (x["_ts"], x["name"]), reverse=True)
+    return out
+
+def _prune_backups(keep=AUTO_BACKUP_KEEP):
+    files = list_backups()
+    total = 0
+    for i, f in enumerate(files):
+        total += f["bytes"]
+        if i >= keep or total > AUTO_BACKUP_MAX_BYTES:
+            try:
+                os.remove(f["path"])
+            except OSError:
+                pass
+
+def auto_backup(reason="daily", force=False):
+    """
+    עותק מלא דרך ה-backup API של SQLite (לא העתקת קובץ — WAL).
+    reason נכנס לשם הקובץ כדי שאפשר יהיה לראות למה הוא נוצר.
+    מחזיר {"ok", "path"|"skipped", "bytes"} — לעולם לא מרים חריגה: גיבוי
+    שנכשל (דיסק מלא, נתיב חסום) לא אמור למנוע מהמשתמש לעבוד.
+    """
+    try:
+        if not force and reason == "daily":
+            last = get_setting("last_auto_backup", "")
+            if last:
+                try:
+                    delta = datetime.now() - datetime.fromisoformat(last)
+                    if delta.total_seconds() < AUTO_BACKUP_MIN_HOURS * 3600:
+                        return {"ok": True, "skipped": "טרי", "path": ""}
+                except ValueError:
+                    pass
+        safe = "".join(c for c in str(reason) if c.isalnum() or c in "-_")[:24] or "auto"
+        dest = os.path.join(backup_dir(),
+                            f"tiknick-{safe}-{datetime.now():%Y%m%d-%H%M%S}.db")
+        backup_to(dest)
+        size = os.path.getsize(dest)
+        if size <= 0:
+            os.remove(dest)
+            return {"ok": False, "error": "הגיבוי יצא ריק"}
+        if reason == "daily":
+            set_setting("last_auto_backup", datetime.now().isoformat(timespec="seconds"))
+        _prune_backups()
+        return {"ok": True, "path": dest, "bytes": size}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def backup_status():
+    files = list_backups()
+    return {"enabled": get_setting("auto_backup_enabled", "1") != "0",
+            "last": get_setting("last_auto_backup", ""),
+            "count": len(files),
+            "bytes": sum(f["bytes"] for f in files),
+            "dir": backup_dir(),
+            "files": files}
+
 def restore_from(src_path):
     """
     שחזור מגיבוי דרך ה-backup API של SQLite — כותב לתוך המאגר החי במקום להחליף
@@ -2460,9 +2724,125 @@ def _prune_safety_backups(keep=_SAFETY_KEEP):
     except Exception:
         return 0
 
+def preview_import(data, forum_mapping=None, include_contacts=True,
+                   include_identities=True, sample_limit=12, progress_cb=None):
+    """
+    מעבר קריאה-בלבד על קובץ הייבוא: כמה ניקים חדשים מול קיימים, כמה ערכים
+    ייכתבו, כמה מהם ידרסו ערך קיים שונה (עם דוגמאות), ומה יידלג ולמה.
+    שום דבר לא נכתב.
+
+    עלות: מעבר אחד על רשומות הקובץ + שליפת הניקים הקיימים במנות של 400 —
+    אותה עבודה שהייבוא עושה ממילא בשלב הטעינה שלו, לא מעבר שני על המאגר.
+    """
+    mapping = forum_mapping or {}
+    exported_fields = data.get("exported_fields", get_exportable_fields())
+    sourced_fields = [f for f in exported_fields
+                      if f not in _NON_SOURCED and f in _NICK_FIELDS]
+    io_flags = get_forum_io_flags()
+
+    entries, skipped_no_username, skipped_forum = [], 0, 0
+    excluded_forums = set()
+    for nick in data.get("nicks", []):
+        if not isinstance(nick, dict):
+            continue
+        username = str(nick.get("username", "")).strip()
+        forum_raw = str(nick.get("forum", "")).strip()
+        forum = mapping.get(forum_raw, "") or forum_raw
+        if not username:
+            skipped_no_username += 1
+            continue
+        if io_flags.get(forum, True) is False:
+            skipped_forum += 1
+            excluded_forums.add(forum)
+            continue
+        entries.append((forum, username, nick))
+
+    new_nicks = existing_nicks = values = conflicts = 0
+    samples = []
+    with get_connection() as conn:
+        by_forum = {}
+        for forum, username, _ in entries:
+            by_forum.setdefault(forum, set()).add(username)
+        existing = {}
+        for forum, unames in by_forum.items():
+            for chunk in _chunks(sorted(unames), 400):
+                ph = ",".join("?" * len(chunk))
+                for r in conn.execute(
+                        f"SELECT * FROM nicks WHERE forum=? AND username IN ({ph})",
+                        [forum] + list(chunk)):
+                    existing[(forum, r["username"])] = r
+
+        seen_pairs = set()
+        for i, (forum, username, nick) in enumerate(entries):
+            if progress_cb and i % 200 == 0:
+                progress_cb(i)
+            row = existing.get((forum, username))
+            key = (forum, username)
+            if row is None and key not in seen_pairs:
+                new_nicks += 1
+            elif row is not None and key not in seen_pairs:
+                existing_nicks += 1
+            seen_pairs.add(key)
+            for field in sourced_fields:
+                val = nick.get(field, "")
+                if val in (None, ""):
+                    continue
+                values += 1
+                if row is None:
+                    continue
+                old = str((row[field] if field in row.keys() else "") or "").strip()
+                if old and old != str(val).strip():
+                    conflicts += 1
+                    if len(samples) < sample_limit:
+                        samples.append({"forum": forum, "username": username,
+                                        "field": field, "old": old[:120],
+                                        "new": str(val)[:120]})
+
+    contacts = 0
+    if include_contacts:
+        for _, _, nick in entries:
+            cts = nick.get("contacts")
+            if isinstance(cts, list):
+                contacts += len([c for c in cts if isinstance(c, dict)])
+    groups = data.get("identity_groups") if include_identities else None
+    return {
+        "rows": len(data.get("nicks", [])),
+        "new_nicks": new_nicks, "existing_nicks": existing_nicks,
+        "values": values, "conflicts": conflicts, "samples": samples,
+        "skipped_no_username": skipped_no_username,
+        "skipped_forum": skipped_forum,
+        "excluded_forums": sorted(excluded_forums),
+        "unknown_forums": get_unknown_forums_in_data(data),
+        "contacts": contacts,
+        "identity_groups": len(groups) if isinstance(groups, list) else 0,
+        "fields": sourced_fields,
+    }
+
+def _resolve_pairs_conn(conn, pairs, known=None):
+    """
+    (פורום, שם משתמש) → nick_id עבור חברי קבוצות הזהות שבקובץ.
+    קודם ממה שהייבוא כבר נגע בו (בחינם), והשאר במנות של 400 מקובצות לפי פורום —
+    אותה תבנית שבה import_data טוען את הניקים הקיימים. שאילתה לזוג הייתה N+1
+    על אלפי קישורים.
+    """
+    out = dict(known or {})
+    missing = [pr for pr in pairs if pr not in out]
+    by_forum = {}
+    for forum, username in missing:
+        by_forum.setdefault(forum, set()).add(username)
+    for forum, unames in by_forum.items():
+        for chunk in _chunks(sorted(unames), 400):
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                    f"SELECT id, username FROM nicks WHERE forum=? AND username IN ({ph})",
+                    [forum] + list(chunk)):
+                out[(forum, r["username"])] = r["id"]
+    return out
+
 def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
                 import_name=None, import_notes="", import_trust=None, import_absolute=0,
-                manual_conflicts=False, progress_cb=None):
+                manual_conflicts=False, progress_cb=None,
+                include_contacts=True, include_identities=True):
     """
     ייבוא מבוסס-מקורות: נוצר מקור ייבוא אחד (שם/הערות/אמינות/אבסולוטי),
     וכל ערך מיובא נרשם תחתיו במנוע המקורות. הערך המנצח בכל שדה נקבע אוטומטית.
@@ -2471,6 +2851,7 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
     מחזיר: (imported_new, values_recorded) או dict במצב ידני.
     """
     imported = 0; recorded = 0
+    contacts_added = identities_linked = identities_skipped = 0
     pending_conflicts = []
     exported_fields = data.get("exported_fields", get_exportable_fields())
     mapping = forum_mapping or {}
@@ -2523,6 +2904,8 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
                     existing[(forum, r["username"])] = r
 
         done_n = 0
+        local_ids = {}       # (forum, username) -> nick_id — לפתרון קבוצות הזהות
+        file_contacts = []   # [(nick_id, [{type,value,label}, …]), …]
         for forum, username, nick in entries:
             done_n += 1
             if progress_cb and done_n % 25 == 0:
@@ -2539,6 +2922,12 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
                 # בלי זה, קובץ שמכיל את אותו (פורום, שם משתמש) פעמיים יצר שני
                 # ניקים — וסריקה עתידית מתאימה רק לאחד מהם. השני נשאר יתום.
                 existing[(forum, username)] = {"id": nid}
+
+            local_ids[(forum, username)] = nid
+            if include_contacts:
+                cts = nick.get("contacts")
+                if isinstance(cts, list) and cts:
+                    file_contacts.append((nid, cts))
 
             changed_fields = []
             for field in sourced_fields:
@@ -2561,9 +2950,46 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
             if changed_fields:
                 _resolve_fields_conn(conn, nid, changed_fields, history=(row is not None))
 
+        # ── מקטעי גרסה 3 — באותו חיבור ובאותה טרנזקציה ──
+        if include_contacts and file_contacts:
+            contacts_added = _import_contacts_conn(conn, file_contacts)
+
+        raw_groups = data.get("identity_groups") if include_identities else None
+        if isinstance(raw_groups, list) and raw_groups:
+            wanted = []
+            for grp in raw_groups[:MAX_IMPORT_IDENTITY_GROUPS]:
+                if not isinstance(grp, list) or len(grp) < 2:
+                    continue
+                members = []
+                for m in grp:
+                    if not isinstance(m, dict):
+                        continue
+                    f_raw = str(m.get("forum", "")).strip()
+                    f_map = mapping.get(f_raw, "") or f_raw
+                    u = str(m.get("username", "")).strip()
+                    if u:
+                        members.append((f_map, u))
+                if len(members) >= 2:
+                    wanted.append(members)
+            flat = {pr for grp in wanted for pr in grp}
+            resolved = _resolve_pairs_conn(conn, sorted(flat), local_ids)
+            for members in wanted:
+                local = [resolved[pr] for pr in members if pr in resolved]
+                if len(set(local)) < 2:
+                    # קישור מדולג כששני הצדדים אינם קיימים אצלי — מדווח, לא מומצא
+                    identities_skipped += 1
+                    continue
+                try:
+                    _link_identity_group_conn(conn, local, cap=MAX_IDENTITY_GROUP)
+                    identities_linked += 1
+                except ValueError:
+                    identities_skipped += 1
+
     # עדכן ספירות בלוג הייבוא (import_sources הישן, לתאימות)
     log_import_source(src_name, import_notes, trust, imported, recorded)
-    if manual_conflicts:
-        return {"imported": imported, "recorded": recorded,
-                "conflicts": pending_conflicts, "source_id": import_sid}
-    return imported, recorded
+    # מחזיר תמיד dict (עד 0.8.6 היה tuple במצב הרגיל ו-dict במצב הידני)
+    return {"imported": imported, "recorded": recorded,
+            "conflicts": pending_conflicts if manual_conflicts else [],
+            "manual": bool(manual_conflicts), "source_id": import_sid,
+            "contacts": contacts_added,
+            "identities": identities_linked, "identities_skipped": identities_skipped}

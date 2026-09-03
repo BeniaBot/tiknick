@@ -8,8 +8,11 @@ here = os.path.dirname(os.path.abspath(__file__))
 failed = []
 for path in sorted(glob.glob(os.path.join(here, "test_*.py"))):
     name = os.path.basename(path)
+    # בלי PYTHONIOENCODING תת-התהליך יורש את קונסולת CP1255, וכל print עם עברית
+    # או אמוג'י מפיל את החבילה ב-UnicodeEncodeError שאין לו קשר לנבדק עצמו.
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
     r = subprocess.run([sys.executable, path], capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace", env=env)
     ok = r.returncode == 0
     print(("PASS " if ok else "FAIL ") + name)
     if not ok:
