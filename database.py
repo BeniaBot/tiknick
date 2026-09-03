@@ -5,7 +5,7 @@ import sqlite3
 import json
 import os
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(_HERE, "tiknick.db")
@@ -1771,6 +1771,159 @@ def remove_identity(current_nick_id, other_nick_id):
             a, b = min(other_nick_id, other), max(other_nick_id, other)
             conn.execute(
                 "DELETE FROM nick_identities WHERE nick_id_a=? AND nick_id_b=?", (a, b))
+
+# ── סריקה מתוזמנת ────────────────────────────────────────────────────
+# הפורומים כאן הם התקנות NodeBB קטנות שמתנדבים מתחזקים, חלקן על Render חינמי
+# שנרדם ומתעורר לאט. סריקה לא מפוקחת מכתובת IP ביתית היא נזק אמיתי לצד השני,
+# ולכן כל ברירת מחדל כאן היא בצד הזהיר, והרצפות נאכפות פעמיים: כאן בכתיבה,
+# ושוב בזמן ההחלטה מול חותמת הסריקה בפועל.
+SCHED_MIN_INTERVAL_HOURS = 12      # רצפה קשיחה — גם לעריכה ידנית של ההגדרות
+SCHED_MAX_FAILS = 5                # אחרי כך התזמון נעצר עד התערבות המשתמש
+SCHED_DEFAULTS = {"enabled": False, "mode": "daily", "at": "03:00",
+                  "every_hours": 24, "forums": []}
+
+def get_schedule():
+    """הגדרות התזמון, תמיד עם ערכים תקינים גם אם השורה נערכה ידנית."""
+    out = dict(SCHED_DEFAULTS)
+    out["enabled"] = get_setting("sched_enabled", "0") == "1"
+    mode = get_setting("sched_mode", "daily")
+    out["mode"] = mode if mode in ("daily", "interval") else "daily"
+    at = get_setting("sched_at", "03:00")
+    out["at"] = at if (len(at) == 5 and at[2] == ":" and
+                       at[:2].isdigit() and at[3:].isdigit() and
+                       int(at[:2]) < 24 and int(at[3:]) < 60) else "03:00"
+    try:
+        out["every_hours"] = max(SCHED_MIN_INTERVAL_HOURS,
+                                 int(get_setting("sched_every_hours", "24")))
+    except (TypeError, ValueError):
+        out["every_hours"] = 24
+    try:
+        forums = json.loads(get_setting("sched_forums", "[]"))
+    except ValueError:
+        forums = []
+    live = set(get_forum_names())
+    # פורום ששמו שונה או נמחק פשוט נושר — הכיוון הבטוח
+    out["forums"] = [f for f in forums if isinstance(f, str) and f in live]
+    out["fail_count"] = int(get_setting("sched_fail_count", "0") or 0)
+    out["last_error"] = get_setting("sched_last_error", "")
+    out["last_run"] = get_setting("sched_last_run", "")
+    out["snooze_until"] = get_setting("sched_snooze_until", "")
+    out["min_hours"] = SCHED_MIN_INTERVAL_HOURS
+    return out
+
+def set_schedule(enabled=None, mode=None, at=None, every_hours=None, forums=None):
+    if enabled is not None:
+        set_setting("sched_enabled", "1" if enabled else "0")
+        if enabled:
+            # הפעלה מחדש מנקה עצירה קודמת — אחרת המתג נראה דלוק ולא קורה כלום
+            set_setting("sched_fail_count", "0")
+            set_setting("sched_snooze_until", "")
+    if mode in ("daily", "interval"):
+        set_setting("sched_mode", mode)
+    if at:
+        set_setting("sched_at", str(at)[:5])
+    if every_hours is not None:
+        try:
+            h = max(SCHED_MIN_INTERVAL_HOURS, int(every_hours))
+        except (TypeError, ValueError):
+            h = 24
+        set_setting("sched_every_hours", h)
+    if forums is not None:
+        live = set(get_forum_names())
+        clean = sorted({f for f in forums if isinstance(f, str) and f in live})
+        set_setting("sched_forums", json.dumps(clean, ensure_ascii=False))
+    return get_schedule()
+
+def sched_note_result(ok, error=""):
+    """מעדכן את מוני הכישלון. מחזיר True אם התזמון נעצר עכשיו."""
+    if ok:
+        set_setting("sched_fail_count", "0")
+        set_setting("sched_last_error", "")
+        set_setting("sched_last_run", datetime.now().isoformat(timespec="seconds"))
+        return False
+    n = int(get_setting("sched_fail_count", "0") or 0) + 1
+    set_setting("sched_fail_count", n)
+    set_setting("sched_last_error", str(error)[:300])
+    if n >= SCHED_MAX_FAILS:
+        set_setting("sched_enabled", "0")
+        set_setting("sched_notify", "התזמון הופסק אחרי %d ניסיונות כושלים" % n)
+        return True
+    return False
+
+def sched_pop_notify():
+    """הודעה חד-פעמית לממשק (למשל 'התזמון הופסק') — נקראת ונמחקת."""
+    msg = get_setting("sched_notify", "")
+    if msg:
+        set_setting("sched_notify", "")
+    return msg
+
+def sched_snooze(hours=6):
+    until = datetime.now() + timedelta(hours=hours)
+    set_setting("sched_snooze_until", until.isoformat(timespec="seconds"))
+    return until.isoformat(timespec="seconds")
+
+def sched_due_forums(now=None):
+    """
+    אילו פורומים באמת מגיע להם להיסרק עכשיו. הרצפה נבדקת כאן מול חותמת הסריקה
+    האמיתית, ולא רק מול ההגדרה — כך ששורת הגדרות שנערכה ידנית לא יכולה להוריד
+    את התדירות מתחת למינימום.
+    """
+    cfg = get_schedule()
+    if not cfg["enabled"] or not cfg["forums"]:
+        return []
+    now = now or datetime.now()
+    # last_scrape_<forum> נכתב ב-UTC (main.py משתמש ב-utcnow), ואילו שעת היעד
+    # היומית היא שעון מקומי שהמשתמש בחר. השוואה של השתיים באותה מערכת הייתה
+    # מנפחת את "כמה עבר" בהפרש אזור הזמן — בישראל 2-3 שעות, מספיק כדי לרוץ
+    # מוקדם מהרצפה.
+    now_utc = datetime.utcnow()
+    snooze = cfg.get("snooze_until") or ""
+    if snooze:
+        try:
+            if now < datetime.fromisoformat(snooze):
+                return []
+        except ValueError:
+            pass
+    # חותמות הסריקה נשמרות כ-last_scrape_<שם פורום> (נכתבות ב-main.py)
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM settings WHERE key LIKE 'last_scrape_%'").fetchall()
+    last_all = {k[len("last_scrape_"):]: v for k, v in rows}
+    due = []
+    for f in get_forums():
+        name = f["name"]
+        if name not in cfg["forums"]:
+            continue
+        last = last_all.get(name) or ""
+        hours_since = None
+        if last:
+            try:
+                hours_since = (now_utc - datetime.fromisoformat(last)).total_seconds() / 3600.0
+            except ValueError:
+                hours_since = None
+        if hours_since is not None and hours_since < SCHED_MIN_INTERVAL_HOURS:
+            continue                       # רצפה קשיחה
+        if cfg["mode"] == "interval":
+            if hours_since is None or hours_since >= cfg["every_hours"]:
+                due.append(name)
+        else:                              # daily at HH:MM
+            hh, mm = int(cfg["at"][:2]), int(cfg["at"][3:])
+            target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+            if now < target:
+                continue                   # השעה עוד לא הגיעה היום
+            if hours_since is None or hours_since >= SCHED_MIN_INTERVAL_HOURS:
+                # רק אם לא נסרק כבר אחרי שעת היעד של היום
+                if not last:
+                    due.append(name)
+                else:
+                    # target הוא מקומי; מעבירים אותו ל-UTC לפני ההשוואה
+                    offset = now - now_utc
+                    try:
+                        if datetime.fromisoformat(last) < (target - offset):
+                            due.append(name)
+                    except ValueError:
+                        due.append(name)
+    return due
 
 # ── נצפו לאחרונה ─────────────────────────────────────────────────────
 RECENT_VIEWS_KEEP = 30

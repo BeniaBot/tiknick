@@ -3246,6 +3246,89 @@ async function dismissSuggestion(i) {
   _dropSuggestion(g);
 }
 
+// ══ סריקה מתוזמנת ════════════════════════════════════════════════════
+// כבוי כברירת מחדל, ומרגע שמדליקים — עדיין לא סורק כלום עד שמסמנים פורומים.
+// זו לא זהירות יתר: אלה פורומים קטנים שמתנדבים מתחזקים, וסריקה לא מפוקחת
+// מכתובת ביתית היא עומס אמיתי עליהם.
+async function openScheduler() {
+  const cfg = await api('get_schedule') || {};
+  const forums = (await api('get_scrapable_forums') || []).filter(f => (f.url || '').trim());
+  const on = !!cfg.enabled;
+  const picked = new Set(cfg.forums || []);
+  openModal('⏰ סריקה מתוזמנת', `
+    ${cfg.fail_count ? `<div style="background:var(--card2);border-inline-start:3px solid var(--danger,#e5484d);
+        padding:8px 10px;border-radius:6px;font-size:12px;margin-bottom:10px">
+        ⚠️ ${esc(cfg.fail_count)} ניסיונות כושלים ברצף${cfg.last_error ? ` — ${esc(cfg.last_error)}` : ''}
+      </div>` : ''}
+    <label style="display:flex;gap:8px;align-items:center;font-size:13px;cursor:pointer;margin-bottom:12px">
+      <input type="checkbox" id="sch-on" ${on ? 'checked' : ''}>
+      <b>הפעל סריקה אוטומטית</b>
+    </label>
+    <div class="form-group">
+      <label class="form-label">מתי</label>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <label style="display:flex;gap:5px;align-items:center;font-size:12.5px;cursor:pointer">
+          <input type="radio" name="sch-mode" value="daily" ${cfg.mode !== 'interval' ? 'checked' : ''}>
+          כל יום בשעה</label>
+        <input type="time" class="form-input" id="sch-at" value="${esc(cfg.at || '03:00')}"
+               style="width:auto" dir="ltr">
+        <label style="display:flex;gap:5px;align-items:center;font-size:12.5px;cursor:pointer;margin-inline-start:10px">
+          <input type="radio" name="sch-mode" value="interval" ${cfg.mode === 'interval' ? 'checked' : ''}>
+          כל</label>
+        <input type="number" class="form-input" id="sch-hours" min="${esc(cfg.min_hours || 12)}" max="720"
+               value="${esc(cfg.every_hours || 24)}" style="width:80px" dir="ltr">
+        <span style="font-size:12.5px">שעות</span>
+      </div>
+      <div style="font-size:11px;color:var(--subtext);margin-top:5px">
+        המינימום הוא ${esc(cfg.min_hours || 12)} שעות בין סריקות לאותו פורום — גם אם תגדיר פחות.
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">אילו פורומים</label>
+      ${forums.length ? `<div class="sync-list" style="max-height:30vh;overflow:auto">
+        ${forums.map((f, i) => `
+          <div class="sync-item">
+            <span class="sync-label">${esc(f.name)}</span>
+            <label class="toggle">
+              <input type="checkbox" class="sch-forum" data-forum="${esc(f.name)}"
+                     ${picked.has(f.name) ? 'checked' : ''}>
+              <span class="toggle-slider"></span>
+            </label>
+          </div>`).join('')}
+      </div>` : '<div style="font-size:12.5px;color:var(--subtext)">אין פורומים עם כתובת לסריקה.</div>'}
+      <div style="font-size:11px;color:var(--subtext);margin-top:5px">
+        סריקה משתמשת רק בעוגייה השמורה של כל פורום בנפרד. פורום שדורש התחברות
+        ושהעוגייה שלו פגה — פשוט ידולג.
+      </div>
+    </div>
+    <div style="font-size:11.5px;color:var(--subtext);line-height:1.8;margin-top:6px">
+      ${cfg.last_run ? `סריקה אוטומטית אחרונה: <span dir="ltr">${esc(String(cfg.last_run).replace('T', ' ').slice(0, 16))}</span><br>` : ''}
+      ${(cfg.due || []).length ? `מגיע להיסרק כעת: ${esc((cfg.due || []).join(', '))}` : 'כרגע אין פורום שמגיע לו להיסרק.'}
+    </div>
+  `, [
+    { label: '💾 שמור', cls: 'btn-primary', action: async () => {
+      const chosen = [...document.querySelectorAll('.sch-forum')]
+        .filter(c => c.checked).map(c => c.dataset.forum);
+      const mode = document.querySelector('input[name="sch-mode"]:checked')?.value || 'daily';
+      const r = await api('set_schedule',
+        document.getElementById('sch-on').checked, mode,
+        document.getElementById('sch-at').value,
+        parseInt(document.getElementById('sch-hours').value) || 24, chosen);
+      if (!r?.ok) { toast(r?.error || 'השמירה נכשלה', 'error'); return; }
+      closeModal();
+      toast(r.enabled
+        ? (r.forums.length ? `התזמון פעיל · ${r.forums.length} פורומים` : 'התזמון פעיל, אך לא נבחר אף פורום')
+        : 'התזמון כבוי', r.enabled && !r.forums.length ? 'error' : 'success');
+    }},
+    { label: '▶ הרץ עכשיו', cls: 'btn-ghost', action: async () => {
+      const r = await api('run_schedule_now');
+      if (!r?.ok) { toast(r?.error || 'לא ניתן להריץ', 'error'); return; }
+      closeModal(); startScrapeMonitor();
+    }},
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm', { id: 'scheduler' });
+}
+
 // ══ יומן ייבואים ═════════════════════════════════════════════════════
 // כל ייבוא נרשם ב-import_sources מאז הגרסאות הראשונות, ומעולם לא הוצג.
 async function openImportLog() {
@@ -4791,15 +4874,35 @@ function startScrapeMonitor() {
         const act = p.all_mode ? { actionLabel: '📋 מה השתנה', onAction: openScanRuns, ms: 8000 }
                   : (p.run_id ? { actionLabel: '📋 מה השתנה',
                                   onAction: () => openScanChanges(p.run_id), ms: 8000 } : {});
-        toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`,
-              partial ? 'error' : 'success', act);
+        if (p.auto) {
+          // ריצה שהמשתמש לא התחיל: שקטה כשלא השתנה כלום, ולא טוענת מחדש את
+          // הטבלה מתחת לידיים שלו כשחלון פתוח.
+          if (p.added || p.updated || partial) {
+            toast(`סריקה אוטומטית: נוספו ${p.added}, עודכנו ${p.updated}${extra}`,
+                  partial ? 'error' : 'success', act);
+          }
+        } else {
+          toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`,
+                partial ? 'error' : 'success', act);
+        }
         // אילו פורומים דולגו ולמה — רק בסריקת "הכל" (ב"סנכרן נבחרים" אלה שמות ניקים)
         if (p.all_mode && p.skipped && p.skipped.length && !p.cancelled && !isModalOpen()) {
           showSkippedForums(p.skipped);
         }
       }
       await _yieldPaint();   // תן לבאנר להיעלם לפני הטעינה הכבדה
-      await loadNicks(document.getElementById('search-input').value);
+      if (p.auto && isModalOpen()) {
+        // סריקה שהמשתמש לא התחיל לא תמשוך לו את הרשימה מתחת לידיים באמצע
+        // עבודה — מציעים לרענן במקום לעשות זאת בשבילו.
+        if (p.added || p.updated) {
+          toast('הסריקה האוטומטית עדכנה נתונים', 'info', {
+            actionLabel: '🔄 רענן',
+            onAction: () => loadNicks(document.getElementById('search-input').value),
+            ms: 9000 });
+        }
+      } else {
+        await loadNicks(document.getElementById('search-input').value);
+      }
     }
     } finally { busy = false; }
   }, 700);
@@ -4949,6 +5052,14 @@ async function openChazonishnik() {
         <input id="chz-user" class="form-input" placeholder="שם המשתמש בפורום (למשל: בנימין)">
       </div>
       <div class="form-group" style="margin-bottom:10px">
+        <label class="form-label">משתמש שני
+          <span style="font-size:10px;opacity:.6">(אופציונלי — מילוי יפיק דוח השוואה)</span></label>
+        <input id="chz-user2" class="form-input" placeholder="השאר ריק לניתוח של משתמש אחד">
+        <div style="font-size:11px;color:var(--subtext);margin-top:4px">
+          שתי הסריקות רצות בזו אחר זו ולא במקביל — כדי לא להכפיל את העומס על הפורום.
+        </div>
+      </div>
+      <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">עוגיית express.sid <span style="font-size:10px;opacity:.6">(אופציונלי בפורום ציבורי · נשמרת לפעם הבאה)</span></label>
         <input id="chz-cookie" class="form-input" dir="ltr" placeholder="s%3A...  (השאר ריק אם הפורום ציבורי)">
       </div>
@@ -4984,13 +5095,18 @@ const _lastReport = { chz: null, stink: null };
 
 async function runChazonishnik() {
   const username = document.getElementById('chz-user')?.value.trim();
+  const second   = document.getElementById('chz-user2')?.value.trim() || '';
   const cookie   = document.getElementById('chz-cookie')?.value.trim() || '';
   const baseUrl  = document.getElementById('chz-forum')?.value || 'https://mitmachim.top';
   const maxPosts = parseInt(document.getElementById('chz-maxposts')?.value) || null;
   if (!username) { toast('הזן שם משתמש', 'error'); return; }
-  const start = await api('run_chazonishnik', username, cookie, baseUrl, maxPosts);
+  // שם שני מלא = השוואה. אותו מצב רקע ואותו ביטול, כדי שהבאנר וההתקדמות
+  // הקיימים ימשיכו לעבוד בלי שינוי.
+  const start = second
+    ? await api('run_chazonishnik_compare', username, second, cookie, baseUrl, maxPosts)
+    : await api('run_chazonishnik', username, cookie, baseUrl, maxPosts);
   if (!start?.ok) { toast('שגיאה: ' + (start?.error || ''), 'error'); return; }
-  showChazonishnikProgress(username);
+  showChazonishnikProgress(second ? `${username} מול ${second}` : username);
 }
 
 function showChazonishnikProgress(username) {
@@ -4999,6 +5115,7 @@ function showChazonishnikProgress(username) {
       <div style="font-size:40px;margin-bottom:14px">⏳</div>
       <div id="chz-progress-text" style="font-size:14px;margin-bottom:8px">מתחיל…</div>
       <div style="font-size:12px;color:var(--subtext)">מנתח את הפעילות של ${esc(username)} — רץ ברקע, אפשר לצאת ולחזור</div>
+      <div id="chz-which" style="font-size:11.5px;color:var(--subtext);margin-top:6px"></div>
       <div style="height:8px;background:var(--card2);border-radius:99px;overflow:hidden;margin-top:16px">
         <div id="chz-bar" style="height:100%;width:20%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .4s"></div>
       </div>
@@ -5026,6 +5143,9 @@ function startChazonishnikMonitor() {
     if (p.phase === 'scan') label = `סורק פוסטים… נמצאו ${p.count}`;
     else if (p.phase === 'analyze') label = `מנתח… ${p.count}/${p.total}`;
 
+    const which = document.getElementById('chz-which');
+    if (which) which.textContent =
+      (p.compare && p.user) ? `משתמש ${p.which || 1} מתוך 2: ${p.user}` : '';
     const txt = document.getElementById('chz-progress-text');
     const bar = document.getElementById('chz-bar');
     if (txt) txt.textContent = label;

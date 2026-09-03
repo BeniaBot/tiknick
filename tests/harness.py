@@ -77,6 +77,24 @@ const API = {
   touch_recent: async () => ({ ok: true }),
   get_recent_views: async () => [],
   get_identity_map: async () => ({ ok: true, groups: [], total_groups: 0, linked_nicks: 0 }),
+  get_scrapable_forums: async () => FORUMS.map(function (f) {
+    return { name: f.name, url: 'https://' + encodeURIComponent(f.name) + '.example',
+             platform: 'nodebb' };
+  }),
+  get_schedule: async () => ({ enabled: false, mode: 'daily', at: '03:00',
+    every_hours: 24, forums: [], fail_count: 0, last_error: '', last_run: '',
+    min_hours: 12, due: [], notify: '' }),
+  set_schedule: async () => ({ ok: true, enabled: true, forums: [] }),
+  get_backup_status: async () => ({ enabled: true, last: '', count: 0, bytes: 0,
+                                    dir: 'C:/tmp', files: [] }),
+  get_db_health: async () => ({ ok: true, quick_check: 'ok', version: '%(version)s',
+    install_type: 'portable', size: 1024, wal: 0, counts: {}, fts: true, path: 'C:/tmp/x.db' }),
+  get_import_log: async () => [],
+  get_my_trust: async () => 10,
+  get_sources: async () => [],
+  get_sync_settings: async () => ({}),
+  get_all_nick_fields: async () => [],
+  get_forum_io_flags: async () => ({}),
 };
 window.pywebview = { api: new Proxy(API, { get: (t, k) => (k in t ? t[k] : async () => null) }) };
 """

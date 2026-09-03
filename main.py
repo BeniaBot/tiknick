@@ -32,7 +32,7 @@ _scrape_state = {
     "running": False, "done": False, "error": None,
     "page": 0, "total_pages": 0,
     "added": 0, "updated": 0, "unchanged": 0, "failed_pages": 0,
-    "forum": None, "cancelled": False, "run_id": None,
+    "forum": None, "cancelled": False, "run_id": None, "auto": False,
     "all_mode": False, "selected_mode": False,
     "forum_index": 0, "forum_total": 0, "skipped": [],
 }
@@ -49,6 +49,12 @@ _chz_cancel = threading.Event()
 _update_state = {"downloaded": 0, "total": 0}
 
 # מצב ייבוא ברקע (ייבוא גדול נמשך שניות-דקות — לא חוסמים את הממשק)
+# הטיק רק *מחליט*; הסריקה עצמה עוברת במסלול הקיים עם ההשהיות שלו.
+SCHED_TICK_SEC = 60
+SCHED_STARTUP_GRACE_SEC = 300     # פתיחת התוכנה לא מפעילה סריקה מיידית
+_sched_hold = threading.Event()   # מוחזק סביב תחזוקה (vacuum/restore/reset)
+_sched_stop = threading.Event()
+
 _import_state = {"running": False, "done": False, "error": None,
                  "processed": 0, "total": 0, "result": None}
 
@@ -68,7 +74,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.9"
+APP_VERSION = "0.8.10"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -100,6 +106,28 @@ def _install_type():
     return "portable"
 
 # ── נתיבים: תמיכה גם בהרצה רגילה וגם ב-EXE (PyInstaller) ────────────
+def _sched_loop(api):
+    """
+    מתעורר כל דקה, ורוב הזמן לא עושה דבר. הבדיקות מסודרות מהזולה ליקרה, וכל
+    יציאה מוקדמת היא "ננסה בטיק הבא" — לא כישלון.
+    """
+    import time as _t
+    _sched_stop.wait(SCHED_STARTUP_GRACE_SEC)
+    while not _sched_stop.is_set():
+        try:
+            if _sched_hold.is_set():
+                pass                                  # תחזוקה רצה — לא נוגעים
+            elif db.get_setting("sched_enabled", "0") == "1":
+                due = db.sched_due_forums()
+                if due and not _scrape_state["running"]:
+                    logging.info("scheduled scrape: %s", ", ".join(due))
+                    r = api._start_scheduled(due)
+                    if not r.get("ok"):
+                        logging.info("scheduled scrape not started: %s", r.get("error"))
+        except Exception:
+            logging.exception("scheduler tick failed")
+        _sched_stop.wait(SCHED_TICK_SEC)
+
 def resource_path(rel):
     """נתיב למשאבים ארוזים (web/). ב-EXE הם ב-sys._MEIPASS."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
@@ -535,10 +563,15 @@ class API:
         busy = self._busy()
         if busy:
             return {"ok": False, "error": busy}
+        # vacuum/restore/reset לא מרימים דגל "running", ולכן _busy לא מכסה אותם
+        # והטיק היה יכול להתחיל סריקה בדיוק לתוכם.
+        _sched_hold.set()
         try:
             return {"ok": True, "size": db.vacuum()}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+        finally:
+            _sched_hold.clear()
 
     def open_data_folder(self):
         try:
@@ -564,6 +597,39 @@ class API:
         return out
 
     # ── סנכרון לאינטרנט (סריקת פורומי NodeBB) ──────────────────────
+    # ── סריקה מתוזמנת ──────────────────────────────────────────────
+    def get_schedule(self):
+        cfg = db.get_schedule()
+        cfg["notify"] = db.sched_pop_notify()      # הודעה חד-פעמית
+        cfg["due"] = db.sched_due_forums()
+        return cfg
+
+    def set_schedule(self, enabled=None, mode=None, at=None, every_hours=None,
+                     forums=None):
+        try:
+            return {"ok": True, **db.set_schedule(enabled, mode, at, every_hours, forums)}
+        except Exception as e:
+            logging.exception("set_schedule failed")
+            return {"ok": False, "error": str(e)}
+
+    def run_schedule_now(self):
+        """הרצה ידנית של מה שמתוזמן — לבדיקה, בלי להמתין לשעה."""
+        due = db.sched_due_forums()
+        if not due:
+            return {"ok": False, "error": "אין כרגע פורום שמגיע לו להיסרק"}
+        return self._start_scheduled(due)
+
+    def _start_scheduled(self, due):
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
+        # cookie="" במכוון: start_scrape_all קורא עוגייה שמורה לכל פורום בנפרד
+        # (כלל הפרטיות מ-0.8.3). אין כאן שום קוד עוגיות חדש.
+        r = self.start_scrape_all(cookie="", only_forums=due)
+        if r.get("ok"):
+            _scrape_state["auto"] = True
+        return r
+
     def get_scrapable_forums(self):
         """מחזיר את הפורומים המובנים עם כתובת, לבחירה בממשק הסנכרון"""
         forums = db.get_forums()
@@ -599,7 +665,7 @@ class API:
             "running": True, "done": False, "error": None,
             "page": 0, "total_pages": 0,
             "added": 0, "updated": 0, "unchanged": 0,
-            "forum": forum_name, "cancelled": False, "run_id": None,
+            "forum": forum_name, "cancelled": False, "run_id": None, "auto": False,
             # אפס מצב רב-פורומי שנותר מ'סרוק הכל'/'סנכרן נבחרים' קודמים
             "all_mode": False, "selected_mode": False,
             "forum_index": 0, "forum_total": 0, "skipped": [],
@@ -674,7 +740,7 @@ class API:
             "page": 0, "total_pages": 0,
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": None, "cancelled": False,
-            "all_mode": True, "selected_mode": False, "run_id": None,   # אפס מצב מ'סנכרן נבחרים' קודם
+            "all_mode": True, "selected_mode": False, "run_id": None, "auto": False,   # אפס מצב מ'סנכרן נבחרים' קודם
             "forum_index": 0, "forum_total": len(forums),
             "skipped": [], "failed_pages": 0,
         })
@@ -743,6 +809,14 @@ class API:
             logging.exception("scrape_all worker crashed")
             _scrape_state["error"] = str(e)
           finally:
+            if _scrape_state.get("auto") and not _scrape_state.get("cancelled"):
+                # ריצה אוטומטית: הצלחה מאפסת את המונה; כישלון חוזר עוצר את
+                # התזמון אחרי 5, כדי לא לנדנד לפורום שנפל או שחסם אותנו.
+                err = _scrape_state.get("error") or ""
+                skipped = _scrape_state.get("skipped") or []
+                if not err and skipped:
+                    err = "; ".join(f"{x.get('forum')}: {x.get('error')}" for x in skipped[:3])
+                db.sched_note_result(not err, err)
             _scrape_state["running"] = False
             _scrape_state["done"] = True
 
@@ -750,6 +824,11 @@ class API:
         return {"ok": True, "forum_total": len(forums)}
 
     def cancel_scrape(self):
+        # ביטול לא כותב last_scrape, ולכן הפורום נשאר "מגיע לו" והטיק הבא היה
+        # מפעיל אותו שוב בעוד דקה — לולאה שנוצרת דווקא מכפתור העצירה.
+        if _scrape_state.get("auto"):
+            db.sched_snooze(6)
+            _scrape_state["auto"] = False
         _scrape_cancel.set()
         return {"ok": True}
 
@@ -775,7 +854,7 @@ class API:
             "page": 0, "total_pages": len(ids),
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": None, "cancelled": False,
-            "all_mode": False, "selected_mode": True, "run_id": None,
+            "all_mode": False, "selected_mode": True, "run_id": None, "auto": False,
             "forum_index": 0, "forum_total": 0, "skipped": [], "failed_pages": 0,
         })
 
@@ -838,8 +917,12 @@ class API:
         busy = self._busy()
         if busy:
             return {"ok": False, "error": busy}
-        db.auto_backup("reset")     # אין דרך חזרה מאיפוס — עותק לפני
-        db.reset_all()
+        _sched_hold.set()
+        try:
+            db.auto_backup("reset")     # אין דרך חזרה מאיפוס — עותק לפני
+            db.reset_all()
+        finally:
+            _sched_hold.clear()
         return {"ok": True}
 
     def reset_columns(self, columns):
@@ -888,6 +971,74 @@ class API:
             logging.exception("open_url failed for %s", url)
             return {"ok": False, "error": str(e)}
 
+    def run_chazonishnik_compare(self, user_a, user_b, cookie="",
+                                 base_url="https://mitmachim.top", max_posts=None):
+        """
+        השוואת שני משתמשים. משתמש באותו מצב רקע ובאותו ביטול כמו הניתוח הרגיל,
+        כדי שהבאנר, ההתקדמות וכפתור הביטול הקיימים ימשיכו לעבוד בלי שינוי.
+        """
+        if _chz_state["running"]:
+            return {"ok": False, "error": "ניתוח כבר רץ"}
+        a, b = (user_a or "").strip(), (user_b or "").strip()
+        if not a or not b:
+            return {"ok": False, "error": "הזן שני שמות משתמש"}
+        if a.lower() == b.lower():
+            return {"ok": False, "error": "אלה אותו משתמש"}
+        base_url = base_url or "https://mitmachim.top"
+        cookie = (cookie or "").strip()
+        if cookie:
+            db.save_cookie_for_url(base_url, cookie)
+        else:
+            cookie = db.get_cookie_for_url(base_url) or ""
+        try:
+            max_posts = int(max_posts) if max_posts else None
+        except (ValueError, TypeError):
+            max_posts = None
+
+        _chz_cancel.clear()
+        _chz_state.update({"running": True, "done": False, "error": None,
+                           "phase": "scan", "count": 0, "total": 0, "which": 1, "of": 2,
+                           "user": a, "compare": True,
+                           "html": None, "path": None, "cancelled": False})
+
+        def _progress(p):
+            _chz_state["phase"] = p.get("phase", "")
+            _chz_state["which"] = p.get("which", 1)
+            _chz_state["user"] = p.get("user", "")
+            if p.get("phase") == "scan":
+                _chz_state["count"] = p.get("count", 0)
+            else:
+                _chz_state["count"] = p.get("done", 0)
+                _chz_state["total"] = p.get("total", 0)
+
+        def _run():
+            try:
+                import chazonishnik
+                out_dir = os.path.dirname(db.DB_PATH)
+                safe = "".join(c for c in (a + "-" + b) if c.isalnum() or c in "-_") or "pair"
+                save_path = os.path.join(out_dir, f"chazonishnik_compare_{safe}.html")
+                result = chazonishnik.analyze_pair(
+                    a, b, cookie, base_url=base_url, progress=_progress,
+                    save_path=save_path, cancel_flag=_chz_cancel, max_posts=max_posts)
+                if result.get("cancelled"):
+                    _chz_state["cancelled"] = True
+                elif result.get("ok"):
+                    _chz_state["html"] = result.get("html")
+                    _chz_state["path"] = result.get("path")
+                    _chz_state["count"] = result.get("posts", 0)
+                    _chz_state["pair"] = {"a": result.get("a"), "b": result.get("b")}
+                else:
+                    _chz_state["error"] = result.get("error")
+            except Exception as e:
+                logging.exception("chazonishnik compare failed")
+                _chz_state["error"] = str(e)
+            finally:
+                _chz_state["running"] = False
+                _chz_state["done"] = True
+
+        threading.Thread(target=_run, daemon=True).start()
+        return {"ok": True, "started": True}
+
     def run_chazonishnik(self, username, cookie="", base_url="https://mitmachim.top",
                          max_posts=None):
         """מתחיל ניתוח פעילות ברקע. התקדמות דרך get_chazonishnik_progress.
@@ -910,7 +1061,7 @@ class API:
 
         _chz_cancel.clear()
         _chz_state.update({"running": True, "done": False, "error": None,
-                           "phase": "scan", "count": 0, "total": 0,
+                           "phase": "scan", "count": 0, "total": 0, "compare": False,
                            "html": None, "path": None, "cancelled": False})
 
         def _progress(p):
@@ -1707,6 +1858,7 @@ del "%~f0"
         if (_scrape_state["running"] or _import_state["running"] or _source_state["running"]
                 or _chz_state["running"] or _stink_state["running"]):
             return {"ok": False, "error": "יש פעולה שרצה ברקע — המתן לסיומה לפני שחזור"}
+        _sched_hold.set()
         try:
             from webview import FileDialog
             open_dialog = FileDialog.OPEN
@@ -1726,6 +1878,8 @@ del "%~f0"
         except Exception as e:
             logging.exception("restore_db failed")
             return {"ok": False, "error": str(e)}
+        finally:
+            _sched_hold.clear()
 
     def apply_import_conflict(self, nick_id, field, value, source_id, accept):
         db.apply_import_conflict(nick_id, field, value, source_id, bool(accept))
@@ -1919,6 +2073,10 @@ if __name__ == "__main__":
         threading.Thread(target=_daily_backup, daemon=True).start()
 
         api = API()
+
+        # התזמון: כבוי כברירת מחדל, ומתעורר רק אחרי חסד ההפעלה. הוא לא סורק —
+        # רק מחליט, ומעביר למסלול הסריקה הקיים עם ההשהיות והנימוס שלו.
+        threading.Thread(target=_sched_loop, args=(api,), daemon=True).start()
 
         # קבצי ה-web ארוזים בתוך ה-EXE — נטענים דרך resource_path
         index_path = resource_path(os.path.join("web", "index.html"))

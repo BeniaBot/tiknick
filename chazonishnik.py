@@ -157,6 +157,141 @@ def _fetch_detail(base, cookie, post):
         return None
 
 
+def _collect(username, cookie, base, progress=None, cancel_flag=None,
+             max_posts=None, label=""):
+    """
+    סורק ומעבד משתמש אחד ומחזיר (slug, uid, posts, meta) — או (None, None, None, err).
+    הוצא מ-analyze_user כדי שההשוואה תשתמש בדיוק באותו מסלול, כולל ההשהיות
+    והריטריי, ולא תיצור נתיב רשת שני.
+    """
+    scan_stats = {"stopped_early": False}
+    try:
+        uid, slug, udata = _fetch_user(base, username, cookie)
+        postcount = int((udata or {}).get("postcount") or 0)
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return None, None, None, {"error": f"{label}נדרשת עוגייה תקינה (שגיאת הרשאה)"}
+        return None, None, None, {"error": f"{label}שגיאת רשת: {e.code}"}
+    except Exception as e:
+        return None, None, None, {"error": f"{label}לא ניתן למצוא משתמש: {e}"}
+
+    raw = _scan_posts(base, slug, cookie, progress=progress,
+                      cancel_flag=cancel_flag, max_posts=max_posts, stats=scan_stats)
+    if cancel_flag is not None and cancel_flag.is_set():
+        return None, None, None, {"cancelled": True, "error": "בוטל"}
+    if not raw:
+        return None, None, None, {"error": f"{label}לא נמצאו פוסטים"}
+
+    processed = []
+    total = len(raw)
+    done = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as ex:
+        futs = {ex.submit(_fetch_detail, base, cookie, x): x for x in raw}
+        for fut in concurrent.futures.as_completed(futs):
+            if cancel_flag is not None and cancel_flag.is_set():
+                for f2 in futs:
+                    f2.cancel()
+                return None, None, None, {"cancelled": True, "error": "בוטל"}
+            r = fut.result()
+            done += 1
+            if progress and done % 15 == 0:
+                progress({"phase": "analyze", "done": done, "total": total})
+            if r:
+                processed.append(r)
+    processed.sort(key=lambda x: x["ts"])
+    limited = bool(max_posts and len(raw) >= max_posts)
+    meta = {
+        "postcount": postcount, "limited": limited,
+        "stopped_early": scan_stats["stopped_early"],
+        "partial": scan_stats["stopped_early"] or (
+            bool(postcount) and len(raw) < postcount * 0.95 and not limited),
+    }
+    return slug, uid, processed, meta
+
+
+def _summarize(posts):
+    """מדדים להשוואה. מחושב כאן ולא ב-JS כדי שהדוח השמור יהיה עצמאי."""
+    hours = [0] * 24
+    days = [0] * 7
+    months = {}
+    likes = words = 0
+    cats = {}
+    for p in posts:
+        hours[p["hour"] % 24] += 1
+        try:
+            days[_DAYS_HE.index(p["day"])] += 1
+        except ValueError:
+            pass
+        months[p["month"]] = months.get(p["month"], 0) + 1
+        likes += p.get("likes", 0)
+        words += p.get("words", 0)
+        t = (p.get("title") or "").strip()
+        if t:
+            cats[t] = cats.get(t, 0) + 1
+    n = len(posts) or 1
+    return {
+        "posts": len(posts), "likes": likes,
+        "avg_words": round(words / n, 1),
+        "avg_likes": round(likes / n, 2),
+        "hours": hours, "days": days, "months": months,
+        "top_hour": hours.index(max(hours)) if posts else 0,
+        "top_day": _DAYS_HE[days.index(max(days))] if posts else "",
+        "first": posts[0]["date"] if posts else "",
+        "last": posts[-1]["date"] if posts else "",
+        "top_topics": sorted(cats.items(), key=lambda kv: -kv[1])[:5],
+    }
+
+
+def analyze_pair(user_a, user_b, cookie, base_url=DEFAULT_BASE, progress=None,
+                 save_path=None, cancel_flag=None, max_posts=None):
+    """
+    משווה שני משתמשים. הסריקות רצות **בזו אחר זו ולא במקביל** — שתי סריקות
+    בו-זמנית מכפילות את העומס על אותו פורום, וכל מנגנון הנימוס כאן (השהיה בין
+    עמודים, כיבוד Retry-After) בנוי סביב זרם אחד.
+    כל משתמש מדווח על החלקיות שלו בנפרד: "א' הושלם, ב' נעצר" הוא מצב אמיתי.
+    """
+    base = (base_url or DEFAULT_BASE).rstrip("/")
+    out = []
+    for i, uname in enumerate((user_a, user_b)):
+        def _p(d, _i=i, _u=uname):
+            if progress:
+                progress({**d, "which": _i + 1, "of": 2, "user": _u})
+        slug, uid, posts, meta = _collect(uname, cookie, base, progress=_p,
+                                          cancel_flag=cancel_flag, max_posts=max_posts,
+                                          label=f"{uname}: ")
+        if slug is None:
+            return {"ok": False, **meta}
+        out.append({"slug": slug, "uid": uid, "posts": posts, "meta": meta,
+                    "stats": _summarize(posts)})
+
+    html = _build_compare_html(base, out[0], out[1])
+    path = None
+    if save_path:
+        try:
+            with open(save_path, "w", encoding="utf-8") as f:
+                f.write(html)
+            path = save_path
+        except Exception:
+            path = None
+    return {"ok": True, "html": html, "path": path,
+            "posts": out[0]["stats"]["posts"] + out[1]["stats"]["posts"],
+            "compare": True,
+            "a": {"user": out[0]["slug"], **out[0]["meta"], "posts": out[0]["stats"]["posts"]},
+            "b": {"user": out[1]["slug"], **out[1]["meta"], "posts": out[1]["stats"]["posts"]}}
+
+
+def _build_compare_html(base_url, a, b):
+    payload = {
+        "a": {"user": a["slug"], "stats": a["stats"], "meta": a["meta"]},
+        "b": {"user": b["slug"], "stats": b["stats"], "meta": b["meta"]},
+        "base": base_url,
+    }
+    return COMPARE_TEMPLATE.replace("__CHARTJS__", _chartjs_tag()) \
+        .replace("__A__", _esc(a["slug"])) \
+        .replace("__B__", _esc(b["slug"])) \
+        .replace("__JSON_DATA__", _json_for_script(payload))
+
+
 def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_path=None,
                  cancel_flag=None, max_posts=None):
     """
@@ -334,3 +469,130 @@ new Chart(document.getElementById('chart-scatter'),{type:'scatter',data:{dataset
 </script>
 </body>
 </html>"""
+
+
+COMPARE_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="he" dir="rtl"><head><meta charset="utf-8">
+<title>השוואה: __A__ מול __B__</title>
+__CHARTJS__
+<style>
+  :root{--a:#f59e0b;--b:#0ea5e9;--bg:#14161c;--card:#1c1f28;--txt:#e8eaf0;--sub:#9aa2b4}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);
+       font-family:"Segoe UI",Arial,sans-serif;font-size:14px;line-height:1.6}
+  .wrap{max-width:1000px;margin:0 auto;padding:24px 18px 60px}
+  h1{font-size:24px;margin:0 0 4px}
+  .who{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:20px;font-size:13px}
+  .pill{padding:3px 12px;border-radius:99px;font-weight:700}
+  .pa{background:rgba(245,158,11,.18);color:var(--a)}
+  .pb{background:rgba(14,165,233,.18);color:var(--b)}
+  .card{background:var(--card);border-radius:14px;padding:16px 18px;margin-bottom:16px}
+  .card h2{font-size:15px;margin:0 0 12px;font-weight:700}
+  table{width:100%;border-collapse:collapse}
+  th,td{text-align:right;padding:7px 8px;border-bottom:1px solid rgba(255,255,255,.07);font-size:13px}
+  th{color:var(--sub);font-weight:600;font-size:12px}
+  td.va{color:var(--a);font-weight:700}
+  td.vb{color:var(--b);font-weight:700}
+  .warn{background:rgba(244,84,76,.12);color:#ff9a94;padding:8px 12px;
+        border-radius:8px;font-size:12.5px;margin-bottom:14px}
+  .sum{font-size:13.5px;line-height:1.9}
+  canvas{max-height:260px}
+  .foot{color:var(--sub);font-size:11.5px;text-align:center;margin-top:26px}
+</style></head><body><div class="wrap">
+<h1>השוואת פעילות</h1>
+<div class="who"><span class="pill pa">__A__</span><span style="color:var(--sub)">מול</span>
+  <span class="pill pb">__B__</span></div>
+<div id="warn"></div>
+<div class="card"><h2>מספרים</h2><table id="tbl"></table></div>
+<div class="card"><h2>שעות פעילות</h2><canvas id="c-hours"></canvas></div>
+<div class="card"><h2>ימים בשבוע</h2><canvas id="c-days"></canvas></div>
+<div class="card"><h2>פעילות לאורך זמן</h2><canvas id="c-months"></canvas></div>
+<div class="card"><h2>מה עולה מההשוואה</h2><div class="sum" id="sum"></div></div>
+<div class="foot">Tik-Nick · חזונישניק</div>
+</div>
+<script>
+const D = __JSON_DATA__;
+const A = D.a, B = D.b, SA = A.stats, SB = B.stats;
+const DAYS = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"];
+const COL_A = "#f59e0b", COL_B = "#0ea5e9";
+
+// דיווח כן על חלקיות — לכל משתמש בנפרד. "א' הושלם, ב' נעצר" הוא מצב אמיתי.
+const notes = [];
+for (const side of [A, B]) {
+  const m = side.meta;
+  if (m.limited) notes.push(side.user + ": נסרקו רק הפוסטים האחרונים לפי ההגבלה שהגדרת.");
+  else if (m.stopped_early) notes.push(side.user + ": הסריקה נעצרה בגלל תקלת רשת — הנתונים חלקיים.");
+  else if (m.partial) notes.push(side.user + ": נסרקו " + side.stats.posts + " מתוך " +
+    m.postcount + " פוסטים; השאר כנראה בקטגוריות שדורשות התחברות.");
+}
+if (notes.length) document.getElementById("warn").innerHTML =
+  "<div class=\"warn\">⚠️ " + notes.join("<br>") + "</div>";
+
+const rows = [
+  ["פוסטים שנסרקו", SA.posts, SB.posts],
+  ["לייקים שהתקבלו", SA.likes, SB.likes],
+  ["לייקים לפוסט (ממוצע)", SA.avg_likes, SB.avg_likes],
+  ["מילים לפוסט (ממוצע)", SA.avg_words, SB.avg_words],
+  ["שעת השיא", SA.top_hour + ":00", SB.top_hour + ":00"],
+  ["היום הפעיל ביותר", SA.top_day, SB.top_day],
+  ["פוסט ראשון שנסרק", SA.first, SB.first],
+  ["פוסט אחרון שנסרק", SA.last, SB.last],
+];
+document.getElementById("tbl").innerHTML =
+  "<tr><th></th><th>" + A.user + "</th><th>" + B.user + "</th></tr>" +
+  rows.map(function (r) {
+    return "<tr><td>" + r[0] + "</td><td class=\"va\">" + r[1] +
+           "</td><td class=\"vb\">" + r[2] + "</td></tr>";
+  }).join("");
+
+const opts = function () {
+  return { responsive: true, plugins: { legend: { labels: { color: "#e8eaf0" } } },
+    scales: { x: { ticks: { color: "#9aa2b4" }, grid: { color: "rgba(255,255,255,.05)" } },
+              y: { ticks: { color: "#9aa2b4" }, grid: { color: "rgba(255,255,255,.05)" },
+                   beginAtZero: true } } };
+};
+
+new Chart(document.getElementById("c-hours"), { type: "bar", data: {
+  labels: Array.from({length: 24}, function (_, h) { return h + ":00"; }),
+  datasets: [{ label: A.user, data: SA.hours, backgroundColor: COL_A },
+             { label: B.user, data: SB.hours, backgroundColor: COL_B }] }, options: opts() });
+
+new Chart(document.getElementById("c-days"), { type: "bar", data: {
+  labels: DAYS,
+  datasets: [{ label: A.user, data: SA.days, backgroundColor: COL_A },
+             { label: B.user, data: SB.days, backgroundColor: COL_B }] }, options: opts() });
+
+const months = Object.keys(SA.months).concat(Object.keys(SB.months))
+  .filter(function (v, i, a) { return a.indexOf(v) === i; }).sort();
+new Chart(document.getElementById("c-months"), { type: "line", data: {
+  labels: months,
+  datasets: [{ label: A.user, data: months.map(function (m) { return SA.months[m] || 0; }),
+               borderColor: COL_A, backgroundColor: COL_A, tension: .3 },
+             { label: B.user, data: months.map(function (m) { return SB.months[m] || 0; }),
+               borderColor: COL_B, backgroundColor: COL_B, tension: .3 }] }, options: opts() });
+
+// סיכום במילים — מה באמת שונה, לא רק גרפים יפים
+const out = [];
+const more = SA.posts >= SB.posts ? A : B, less = SA.posts >= SB.posts ? B : A;
+const hi = Math.max(SA.posts, SB.posts), lo = Math.max(1, Math.min(SA.posts, SB.posts));
+const rat = (hi / lo).toFixed(1);
+out.push("• <b>" + more.user + "</b> כתב " +
+  (rat > 1.15 ? "פי " + rat + " יותר" : "בערך אותה כמות") + " פוסטים מ־<b>" + less.user + "</b>.");
+if (Math.abs(SA.avg_likes - SB.avg_likes) > 0.2)
+  out.push("• פוסט של <b>" + (SA.avg_likes > SB.avg_likes ? A.user : B.user) +
+    "</b> מקבל בממוצע יותר לייקים (" + Math.max(SA.avg_likes, SB.avg_likes) + " מול " +
+    Math.min(SA.avg_likes, SB.avg_likes) + ").");
+if (Math.abs(SA.avg_words - SB.avg_words) > 10)
+  out.push("• <b>" + (SA.avg_words > SB.avg_words ? A.user : B.user) + "</b> כותב ארוך יותר (" +
+    Math.max(SA.avg_words, SB.avg_words) + " מילים לפוסט מול " +
+    Math.min(SA.avg_words, SB.avg_words) + ").");
+out.push(SA.top_hour !== SB.top_hour
+  ? "• שעות השיא שונות: " + A.user + " ב־" + SA.top_hour + ":00, " + B.user + " ב־" + SB.top_hour + ":00."
+  : "• שניהם פעילים בעיקר סביב " + SA.top_hour + ":00.");
+if (SA.top_day === SB.top_day) out.push("• שניהם פעילים במיוחד ביום " + SA.top_day + ".");
+const shared = SA.top_topics.map(function (t) { return t[0]; }).filter(function (t) {
+  return SB.top_topics.some(function (x) { return x[0] === t; });
+});
+if (shared.length) out.push("• נושאים משותפים בין הבולטים: " + shared.slice(0, 3).join(" · ") + ".");
+document.getElementById("sum").innerHTML = out.join("<br>");
+</script></body></html>"""
