@@ -74,7 +74,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.12"
+APP_VERSION = "0.8.13"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -1397,23 +1397,49 @@ class API:
             except OSError:
                 pass
             try:
+                # ה-Setup חייב לרוץ *אחרי* שהתוכנה נסגרה. הרצה מקבילה נכשלת:
+                # RestartManager מזהה את התהליך החי, לא מצליח לסגור אותו
+                # ("Some applications could not be shut down"), ומבטל את
+                # ההתקנה. לכן batch שממתין ל-PID ורק אז מריץ — בדיוק כמו
+                # במסלול הנייד.
+                pid = os.getpid()
+                bat = os.path.join(tempfile.gettempdir(), "tiknick_setup.bat")
+                script = f"""@echo off
+chcp 65001 >nul
+set "_MEIPASS2="
+set "_PYI_APPLICATION_HOME_DIR="
+set "_PYI_ARCHIVE_FILE="
+set "_PYI_PARENT_PROCESS_LEVEL="
+
+rem — המתן עד שהתוכנה תיסגר לגמרי (עד ~60 שניות) —
+set /a waited=0
+:waitloop
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+if not errorlevel 1 (
+    set /a waited+=1
+    if %waited% lss 60 (
+        ping -n 2 127.0.0.1 >nul
+        goto waitloop
+    )
+)
+ping -n 3 127.0.0.1 >nul
+
+"{new_exe_path}" /SILENT /SUPPRESSMSGBOXES /NOCANCEL /CLOSEAPPLICATIONS /LOG="{inno_log}"
+del "%~f0"
+"""
+                with open(bat, "w", encoding="utf-8") as f:
+                    f.write(script)
                 clean_env = {k: v for k, v in os.environ.items()
                              if not k.startswith("_MEI") and not k.startswith("_PYI")}
-                subprocess.Popen(
-                    [new_exe_path, "/SILENT", "/SUPPRESSMSGBOXES", "/NOCANCEL",
-                     "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS",
-                     "/LOG=" + inno_log],
-                    env=clean_env, cwd=tempfile.gettempdir(),
-                    creationflags=0x00000008)      # DETACHED_PROCESS
-                logging.info("installer update launched: %s (log: %s)",
-                             new_exe_path, inno_log)
+                subprocess.Popen(["cmd", "/c", bat], env=clean_env,
+                                 cwd=tempfile.gettempdir(),
+                                 creationflags=0x08000000)   # CREATE_NO_WINDOW
+                logging.info("installer update scheduled after pid %s (log: %s)",
+                             pid, inno_log)
                 try:
                     webview.windows[0].destroy()
                 except Exception:
                     pass
-                # רגע לפני היציאה — כדי שה-Setup יספיק להיאחז לפני שהתהליך נעלם
-                import time as _t
-                _t.sleep(1.5)
                 os._exit(0)
             except Exception as e:
                 logging.exception("apply_update (installer) failed")

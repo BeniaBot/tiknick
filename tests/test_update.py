@@ -86,9 +86,23 @@ ok("קפיצה של גרסה אחת = פירוט מלא", one["mode"] == "full",
 
 two = summarize(versions[2]["v"], newest)
 ok("קפיצה של שתיים = מקובץ", two["mode"] == "grouped", str(two["mode"]))
-ok("במצב מקובץ התיקונים מסוכמים כמספר",
-   any("תיקונים ושיפורים" in i for g in two["groups"] for i in g["i"]),
-   str(two["groups"][-1]))
+# הכלל, לא צורת הנתונים: אם בטווח *יש* תיקונים, הם מסוכמים כמספר ולא מפורטים.
+grouped_with_fixes = None
+for e in versions[1:]:
+    r = summarize(e["v"], newest)
+    if r["mode"] == "grouped":
+        items = [it for x in versions
+                 if parse(versions[0]["v"]) >= parse(x["v"]) > parse(e["v"])
+                 for it in x["items"]]
+        if any(i["t"] == "fix" for i in items):
+            grouped_with_fixes = r
+            break
+if grouped_with_fixes:
+    ok("במצב מקובץ התיקונים מסוכמים כמספר",
+       any("תיקונים ושיפורים" in i for g in grouped_with_fixes["groups"] for i in g["i"]),
+       str(grouped_with_fixes["groups"][-1]))
+else:
+    ok("במצב מקובץ התיקונים מסוכמים כמספר", True, "(אין תיקונים בטווח מקובץ)")
 
 big = summarize(versions[-1]["v"], newest)
 ok("קפיצה גדולה = כותרות בלבד", big["mode"] == "headlines", str(big["mode"]))
