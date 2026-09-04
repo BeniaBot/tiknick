@@ -74,7 +74,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.13"
+APP_VERSION = "0.8.14"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -1403,6 +1403,9 @@ class API:
                 # ההתקנה. לכן batch שממתין ל-PID ורק אז מריץ — בדיוק כמו
                 # במסלול הנייד.
                 pid = os.getpid()
+                exe_name = os.path.basename(_sys.executable)
+                proc_name = os.path.splitext(exe_name)[0]
+                log_file = os.path.join(_DATA_DIR, "update.log")
                 bat = os.path.join(tempfile.gettempdir(), "tiknick_setup.bat")
                 script = f"""@echo off
 chcp 65001 >nul
@@ -1411,17 +1414,17 @@ set "_PYI_APPLICATION_HOME_DIR="
 set "_PYI_ARCHIVE_FILE="
 set "_PYI_PARENT_PROCESS_LEVEL="
 
-rem — המתן עד שהתוכנה תיסגר לגמרי (עד ~60 שניות) —
-set /a waited=0
-:waitloop
-tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
-if not errorlevel 1 (
-    set /a waited+=1
-    if %waited% lss 60 (
-        ping -n 2 127.0.0.1 >nul
-        goto waitloop
-    )
-)
+rem — המתנה דרך PowerShell ולא tasklist: /FI "IMAGENAME eq ..." החזיר "לא נמצא"
+rem על תהליך חי (Get-Process כן מצא אותו), וזה בדיוק המנגנון שההמתנה נשענה עליו
+rem מאז 0.8.3 — כלומר ההמתנה יכלה להסתיים מיד וההתקנה לרוץ אל תוך תוכנה פתוחה.
+rem הסקריפט ממתין לתהליך שלנו, ואז לכל עותק אחר, ורק אז סוגר בכוח מה שנשאר.
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+ "$ErrorActionPreference='SilentlyContinue';" ^
+ "for($i=0;$i -lt 60 -and (Get-Process -Id {pid});$i++){{Start-Sleep -Milliseconds 500}};" ^
+ "for($i=0;$i -lt 20 -and (Get-Process -Name '{proc_name}');$i++){{Start-Sleep -Milliseconds 500}};" ^
+ "$left=Get-Process -Name '{proc_name}';" ^
+ "if($left){{Add-Content -LiteralPath '{log_file}' -Value ('[' + (Get-Date -Format HH:mm:ss) + '] leftover {proc_name} still up - forcing close');" ^
+ "$left | Stop-Process -Force; Start-Sleep -Milliseconds 800}}"
 ping -n 3 127.0.0.1 >nul
 
 "{new_exe_path}" /SILENT /SUPPRESSMSGBOXES /NOCANCEL /CLOSEAPPLICATIONS /LOG="{inno_log}"
@@ -1448,6 +1451,7 @@ del "%~f0"
         try:
             cur_exe = _sys.executable
             exe_name = os.path.basename(cur_exe)
+            proc_name = os.path.splitext(exe_name)[0]
             pid = os.getpid()
             fail_marker = os.path.join(os.path.dirname(cur_exe), "update-failed.txt")
             old_exe = cur_exe + ".old"
@@ -1468,17 +1472,17 @@ set "_PYI_APPLICATION_HOME_DIR="
 set "_PYI_ARCHIVE_FILE="
 set "_PYI_PARENT_PROCESS_LEVEL="
 
-rem — המתן עד שהתהליך הישן (לפי PID, לא לפי שם — ייתכן עותק נוסף רץ) ייסגר —
-set /a waited=0
-:waitloop
-tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
-if not errorlevel 1 (
-    set /a waited+=1
-    if %waited% lss 60 (
-        ping -n 2 127.0.0.1 >nul
-        goto waitloop
-    )
-)
+rem — המתנה דרך PowerShell ולא tasklist: /FI "IMAGENAME eq ..." החזיר "לא נמצא"
+rem על תהליך חי (Get-Process כן מצא אותו), וזה בדיוק המנגנון שההמתנה נשענה עליו
+rem מאז 0.8.3 — כלומר ההמתנה יכלה להסתיים מיד וההתקנה לרוץ אל תוך תוכנה פתוחה.
+rem הסקריפט ממתין לתהליך שלנו, ואז לכל עותק אחר, ורק אז סוגר בכוח מה שנשאר.
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+ "$ErrorActionPreference='SilentlyContinue';" ^
+ "for($i=0;$i -lt 60 -and (Get-Process -Id {pid});$i++){{Start-Sleep -Milliseconds 500}};" ^
+ "for($i=0;$i -lt 20 -and (Get-Process -Name '{proc_name}');$i++){{Start-Sleep -Milliseconds 500}};" ^
+ "$left=Get-Process -Name '{proc_name}';" ^
+ "if($left){{Add-Content -LiteralPath '{log_file}' -Value ('[' + (Get-Date -Format HH:mm:ss) + '] leftover {proc_name} still up - forcing close');" ^
+ "$left | Stop-Process -Force; Start-Sleep -Milliseconds 800}}"
 
 rem — המתן עוד רגע לשחרור קבצים וניקוי _MEI —
 ping -n 4 127.0.0.1 >nul

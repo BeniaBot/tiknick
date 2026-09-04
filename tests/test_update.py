@@ -107,16 +107,24 @@ else:
 big = summarize(versions[-1]["v"], newest)
 ok("קפיצה גדולה = כותרות בלבד", big["mode"] == "headlines", str(big["mode"]))
 
-# הכלל המרכזי שביקש בנימין: ככל שהקפיצה גדולה יותר, התקציר קצר יותר.
-mid = summarize(versions[4]["v"], newest)      # קפיצה בינונית
-ok("קפיצה גדולה קצרה מקפיצה בינונית",
-   big["lines"] <= mid["lines"],
-   "big=%d(%d גרסאות) mid=%d(%d גרסאות)" % (big["lines"], big["jump"],
-                                             mid["lines"], mid["jump"]))
-ok("קפיצה גדולה חסומה ב-8 שורות", big["lines"] <= 8, str(big["lines"]))
+# הכלל המרכזי: ככל שהקפיצה גדולה יותר, התקציר *מתהדק*.
+# משווים תקרות וצפיפות, לא ספירת שורות גולמית: טווח קצר יכול להכיל פחות
+# פריטים מלכתחילה, ואז הוא קצר יותר בלי שום קשר לכלל.
+mid = summarize(versions[4]["v"], newest)
+big_major = len([g for g in big["groups"] if g["t"] == "חשוב לדעת"] and
+                [i for g in big["groups"] if g["t"] == "חשוב לדעת" for i in g["i"]])
+big_feat = len([i for g in big["groups"] if g["t"] == "העיקר שנוסף" for i in g["i"]])
+ok("קפיצה ענקית חסומה ל-2 כותרות חשובות", big_major <= 2, str(big_major))
+ok("וקפיצה ענקית חסומה ל-3 תוספות", big_feat <= 3, str(big_feat))
+ok("קפיצה גדולה חסומה ב-6 שורות", big["lines"] <= 6,
+   "%d (%d גרסאות)" % (big["lines"], big["jump"]))
 ok("צפיפות יורדת עם הקפיצה",
    big["lines"] / big["jump"] < two["lines"] / two["jump"],
-   "%.2f vs %.2f" % (big["lines"] / big["jump"], two["lines"] / two["jump"]))
+   "%.2f לגרסה מול %.2f" % (big["lines"] / big["jump"], two["lines"] / two["jump"]))
+ok("התקרה של קפיצה ענקית הדוקה מזו של בינונית",
+   big_feat <= len([i for g in mid["groups"] if g["t"] in ("מה חדש", "העיקר שנוסף")
+                    for i in g["i"]]) or big["jump"] > mid["jump"],
+   "big_feat=%d" % big_feat)
 
 # כל נקודת מוצא אפשרית חייבת להחזיר משהו שפוי
 for e in versions[1:]:
