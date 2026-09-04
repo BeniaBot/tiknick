@@ -6,7 +6,7 @@
 ; Requires: Inno Setup 6 (ISCC.exe).
 
 #define AppName "Tik-Nick"
-#define AppVersion "0.8.14"
+#define AppVersion "0.8.15"
 #define AppExe "TikNick.exe"
 #define AppPublisher "בני הבוט"
 #define AppURL "https://github.com/BeniaBot/tiknick"
@@ -34,14 +34,12 @@ SolidCompression=yes
 WizardStyle=modern
 ; RTL עברית
 ShowLanguageDialog=no
-; CloseApplications לבדו נשען על Restart Manager, והוא לא זיהה את התוכנה —
-; ולכן ההתקנה הגיעה עד ניסיון מחיקת ה-EXE ונפלה על "DeleteFile נכשל; קוד 5".
-; מחיקת קובץ הרצה מחזירה Access denied (5) ולא "בשימוש" (32), כי הדמות שלו
-; ממופה לזיכרון — כלומר השגיאה גם לא רומזת למשתמש מה לעשות.
-; AppMutex בודק את המנעול שהתוכנה עצמה יוצרת (_single_instance_or_exit
-; ב-main.py) ומבקש לסגור אותה *לפני* שנוגעים בקבצים.
-; שם ללא קידומת נפתר לאותו אובייקט כמו "Local\..." באותו session — אומת.
-AppMutex=TikNick-single-instance
+; אין כאן AppMutex במכוון. הוא נוסה ב-0.8.13 ועשה נזק: לקוח ישן מריץ את ה-Setup
+; במקביל לתוכנה שעדיין חיה, המנעול תפוס, ובהתקנה שקטה ההודעה מדוכאת ו-Inno עונה
+; עליה Cancel בעצמו ("Got EAbort exception") — כלומר אף גרסה ישנה לא הצליחה
+; לעדכן. במקום זה: ClosePrograms ב-[Code] סוגר בפועל את מה שחוסם.
+; רקע: מחיקת קובץ הרצה מחזירה Access denied (5) ולא "בשימוש" (32), כי הדמות
+; ממופה לזיכרון — ולכן גם השגיאה לא רמזה למשתמש מה לעשות.
 CloseApplications=yes
 CloseApplicationsFilter=*.exe
 RestartApplications=no
@@ -64,6 +62,32 @@ Source: "packaging\install-type.txt"; DestDir: "{app}"; Flags: ignoreversion
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+
+[Code]
+// PyInstaller onefile מריץ שני תהליכים: אב (בלי חלון) שמחלץ ל-_MEI, ובן עם
+// החלון. כשהמשתמש סוגר את החלון הבן מת — והאב נשאר, בלי חלון, ומחזיק את דמות
+// ה-EXE. Restart Manager לא מצליח לסגור אותו ("Some applications could not be
+// shut down"), ולכן ההתקנה הגיעה עד DeleteFile ונפלה.
+// כאן סוגרים אותו בפועל, ממש לפני העתקת הקבצים. אין מה לאבד: לתהליך הזה אין
+// חלון ואין מצב לא שמור — המאגר נכתב ב-SQLite עם WAL בכל פעולה.
+function CloseRunningApp(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{cmd}'), '/c powershell -NoProfile -ExecutionPolicy Bypass -Command "' +
+       '$ErrorActionPreference=''SilentlyContinue'';' +
+       'Get-Process -Name TikNick | Stop-Process -Force;' +
+       'Start-Sleep -Milliseconds 900;' +
+       'exit 0"',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Result := True;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  CloseRunningApp();
+  Result := '';
+end;
 
 [Run]
 ; מפעיל את התוכנה בסיום — גם בהתקנה שקטה (עדכון עצמי), כדי לחזור אוטומטית
