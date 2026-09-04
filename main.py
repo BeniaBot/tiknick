@@ -46,7 +46,7 @@ _chz_state = {"running": False, "done": False, "error": None,
 _chz_cancel = threading.Event()
 
 # מצב הורדת עדכון
-_update_state = {"downloaded": 0, "total": 0}
+_update_state = {"downloaded": 0, "total": 0, "target_version": ""}
 
 # מצב ייבוא ברקע (ייבוא גדול נמשך שניות-דקות — לא חוסמים את הממשק)
 # הטיק רק *מחליט*; הסריקה עצמה עוברת במסלול הקיים עם ההשהיות שלו.
@@ -74,7 +74,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.11"
+APP_VERSION = "0.8.12"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -1317,6 +1317,48 @@ class API:
     def get_update_download_progress(self):
         return dict(_update_state)
 
+    def _settle_pending_update(self):
+        """
+        סימון שנכתב לפני ניסיון עדכון. אם התוכנה עלתה שוב *באותה גרסה* —
+        העדכון נכשל, וצריך לומר את זה במקום להעמיד פנים שלא קרה כלום.
+        """
+        marker = os.path.join(_DATA_DIR, "update-pending.txt")
+        if not os.path.exists(marker):
+            return None
+        try:
+            with open(marker, "r", encoding="utf-8") as f:
+                target = (f.read() or "").strip()
+        except OSError:
+            target = ""
+        try:
+            os.remove(marker)
+        except OSError:
+            pass
+        if target and target != APP_VERSION:
+            inno_log = os.path.join(_DATA_DIR, "update-inno.log")
+            logging.warning("update to %s did not take effect (still %s)", target, APP_VERSION)
+            return {"target": target, "current": APP_VERSION,
+                    "log": inno_log if os.path.exists(inno_log) else ""}
+        return None
+
+    def settle_pending_update(self):
+        try:
+            return self._settle_pending_update()
+        except Exception:
+            logging.exception("settle_pending_update failed")
+            return None
+
+    def open_update_log(self):
+        for name in ("update-inno.log", "update.log"):
+            path = os.path.join(_DATA_DIR, name)
+            if os.path.exists(path):
+                try:
+                    os.startfile(path)      # noqa: S606 — נתיב שנבחר בצד השרת
+                    return {"ok": True, "path": path}
+                except Exception as e:
+                    return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "אין יומן התקנה"}
+
     def consume_update_failure(self):
         """האם עדכון קודם נכשל בהחלפת הקובץ? (סימון שכותב סקריפט העדכון) — חד-פעמי."""
         try:
@@ -1344,13 +1386,34 @@ class API:
         # גרסת אינסטולר: מריצים את ה-Setup בשקט (הוא מחליף את הקבצים,
         # סוגר את התהליך הישן אם נשאר, ומפעיל מחדש דרך סעיף [Run])
         if _install_type() == "installer":
+            # מה שהיה כאן קודם נכשל בשקט מוחלט: בלי /LOG אין שום עקבה, בלי ניקוי
+            # סביבה ה-Setup יורש את משתני ה-_MEI של PyInstaller, ובלי סימון —
+            # התוכנה חוזרת בגרסה הישנה בלי מילה, וזה נראה למשתמש כ"העדכון נפל".
+            inno_log = os.path.join(_DATA_DIR, "update-inno.log")
+            marker = os.path.join(_DATA_DIR, "update-pending.txt")
             try:
-                subprocess.Popen([new_exe_path, "/SILENT", "/SUPPRESSMSGBOXES",
-                                  "/NOCANCEL", "/CLOSEAPPLICATIONS"])
+                with open(marker, "w", encoding="utf-8") as f:
+                    f.write(str(_update_state.get("target_version") or ""))
+            except OSError:
+                pass
+            try:
+                clean_env = {k: v for k, v in os.environ.items()
+                             if not k.startswith("_MEI") and not k.startswith("_PYI")}
+                subprocess.Popen(
+                    [new_exe_path, "/SILENT", "/SUPPRESSMSGBOXES", "/NOCANCEL",
+                     "/CLOSEAPPLICATIONS", "/RESTARTAPPLICATIONS",
+                     "/LOG=" + inno_log],
+                    env=clean_env, cwd=tempfile.gettempdir(),
+                    creationflags=0x00000008)      # DETACHED_PROCESS
+                logging.info("installer update launched: %s (log: %s)",
+                             new_exe_path, inno_log)
                 try:
                     webview.windows[0].destroy()
                 except Exception:
                     pass
+                # רגע לפני היציאה — כדי שה-Setup יספיק להיאחז לפני שהתהליך נעלם
+                import time as _t
+                _t.sleep(1.5)
                 os._exit(0)
             except Exception as e:
                 logging.exception("apply_update (installer) failed")
@@ -1361,6 +1424,10 @@ class API:
             exe_name = os.path.basename(cur_exe)
             pid = os.getpid()
             fail_marker = os.path.join(os.path.dirname(cur_exe), "update-failed.txt")
+            old_exe = cur_exe + ".old"
+            # יומן של ה-batch עצמו: בלעדיו כישלון החלפה נראה בדיוק כמו הצלחה —
+            # התוכנה פשוט חוזרת בגרסה הישנה בלי מילה.
+            log_file = os.path.join(_DATA_DIR, "update.log")
             bat = os.path.join(tempfile.gettempdir(), "tiknick_update.bat")
             # ממתין לסגירה מלאה, נותן ל-PyInstaller לנקות את _MEI, מחליף עם ניסיונות
             # חוזרים, ומריץ מחדש בסביבה נקייה (מנקה _MEIPASS2 כדי למנוע שגיאת DLL).
@@ -1390,23 +1457,40 @@ if not errorlevel 1 (
 rem — המתן עוד רגע לשחרור קבצים וניקוי _MEI —
 ping -n 4 127.0.0.1 >nul
 
-rem — החלף את הקובץ, עד 15 ניסיונות —
+rem ── ההחלפה עצמה ──────────────────────────────────────────────────
+rem Windows מרשה *לשנות שם* לקובץ הרצה גם כשהוא נעול, אבל לא לדרוס אותו.
+rem לכן: מזיזים את הישן הצידה, ורק אז מכניסים את החדש. ניסיון דריסה ישיר
+rem (move /Y new cur) נכשל בשקט כשמשהו עדיין מחזיק את הקובץ — אנטי-וירוס
+rem שסורק את ההורדה, ניקוי _MEI, או סייר קבצים פתוח על התיקייה.
 set /a tries=0
-:movetry
-move /Y "{new_exe_path}" "{cur_exe}" >nul 2>&1
-if exist "{new_exe_path}" (
+:swaptry
+del /F /Q "{old_exe}" >nul 2>&1
+move /Y "{cur_exe}" "{old_exe}" >nul 2>&1
+if exist "{cur_exe}" (
     set /a tries+=1
-    if %tries% lss 15 (
+    echo [%%time%%] step1 rename-aside failed, try %%tries%%>> "{log_file}"
+    if %tries% lss 20 (
         ping -n 2 127.0.0.1 >nul
-        goto movetry
+        goto swaptry
     )
+    echo [%%time%%] GIVING UP: could not move the running exe aside>> "{log_file}"
+    echo rename-aside failed> "{fail_marker}"
+    goto restart
 )
 
-rem — אם ההחלפה נכשלה, השאר סימון כדי שהתוכנה תדווח על כך בהפעלה הבאה —
-if exist "{new_exe_path}" (
-    echo failed> "{fail_marker}"
+move /Y "{new_exe_path}" "{cur_exe}" >nul 2>&1
+if not exist "{cur_exe}" (
+    rem — הכנסת החדש נכשלה: מחזירים את הישן כדי לא להשאיר את המשתמש בלי תוכנה
+    echo [%%time%%] step2 install-new failed, rolling back>> "{log_file}"
+    move /Y "{old_exe}" "{cur_exe}" >nul 2>&1
+    echo install-new failed> "{fail_marker}"
+    goto restart
 )
 
+echo [%%time%%] update applied successfully>> "{log_file}"
+del /F /Q "{old_exe}" >nul 2>&1
+
+:restart
 rem — הפעל מחדש בסביבה נקייה (cmd חדש בלי משתני PyInstaller) —
 ping -n 3 127.0.0.1 >nul
 start "" /D "{os.path.dirname(cur_exe)}" "{cur_exe}"
@@ -1487,6 +1571,7 @@ del "%~f0"
         # כדי לא להריץ בטעות מתקין על גרסה ניידת או להפך.
         download_url = setup_url if install_type == "installer" else portable_url
 
+        _update_state["target_version"] = latest
         return {
             "ok": True,
             "current": current,
@@ -1497,6 +1582,100 @@ del "%~f0"
             "download_url": download_url,
             "notes": (data.get("body") or "")[:800],
         }
+
+    # ── תקציר שינויים מותאם לגודל הקפיצה ───────────────────────────
+    def get_update_summary(self, from_version=None, to_version=None):
+        """
+        מה השתנה בין הגרסה שרצה לגרסה החדשה. הניסוח *משתנה לפי גודל הקפיצה*:
+        קפיצה של גרסה אחת מקבלת את הפירוט המלא, קפיצה של שמונה מקבלת רק את
+        הכותרות — אחרת מי שמדלג על חצי שנה מקבל קיר טקסט ולא קורא כלום.
+        נכשל בשקט: אם היומן לא נטען, הדיאלוג פשוט לא יציג תקציר.
+        """
+        import urllib.request
+        import json as _json
+        cur = (from_version or APP_VERSION).strip()
+        try:
+            url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/changelog.json"
+            req = urllib.request.Request(url, headers={"User-Agent": "TikNick-Updater"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except Exception as e:
+            logging.info("changelog fetch failed: %s", e)
+            return {"ok": False, "error": "לא ניתן לטעון את יומן השינויים"}
+
+        def parse(v):
+            out = []
+            for part in str(v).split("."):
+                digits = "".join(c for c in part if c.isdigit())
+                out.append(int(digits) if digits else 0)
+            while len(out) < 3:
+                out.append(0)
+            return tuple(out[:3])
+
+        cur_t = parse(cur)
+        top_t = parse(to_version) if to_version else None
+        newer = []
+        for entry in data.get("versions", []):
+            vt = parse(entry.get("v", "0"))
+            if vt > cur_t and (top_t is None or vt <= top_t):
+                newer.append(entry)
+        newer.sort(key=lambda e: parse(e["v"]), reverse=True)
+        if not newer:
+            return {"ok": True, "jump": 0, "versions": [], "groups": [], "headline": ""}
+
+        jump = len(newer)
+        all_items = [(e["v"], it) for e in newer for it in (e.get("items") or [])]
+        majors = [(v, it) for v, it in all_items if it.get("t") == "major"]
+        feats = [(v, it) for v, it in all_items if it.get("t") == "feature"]
+        fixes = [(v, it) for v, it in all_items if it.get("t") == "fix"]
+
+        if jump == 1:
+            # גרסה אחת: הכול, מקובץ לפי סוג
+            mode = "full"
+            groups = [g for g in (
+                {"title": "חשוב לדעת", "items": [it["s"] for _, it in majors]},
+                {"title": "חדש", "items": [it["s"] for _, it in feats]},
+                {"title": "תיקונים", "items": [it["s"] for _, it in fixes]},
+            ) if g["items"]]
+        elif jump <= 3:
+            # קפיצה קטנה: חשוב + חדש במלואם, תיקונים רק כמספר
+            mode = "grouped"
+            groups = [g for g in (
+                {"title": "חשוב לדעת", "items": [it["s"] for _, it in majors]},
+                {"title": "מה חדש", "items": [it["s"] for _, it in feats]},
+            ) if g["items"]]
+            if fixes:
+                groups.append({"title": "ובנוסף",
+                               "items": ["%d תיקונים ושיפורים" % len(fixes)]})
+        else:
+            # קפיצה גדולה: רק הכותרות, והשאר כמספרים. והתקרה מתהדקת ככל שהקפיצה
+            # גדלה — מי שדילג על תשע גרסאות צריך *פחות* טקסט, לא יותר.
+            mode = "headlines"
+            n_major, n_feat = (3, 4) if jump <= 6 else (2, 3)
+            top_feats = [it["s"] for _, it in feats][:n_feat]
+            groups = [g for g in (
+                {"title": "חשוב לדעת", "items": [it["s"] for _, it in majors][:n_major]},
+                {"title": "העיקר שנוסף", "items": top_feats},
+            ) if g["items"]]
+            rest = max(0, len(feats) - len(top_feats))
+            tail = []
+            if rest:
+                tail.append("ועוד %d תוספות" % rest)
+            if fixes:
+                tail.append("%d תיקונים" % len(fixes))
+            if tail:
+                groups.append({"title": "ובנוסף", "items": [" · ".join(tail)]})
+
+        newest = newer[0]["v"]
+        if jump == 1:
+            headline = "מה השתנה בגרסה %s" % newest
+        else:
+            oldest = newer[-1]["v"]
+            headline = "דילגת על %d גרסאות (%s → %s) — הנה העיקר" % (jump, oldest, newest)
+        return {"ok": True, "jump": jump, "mode": mode, "headline": headline,
+                "from": cur, "to": newest,
+                "versions": [e["v"] for e in newer], "groups": groups,
+                "counts": {"major": len(majors), "feature": len(feats), "fix": len(fixes)}}
 
     # ── פורומים ────────────────────────────────────────────────────
     def get_forums(self):

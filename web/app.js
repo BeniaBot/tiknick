@@ -331,6 +331,29 @@ async function _origInit() {
   api('consume_update_failure').then(r => {
     if (r?.failed) toast('העדכון הקודם ירד אך לא הוחל (הקובץ היה נעול). נסה שוב דרך "אודות".', 'error');
   });
+  // עדכון שהתחיל ולא תפס: התוכנה עולה שוב באותה גרסה. עד עכשיו זה נראה כאילו
+  // פשוט לא קרה כלום — וזה בדיוק מה שהמשתמש חווה כ"העדכון נפל".
+  api('settle_pending_update').then(r => {
+    if (!r || !r.target) return;
+    openModal('⚠️ העדכון לא הושלם', `
+      <div style="font-size:13.5px;line-height:1.9">
+        ניסינו לעדכן ל-<b>v${esc(r.target)}</b>, אבל התוכנה עלתה שוב ב-<b>v${esc(r.current)}</b>.
+        <div style="margin-top:10px;color:var(--subtext);font-size:12.5px">
+          זה קורה כשההתקנה חסומה — אנטי-וירוס, הרשאות, או עותק אחר של התוכנה שרץ.
+          ${r.log ? 'פרטי הכישלון נשמרו ביומן ההתקנה.' : ''}
+        </div>
+        <div style="margin-top:12px;font-size:12.5px">
+          הדרך הבטוחה: להוריד את הגרסה מדף הגרסאות ולהתקין ידנית.
+        </div>
+      </div>`, [
+      { label: '🌐 פתח את דף הגרסאות', cls: 'btn-primary', action: () => {
+        api('open_url', 'https://github.com/BeniaBot/tiknick/releases/latest'); closeModal();
+      }},
+      ...(r.log ? [{ label: '📄 פתח יומן התקנה', cls: 'btn-ghost',
+                     action: () => api('open_update_log') }] : []),
+      { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+    ], 'modal-sm', { id: 'update-failed' });
+  });
   // בדיקת עדכונים שקטה ברקע (לא חוסמת)
   setTimeout(silentUpdateCheck, 2500);
 }
@@ -376,11 +399,30 @@ async function checkUpdates() {
     return;
   }
 
-  const notesHtml = res.notes
-    ? `<div style="margin-top:14px;padding:12px 14px;background:var(--card2);
+  // תקציר שמתקצר ככל שהקפיצה גדולה: מי שדילג על תשע גרסאות לא יקרא קיר טקסט,
+  // ומי שמעדכן גרסה אחת דווקא רוצה את הפירוט.
+  const sum = await api('get_update_summary', res.current, res.latest);
+  let notesHtml = '';
+  if (sum?.ok && (sum.groups || []).length) {
+    notesHtml = `
+      <div style="margin-top:14px;padding:12px 14px;background:var(--card2);border-radius:8px;
+                  max-height:44vh;overflow-y:auto">
+        <div style="font-size:12.5px;font-weight:800;margin-bottom:8px">${esc(sum.headline)}</div>
+        ${sum.groups.map(g => `
+          <div style="margin-bottom:9px">
+            <div style="font-size:11px;font-weight:800;color:var(--subtext);margin-bottom:3px">
+              ${esc(g.title)}</div>
+            ${g.items.map(it => `
+              <div style="font-size:12.5px;line-height:1.75;padding-inline-start:4px">• ${esc(it)}</div>`).join('')}
+          </div>`).join('')}
+        ${sum.jump > 1 ? `<div style="font-size:11px;color:var(--subtext);margin-top:6px">
+          הרשימה המלאה לכל גרסה נמצאת בדף הגרסאות.</div>` : ''}
+      </div>`;
+  } else if (res.notes) {
+    notesHtml = `<div style="margin-top:14px;padding:12px 14px;background:var(--card2);
              border-radius:8px;font-size:12.5px;color:var(--text-dim);
-             max-height:180px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">${esc(res.notes)}</div>`
-    : '';
+             max-height:180px;overflow-y:auto;white-space:pre-wrap;line-height:1.6">${esc(res.notes)}</div>`;
+  }
 
   openModal('🎉 גרסה חדשה זמינה!', `
     <div style="text-align:center;padding:10px 0 6px">
