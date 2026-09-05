@@ -367,6 +367,8 @@ async function silentUpdateCheck() {
     if (res.update_available) {
       const dot = document.getElementById('update-dot');
       if (dot) dot.style.display = 'inline-block';
+      const adot = document.getElementById('about-update-dot');
+      if (adot) adot.style.display = 'inline-block';
       const foot = document.getElementById('app-footer');
       if (foot) foot.title = `גרסה ${res.latest} זמינה! לחץ לאודות`;
       toast(`🎉 גרסה חדשה זמינה: v${res.latest}`, 'info');
@@ -392,7 +394,7 @@ async function checkUpdates() {
           זו הגרסה האחרונה שפורסמה.
         </p>
       </div>`, [
-      { label: 'סגור', cls: 'btn-primary', action: closeModal },
+      { label: 'סגור', cls: 'btn-ghost', action: closeModal },
     ], 'modal-sm');
     return;
   }
@@ -1044,8 +1046,11 @@ function renderForum(td, n) {
   const color = S.forumColors[n.forum] || '#8b90a0';
   const span  = document.createElement('span');
   span.className = 'cell-forum';
+  // הצבע נשאר כרקע (הוא סימן הזיהוי), אבל לא כצבע הטקסט: צבע פורום בהיר
+  // על אותו צבע ב-13% נתן ~2:1 בערכה הבהירה, בכל שורה בטבלה.
   span.style.background = color + '22';
-  span.style.color       = color;
+  span.style.color      = 'var(--text)';
+  span.style.boxShadow  = 'inset 0 0 0 1px ' + color + '55';
   span.textContent = n.forum || '';
   td.appendChild(span);
 }
@@ -1116,7 +1121,7 @@ function renderRep(td, n) {
   td.textContent = Number(n.reputation).toLocaleString();
   td.dir = 'ltr';   // אחרת מוניטין שלילי מוצג הפוך ("12-" במקום "-12")
   td.style.textAlign = 'right';
-  td.style.color = n.reputation > 100 ? '#3fb950' : 'inherit';
+  td.style.color = n.reputation > 100 ? 'var(--success)' : 'inherit';
 }
 
 // ── פעולות על טלפון/מייל: וואטסאפ / חיוג / מייל / העתקה ─────────────────
@@ -1415,7 +1420,8 @@ async function openDbHealth() {
   const h = await api('get_db_health');
   const bk = await api('get_backup_status') || {};
   if (!h?.ok) { toast('לא ניתן לקרוא את מצב המאגר: ' + (h?.error || ''), 'error'); return; }
-  const mb = b => (b / 1048576).toFixed(1) + ' MB';
+  // בידוד דו-כיווני: בלעדיו "12.4 MB" בתוך משפט עברי מוצג כ-"MB 12.4"
+  const mb = b => '⁦' + (b / 1048576).toFixed(1) + ' MB⁩';
   const c = h.counts || {};
   const okQC = h.quick_check === 'ok';
   const row = (k, v) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border-soft);font-size:13px">
@@ -1710,7 +1716,7 @@ async function openNickDialog(nickId = null) {
       </div>
       <div class="form-group">
         <label class="form-label">מייל ראשי</label>
-        <input class="form-input" id="f-email" dir="ltr" style="text-align:left"
+        <input class="form-input" id="f-email" dir="ltr"
                value="${esc(nick?.email||'')}">
       </div>
       <div class="form-group full">
@@ -1750,7 +1756,7 @@ async function openNickDialog(nickId = null) {
         <label class="form-label">קישור לפרופיל (URL)</label>
         <div style="display:flex;gap:6px">
           <input class="form-input" id="f-avatar_url" placeholder="https://..." dir="ltr"
-                 value="${esc(nick?.avatar_url||'')}" style="flex:1;text-align:left">
+                 value="${esc(nick?.avatar_url||'')}" style="flex:1">
           <a id="profile-link-btn"
              href="${esc(safeUrl(nick?.avatar_url) || '#')}" target="_blank"
              title="פתח פרופיל"
@@ -1822,7 +1828,7 @@ async function openNickDialog(nickId = null) {
     { label: '💾 שמור', cls: 'btn-primary', action: () => saveNick(nickId) },
     // openModal סוגר את החלון הנוכחי כשלב ראשון ואין לו מחסנית — כפתור שפותח
     // חלון נוסף מכאן היה מוחק טופס עריכה פתוח. לכן מדפיסים ישירות.
-    ...(nickId ? [{ label: '🖨️ הדפס', cls: 'btn-ghost', action: () => printProfileNow(nickId) }] : []),
+    ...(nickId ? [{ label: '🖨️ הדפס (ברירות מחדל)', cls: 'btn-ghost', action: () => printProfileNow(nickId) }] : []),
     { label: 'ביטול',   cls: 'btn-ghost',   action: closeModal },
   ], 'modal-lg', { id: 'nick-dialog', dismissable: false });
   if (nickId) api('touch_recent', nickId);
@@ -1846,8 +1852,8 @@ async function loadNickHistory(nickId) {
       <div style="display:flex;gap:8px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--border-soft)">
         <span style="color:var(--subtext);min-width:92px">${esc(relativeTime(h.changed_at))}</span>
         <b style="min-width:80px">${esc(label(h.field_name))}</b>
-        <span style="flex:1"><span style="color:var(--subtext)">${esc(h.old_value || '(ריק)')}</span>
-          → <b>${esc(h.new_value || '(ריק)')}</b></span>
+        <span style="flex:1"><bdi style="color:var(--subtext)">${esc(h.old_value || '(ריק)')}</bdi>
+          ← <bdi><b>${esc(h.new_value || '(ריק)')}</b></bdi></span>
       </div>`).join('')}`;
 }
 
@@ -2078,7 +2084,10 @@ async function onTagInput(e) {
       ${esc(r.username)}
     </div>`).join('');
   const rect = ta.getBoundingClientRect();
-  box.style.left = rect.left + 'px';
+  // ב-RTL הסמן יושב בקצה הימני של השדה; עיגון לשמאל פתח את הרשימה
+  // מרחק של כמעט רוחב חלון מהמקום שבו מקלידים.
+  box.style.left = '';
+  box.style.right = (window.innerWidth - rect.right) + 'px';
   box.style.top  = (rect.bottom + 4) + 'px';
   box.style.display = '';
 }
@@ -2471,7 +2480,7 @@ function renderMergedProfile(p) {
                        S.forumColors[primary.forum] || 'var(--accent)'));
   const avatarHtml = primary.avatar_image
     ? `<img src="${esc(primary.avatar_image)}" style="width:100%;height:100%;object-fit:cover">`
-    : `<span style="width:100%;height:100%;display:grid;place-items:center;font-size:22px;font-weight:800;color:#fff;background:${avatarBg}">${initial}</span>`;
+    : `<span style="width:100%;height:100%;display:grid;place-items:center;font-size:22px;font-weight:800;color:${fgOn(avatarBg)};background:${avatarBg}">${initial}</span>`;
 
   // צ'יפים לכל זהות (עם פתיחת פרופיל)
   const memberChips = members.map(m => `
@@ -2545,7 +2554,7 @@ async function openForumMgr() {
     return S.forums.map(f => `
       <div class="forum-item ${selectedForum?.id===f.id?'selected':''}"
            onclick="fmSelect(${f.id})" data-fid="${f.id}">
-        <span class="forum-dot" style="background:${f.color}"></span>
+        <span class="forum-dot" style="background:${f.color};color:${f.color}"></span>
         <span class="forum-name">${esc(f.name)}</span>
         <span style="flex:1"></span>
         ${f.url
@@ -2569,7 +2578,7 @@ async function openForumMgr() {
       const isActive = f.active;
       return `
         <div class="forum-item" style="cursor:default;${isActive ? 'opacity:.6' : ''}">
-          <span class="forum-dot" style="background:${f.color}"></span>
+          <span class="forum-dot" style="background:${f.color};color:${f.color}"></span>
           <span class="forum-name" style="font-size:13px">${esc(f.name)}</span>
           ${f.url ? `<a href="${esc(f.url)}" target="_blank"
              style="color:var(--subtext);font-size:11px;margin-right:auto;text-decoration:none;
@@ -2595,7 +2604,7 @@ async function openForumMgr() {
 
     <div style="margin-top:12px;display:flex;gap:6px;align-items:center">
       <input class="form-input" id="rename-val" placeholder="שם חדש לפורום שנבחר" style="flex:1">
-      <input class="form-input" id="rename-url" placeholder="קישור (URL)" dir="ltr" style="flex:1;text-align:left">
+      <input class="form-input" id="rename-url" placeholder="קישור (URL)" dir="ltr" style="flex:1">
       <button class="btn btn-ghost btn-sm" onclick="fmRename()">✏️ שמור</button>
     </div>
 
@@ -2606,7 +2615,7 @@ async function openForumMgr() {
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
         <input class="form-input" id="new-forum-name" placeholder="שם"
                style="flex:1" oninput="fmAutoFill(this.value)">
-        <input class="form-input" id="new-forum-url" placeholder="קישור (אופציונלי)" dir="ltr" style="flex:1;text-align:left">
+        <input class="form-input" id="new-forum-url" placeholder="קישור (אופציונלי)" dir="ltr" style="flex:1">
         <input type="color" id="new-forum-color" value="#58a6ff"
                style="width:34px;height:34px;border:none;background:none;cursor:pointer;padding:0">
         <button class="btn btn-primary btn-sm" onclick="fmAdd()">הוסף</button>
@@ -3279,7 +3288,7 @@ async function openSyncMgr() {
       const im = document.getElementById('import-manual');
       if (im) await api('set_setting', 'import_manual_conflicts', im.checked ? '1' : '0');
       toast('הגדרות סנכרון נשמרו ✓', 'success');
-      // לא סוגר — סגירה דרך כפתור "סגור"
+      closeModal();   // כמו בכל "שמור" אחר בתוכנה
     }},
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
@@ -3337,7 +3346,7 @@ function renderIdentitySuggestions() {
     <p style="color:var(--subtext);font-size:12.5px;margin-bottom:12px">
       ניקים בפורומים שונים שנראים כאותו אדם (אותו טלפון / מייל / שם). קישור יאחד אותם לזהות אחת.
     </p>` + _idSuggestions.map((g, i) => `
-    <div class="conflict-item" data-sug="${i}" style="display:block">
+    <div class="suggest-item" data-sug="${i}">
       <div style="font-size:12px;color:var(--subtext);margin-bottom:6px">
         ${esc(g.reason)}: <b dir="auto" style="color:var(--accent-2)">${esc(g.value)}</b>
       </div>
@@ -3462,7 +3471,9 @@ async function openScheduler(back) {
     }},
     { label: '▶ הרץ עכשיו', cls: 'btn-ghost', action: async () => {
       const r = await api('run_schedule_now');
-      if (!r?.ok) { toast(r?.error || 'לא ניתן להריץ', 'error'); return; }
+      // "אין כרגע פורום שמגיע לו" היא התשובה הרגילה, לא שגיאה — טוסט אדום
+      // על מצב תקין נראה כמו באג.
+      if (!r?.ok) { toast(r?.error || 'לא ניתן להריץ', r?.error ? 'info' : 'error'); return; }
       closeModal(); startScrapeMonitor();
     }},
     ...(typeof back === 'function'
@@ -3606,7 +3617,7 @@ async function openIdentityMap(tab) {
       <label style="display:flex;gap:5px;align-items:center;font-size:12px;cursor:pointer">
         <input type="checkbox" id="idm-conf" onchange="renderIdentityMap()"> רק עם סתירה</label>
     </div>
-    <div id="idm-body" style="max-height:46vh;overflow:auto"></div>
+    <div id="idm-body"></div>
     </div>
   `, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg',
      { id: 'identity-map' });
@@ -3755,7 +3766,7 @@ async function openStats() {
     ${(s.top_groups || []).length ? `<div class="section-hdr">קבוצות נפוצות</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px">${s.top_groups.map(g =>
         `<span style="background:var(--card2);border-radius:999px;padding:4px 11px;font-size:12px">${esc(g.name)} <b>${g.c}</b></span>`).join('')}</div>` : ''}
-  `, [{ label: 'סגור', cls: 'btn-primary', action: closeModal }], 'modal-lg');
+  `, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg');
 }
 
 // ══ מה השתנה בסריקה ═══════════════════════════════════════════════════
@@ -3803,11 +3814,11 @@ async function openScanChanges(runId) {
         <div style="display:flex;gap:8px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--border-soft)">
           <b style="min-width:110px">${esc(c.username)}</b>
           <span style="color:var(--subtext);min-width:80px">${esc(label(c.field_name))}</span>
-          <span style="flex:1"><span style="color:var(--subtext)">${esc(c.old_value || '(ריק)')}</span>
-            → <b>${esc(c.new_value || '(ריק)')}</b></span>
+          <span style="flex:1"><bdi style="color:var(--subtext)">${esc(c.old_value || '(ריק)')}</bdi>
+            ← <bdi><b>${esc(c.new_value || '(ריק)')}</b></bdi></span>
         </div>`).join('')}` : ''}
     ${!ch.length ? '<div style="padding:24px;text-align:center;color:var(--subtext)">לא נמצאו שינויים</div>' : ''}`;
-  openModal('📋 מה השתנה בסריקה', html, [{ label: 'סגור', cls: 'btn-primary', action: closeModal }], 'modal-lg');
+  openModal('📋 מה השתנה בסריקה', html, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg');
 }
 
 // ══ BACKUP / RESTORE (קובץ DB שלם) ═══════════════════════════════════
@@ -4053,7 +4064,7 @@ async function showImportDetailsDialog(res) {
       proceedImport(res);
     }},
     { label: 'ביטול', cls: 'btn-ghost', action: closeModal },
-  ], 'modal-sm');
+  ], 'modal-lg');
 }
 
 async function proceedImport(res) {
@@ -4074,7 +4085,7 @@ async function showImportPreview(mapping) {
     <div style="text-align:center;padding:22px 16px">
       <div style="font-size:34px;margin-bottom:12px">🔎</div>
       <div id="prev-text" style="font-size:14px">בודק ${esc(start.total)} שורות…</div>
-    </div>`, [], 'modal-sm', { id: 'import-preview-wait', dismissable: false });
+    </div>`, [], 'modal-lg', { id: 'import-preview-wait', dismissable: false });
 
   const st = await new Promise(resolve => {
     let busy = false;
@@ -4174,7 +4185,7 @@ async function runImport(mapping) {
       <div style="height:8px;background:var(--card2);border-radius:99px;overflow:hidden;margin-top:16px">
         <div id="import-bar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--accent),var(--accent-2));transition:width .3s"></div>
       </div>
-    </div>`, [], 'modal-sm', { id: 'import-progress', dismissable: false });
+    </div>`, [], 'modal-lg', { id: 'import-progress', dismissable: false });
 
   const p = await new Promise(resolve => {
     let busy = false;
@@ -4344,7 +4355,7 @@ async function showForumMappingDialog(unknownForums, totalNicks) {
   };
 
   openModal('📥 ייבוא — מיפוי פורומים', html, [
-    { label: '📥 ייבא', cls: 'btn-primary', action: async () => {
+    { label: 'המשך לתצוגה מקדימה', cls: 'btn-primary', action: async () => {
       const mapping = {};
       // משתמש ב-data-fname במקום id כדי לתמוך בעברית ורווחים
       document.querySelectorAll('.fmap-select').forEach(sel => {
@@ -4520,7 +4531,7 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '', opts = {}) {
     <div class="modal ${extraClass}">
       <div class="modal-header">
         <div class="modal-title">${esc(title)}</div>
-        <button class="modal-close" onclick="closeModal()">✕</button>
+        <button class="modal-close" onclick="requestCloseModal()">✕</button>
       </div>
       <div class="modal-body">${bodyHtml}</div>
       ${buttons.length ? `<div class="modal-footer">${btnsHtml}</div>` : ''}
@@ -4532,6 +4543,14 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '', opts = {}) {
     const el = overlay.querySelector(`#mb-idx-${i}`);
     if (el) el.onclick = b.action;
   });
+}
+
+// ה-✕ הוא ה"סגור" הטבעי, ולכן הוא חייב לכבד את אותה הגנה כמו Esc ולחיצת רקע.
+function requestCloseModal() {
+  const ov = document.getElementById('modal-overlay');
+  if (ov && ov.dataset.dismissable === '0' &&
+      !confirm('לסגור את החלון? מה שהוזן כאן לא יישמר, ופעולה שכבר התחילה תמשיך לרוץ ברקע.')) return;
+  closeModal();
 }
 
 function closeModal() {
@@ -4847,10 +4866,11 @@ async function openInternetSync() {
         עוגיית התחברות (<span id="sync-cookie-name" dir="ltr">express.sid</span>) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה). נשמרת לפעם הבאה.
       </label>
       <button class="btn btn-ghost btn-sm" style="white-space:nowrap;flex-shrink:0"
-              onclick="openChazonishnikHelp()" title="איך משיגים עוגיות?">🍪 איך משיגים?</button>
+              onclick="toggleCookieHelp('sync-cookie-help')" title="איך משיגים עוגיות?">🍪 איך משיגים?</button>
     </div>
     <input id="sync-cookie" class="form-input" style="width:100%;margin-bottom:12px" dir="ltr"
            placeholder="הדבק כאן את ערך העוגייה (השאר ריק אם הפורום ציבורי)">
+    <div id="sync-cookie-help" style="display:none"></div>
 
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
       <label style="font-size:12px;color:var(--subtext);white-space:nowrap">הגבל עמודים (אופציונלי):</label>
@@ -4878,7 +4898,7 @@ async function openInternetSync() {
   `, [
     { label: 'בדוק פורום', cls: 'btn-ghost',   action: doForumCheck },
     { label: 'התחל סריקה', cls: 'btn-primary', action: doStartScrape },
-    { label: '🌍 סרוק הכל', cls: 'btn-warning', action: doStartScrapeAll },
+    { label: '🌍 סרוק הכל', cls: 'btn-ghost', action: doStartScrapeAll },
     { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
   ], 'modal-lg');
   S.lastScrapes = await api('get_last_scrapes') || {};
@@ -5057,8 +5077,46 @@ function startScrapeMonitor() {
   }, 700);
 }
 
-function openChazonishnikHelp() {
-  openChazonishnik();
+function cookieHelpHtml() {
+  return `
+      <div style="margin-bottom:14px;padding:14px;border:1px solid var(--accent-2);border-radius:10px">
+        <b style="font-size:13px">✅ דרך מומלצת: תוסף Get cookies.txt</b>
+        <ol style="margin:8px 0 0;padding-inline-start:20px;font-size:12px;line-height:1.9">
+          <li>לחץ כאן להתקנת התוסף:
+            <b style="color:var(--accent-2);cursor:pointer;text-decoration:underline"
+               onclick="openExt('https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc')">Get cookies.txt LOCALLY</b>
+            ← בחלון שנפתח לחץ "Add to Chrome" / "הוסף ל-Chrome" ואשר.</li>
+          <li>היכנס לפורום <b>mitmachim.top</b> והתחבר לחשבון שלך (אם עדיין לא).</li>
+          <li>לחץ על אייקון התוסף (בפינה הימנית-עליונה של הדפדפן, ליד סרגל הכתובת. אם לא רואים — לחץ על אייקון הפאזל 🧩 ואז על התוסף).</li>
+          <li>בחלון שנפתח לחץ על הכפתור <b>"Export"</b> — ייווצר קובץ טקסט, או שהתוכן יועתק.</li>
+          <li>בקובץ/טקסט חפש את השורה שכתוב בה <code>express.sid</code>, והעתק את <b>הערך שאחריה</b> (המחרוזת הארוכה שמתחילה ב-<code>s%3A</code>).</li>
+          <li>הדבק אותו בשדה "עוגיית express.sid" למטה.</li>
+        </ol>
+      </div>
+
+      <details style="margin-bottom:14px">
+        <summary style="cursor:pointer;font-size:12.5px;font-weight:600">🔧 דרך חלופית: ידנית דרך כלי מפתחים (למתקדמים)</summary>
+        <ol style="margin:8px 0 0;padding-inline-start:20px;font-size:12px;line-height:1.9;color:var(--subtext)">
+          <li>היכנס לפורום mitmachim.top והתחבר.</li>
+          <li>הקש <b>F12</b> לפתיחת כלי המפתחים.</li>
+          <li>עבור ללשונית <b>Application</b> (או "אחסון"/Storage בדפדפנים מסוימים).</li>
+          <li>בתפריט הצד: <b>Cookies</b> ← לחץ על הכתובת <code>https://mitmachim.top</code>.</li>
+          <li>ברשימה שתופיע, מצא את השורה בשם <code>express.sid</code>.</li>
+          <li>לחץ עליה, העתק את הערך שבעמודת <b>Value</b> (מתחיל ב-<code>s%3A</code>), והדבק למטה.</li>
+        </ol>
+      </details>
+
+      <div style="font-size:11.5px;color:var(--subtext);margin-bottom:14px;padding:8px 10px;background:var(--card2);border-radius:6px">
+        🔒 העוגייה היא אישית ומאפשרת גישה לחשבון שלך — אל תשתף אותה עם אחרים.
+      </div>`;
+}
+
+// מציג/מסתיר את ההסבר בתוך החלון הפתוח, בלי לסגור אותו
+function toggleCookieHelp(containerId) {
+  const box = document.getElementById(containerId);
+  if (!box) return;
+  if (!box.dataset.filled) { box.innerHTML = cookieHelpHtml(); box.dataset.filled = '1'; }
+  box.style.display = box.style.display === 'none' ? '' : 'none';
 }
 
 function updateSyncHint() {
@@ -5165,36 +5223,7 @@ async function openChazonishnik() {
         </div>
       </div>
 
-      <div style="margin-bottom:14px;padding:14px;border:1px solid var(--accent-2);border-radius:10px">
-        <b style="font-size:13px">✅ דרך מומלצת: תוסף Get cookies.txt</b>
-        <ol style="margin:8px 0 0;padding-inline-start:20px;font-size:12px;line-height:1.9">
-          <li>לחץ כאן להתקנת התוסף:
-            <b style="color:var(--accent-2);cursor:pointer;text-decoration:underline"
-               onclick="openExt('https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc')">Get cookies.txt LOCALLY</b>
-            → בחלון שנפתח לחץ "Add to Chrome" / "הוסף ל-Chrome" ואשר.</li>
-          <li>היכנס לפורום <b>mitmachim.top</b> והתחבר לחשבון שלך (אם עדיין לא).</li>
-          <li>לחץ על אייקון התוסף (בפינה הימנית-עליונה של הדפדפן, ליד סרגל הכתובת. אם לא רואים — לחץ על אייקון הפאזל 🧩 ואז על התוסף).</li>
-          <li>בחלון שנפתח לחץ על הכפתור <b>"Export"</b> — ייווצר קובץ טקסט, או שהתוכן יועתק.</li>
-          <li>בקובץ/טקסט חפש את השורה שכתוב בה <code>express.sid</code>, והעתק את <b>הערך שאחריה</b> (המחרוזת הארוכה שמתחילה ב-<code>s%3A</code>).</li>
-          <li>הדבק אותו בשדה "עוגיית express.sid" למטה.</li>
-        </ol>
-      </div>
-
-      <details style="margin-bottom:14px">
-        <summary style="cursor:pointer;font-size:12.5px;font-weight:600">🔧 דרך חלופית: ידנית דרך כלי מפתחים (למתקדמים)</summary>
-        <ol style="margin:8px 0 0;padding-inline-start:20px;font-size:12px;line-height:1.9;color:var(--subtext)">
-          <li>היכנס לפורום mitmachim.top והתחבר.</li>
-          <li>הקש <b>F12</b> לפתיחת כלי המפתחים.</li>
-          <li>עבור ללשונית <b>Application</b> (או "אחסון"/Storage בדפדפנים מסוימים).</li>
-          <li>בתפריט הצד: <b>Cookies</b> ← לחץ על הכתובת <code>https://mitmachim.top</code>.</li>
-          <li>ברשימה שתופיע, מצא את השורה בשם <code>express.sid</code>.</li>
-          <li>לחץ עליה, העתק את הערך שבעמודת <b>Value</b> (מתחיל ב-<code>s%3A</code>), והדבק למטה.</li>
-        </ol>
-      </details>
-
-      <div style="font-size:11.5px;color:var(--subtext);margin-bottom:14px;padding:8px 10px;background:var(--card2);border-radius:6px">
-        🔒 העוגייה היא אישית ומאפשרת גישה לחשבון שלך — אל תשתף אותה עם אחרים.
-      </div>
+      ${cookieHelpHtml()}
 
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">שם משתמש לניתוח</label>
@@ -5351,6 +5380,19 @@ async function cancelChazonishnik() {
   if (_currentModalId === 'chz-progress') closeModal();
 }
 
+// גובה קבוע ב-vh בתוך חלון שגם הוא מוגבל ב-vh = שני גוללים. הפיכת גוף
+// החלון לעמודת flex נותנת למסגרת בדיוק את מה שנשאר.
+function fillModalBody(frameId) {
+  const body = document.querySelector('#modal-overlay .modal-body');
+  const fr = document.getElementById(frameId);
+  if (!body || !fr) return;
+  body.style.display = 'flex';
+  body.style.flexDirection = 'column';
+  fr.style.height = 'auto';
+  fr.style.flex = '1';
+  fr.style.minHeight = '240px';
+}
+
 function showChazonishnikReport(html, postCount) {
   // sandbox ללא allow-same-origin: לדוח יש origin נפרד, ולכן סקריפט בתוכו
   // (למשל מכותרת נושא עוינת) לא יכול להגיע ל-window.parent.pywebview.api.
@@ -5362,6 +5404,7 @@ function showChazonishnikReport(html, postCount) {
     { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openChazonishnik },
     { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
+  fillModalBody('chz-frame');
   setTimeout(() => {
     const frame = document.getElementById('chz-frame');
     if (frame) frame.srcdoc = html;
@@ -5388,8 +5431,9 @@ async function openStinknik() {
       </div>
       <div style="font-size:12px;color:var(--subtext);margin-bottom:14px">
         💡 עובד על כל פורום NodeBB. ברוב המקרים <b>לא נדרשת עוגייה</b> (המידע ציבורי). אם מתקבלת
-        שגיאת הרשאה, אפשר להוסיף עוגייה — <b style="color:var(--accent-2);cursor:pointer" onclick="openChazonishnik()">ראה הדרכה ב-Chazonishnik</b>.
+        שגיאת הרשאה, אפשר להוסיף עוגייה — <b style="color:var(--accent-text);cursor:pointer;text-decoration:underline" onclick="toggleCookieHelp('stink-cookie-help')">ראה הדרכה</b>.
       </div>
+      <div id="stink-cookie-help" style="display:none;margin-bottom:14px"></div>
       <div class="form-group" style="margin-bottom:10px">
         <label class="form-label">פורום</label>
         <select id="stink-forum" class="form-select" onchange="stinkPrefillCookie()">${opts}</select>
@@ -5510,6 +5554,7 @@ function showStinknikReport(html, disCount) {
     { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openStinknik },
     { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
+  fillModalBody('stink-frame');
   setTimeout(() => {
     const frame = document.getElementById('stink-frame');
     if (frame) frame.srcdoc = html;
@@ -5624,7 +5669,7 @@ function buildCardElement(n) {
     const avatarHtml = n.has_avatar
       ? `<div class="card-avatar" style="padding:0;overflow:hidden;background:${esc(nickCol)}">
            <img data-avatar-id="${n.id}" alt="" style="width:100%;height:100%;object-fit:cover"></div>`
-      : `<div class="card-avatar" style="background:linear-gradient(135deg,${esc(nickCol)},${esc(shade(nickCol,-25))})">${esc(initial)}</div>`;
+      : `<div class="card-avatar" style="color:${fgOn(nickCol)};background:linear-gradient(135deg,${esc(nickCol)},${esc(shade(nickCol,-25))})">${esc(initial)}</div>`;
 
     // rows — only fields that exist
     const cf = n.conflict_fields ? String(n.conflict_fields).split(',') : [];
@@ -5801,8 +5846,8 @@ async function openDisplaySettings() {
     </div>`;
 
   openModal('🎨 הגדרות תצוגה', html, [
-    { label: '↺ אפס לברירת מחדל', cls: 'btn-ghost', action: resetDisplay },
-    { label: 'סגור', cls: 'btn-primary', action: closeModal },
+    { label: '↺ אפס את כל הגדרות התצוגה', cls: 'btn-ghost', action: resetDisplay },
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ]);
 }
 
@@ -5872,6 +5917,19 @@ function esc(s) {
 // 'red;background-image:url(https://forum/track.png)' נשאר תקף בתוך אותו
 // מאפיין והופך לבקשה חיצונית מה-WebView בכל צפייה בפרופיל — כלומר הפורום
 // לומד שאתה מסתכל על המשתמש הזה. nick_color מגיע מהפורום, ולכן: רשימה לבנה.
+// לבן על רקע בהיר נעלם. בוחרים שחור/לבן לפי בהירות הרקע בפועל.
+function fgOn(bg) {
+  const m = String(bg || '').trim().match(/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/);
+  if (!m) return '#fff';
+  let h = m[1];
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const lin = v => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  const L = 0.2126 * lin(parseInt(h.slice(0, 2), 16))
+          + 0.7152 * lin(parseInt(h.slice(2, 4), 16))
+          + 0.0722 * lin(parseInt(h.slice(4, 6), 16));
+  return L > 0.42 ? '#1a1a1a' : '#fff';
+}
+
 function safeColor(v, fallback = 'var(--accent)') {
   const t = String(v ?? '').trim();
   return /^#[0-9a-fA-F]{3,8}$/.test(t) || /^[a-zA-Z]{3,20}$/.test(t) ? t : fallback;

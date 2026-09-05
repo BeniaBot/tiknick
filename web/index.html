@@ -26,12 +26,12 @@
       </span>
       <span class="logo-text">Tik-Nick</span>
     </div>
-    <!-- התפריט ירד מ-24 כפתורים ב-5 קבוצות ל-14 ב-4. כל מה שהוסר עבר לחלון
-         שכבר מחזיק את הנושא שלו: הצעות זהות ← "זהויות", תזמון ויומן סריקות ←
-         "סנכרון לאינטרנט", נצפו לאחרונה ← "תצוגת משתמש", סטטיסטיקות ← לחיצה על
-         המונים בסרגל העליון, וגיבוי/שחזור/סל מחזור/איפוס ← "המאגר".
-         הסיבה: 24 כפתורים הם 1070 פיקסל של תפריט בעמודה של 716, כלומר שליש
-         מהתפריט היה מתחת לקו הקיפול מאחורי פס גלילה כמעט בלתי נראה. -->
+    <!-- מה שנוסף בגרסאות 0.8.5-0.8.10 ירד מכאן אל תוך החלון שכבר מחזיק את
+         הנושא שלו: הצעות זהות ← "זהויות", תזמון ויומן סריקות ← "סנכרון
+         לאינטרנט", נצפו לאחרונה ← "תצוגת משתמש", סטטיסטיקות ← לחיצה על המונים
+         בסרגל העליון. הכפתורים הוותיקים נשארו במקומם — הם מה שהמשתמש מכיר.
+         הסיבה: 24 כפתורים היו 1070 פיקסל של תפריט בעמודה של 716, כלומר שליש
+         מהתפריט מתחת לקו הקיפול מאחורי פס גלילה כמעט בלתי נראה. -->
     <nav class="sidebar-nav">
       <div class="nav-group">
         <div class="nav-label">ניקים</div>
@@ -52,24 +52,18 @@
         </button>
       </div>
       <div class="nav-group">
-        <div class="nav-label">כלים</div>
-        <button class="nav-btn" onclick="openInternetSync()" title="סריקה מהפורומים, סריקה מתוזמנת ויומן סריקות">
-          <span class="icon">🌐</span> סנכרון לאינטרנט
-        </button>
-        <button class="nav-btn" onclick="openChazonishnik()">
-          <span class="icon">📖</span> Chazonishnik
-        </button>
-        <button class="nav-btn" onclick="openStinknik()">
-          <span class="icon">🦨</span> Stinknik
-        </button>
-      </div>
-      <div class="nav-group">
         <div class="nav-label">קובץ</div>
         <button class="nav-btn" onclick="exportData()">
           <span class="icon">📤</span> ייצוא
         </button>
         <button class="nav-btn" onclick="importData()">
           <span class="icon">📥</span> ייבוא
+        </button>
+        <button class="nav-btn" onclick="backupDb()" title="עותק מלא של כל המאגר לקובץ אחד">
+          <span class="icon">🗄️</span> גיבוי מלא
+        </button>
+        <button class="nav-btn" onclick="restoreDb()" title="החלפת המאגר בגיבוי שנשמר">
+          <span class="icon">♻️</span> שחזור מגיבוי
         </button>
       </div>
       <div class="nav-group">
@@ -83,8 +77,43 @@
         <button class="nav-btn" onclick="openDisplaySettings()">
           <span class="icon">🎨</span> הגדרות תצוגה
         </button>
-        <button class="nav-btn" onclick="openDbHealth()" title="גיבוי ושחזור, סל מחזור, תקינות, יומנים ואיפוס">
-          <span class="icon">🩺</span> המאגר
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">כלים</div>
+        <button class="nav-btn" onclick="openInternetSync()" title="סריקה מהפורומים, סריקה מתוזמנת ויומן סריקות">
+          <span class="icon">🌐</span> סנכרון לאינטרנט
+        </button>
+        <button class="nav-btn" onclick="openChazonishnik()">
+          <span class="icon">📖</span> Chazonishnik
+        </button>
+        <button class="nav-btn" onclick="openStinknik()">
+          <span class="icon">🦨</span> Stinknik
+        </button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-label">מתקדם</div>
+        <button class="nav-btn" onclick="openTrash()" title="ניקים שנמחקו — לשחזור עד 30 יום">
+          <span class="icon">🗑️</span> סל מחזור
+        </button>
+        <button class="nav-btn" onclick="openDbHealth()" title="תקינות, גיבוי אוטומטי, תחזוקה ויומנים">
+          <span class="icon">🩺</span> בריאות המאגר
+        </button>
+        <button class="nav-btn danger" onclick="confirmReset()">
+          <span class="icon">🔴</span> איפוס נתונים
+        </button>
+        <button class="nav-btn" onclick="openAbout()">
+          <span class="icon">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <path d="M12 4 C 7.5 4 4 7.5 4 12 v 1.5"/>
+              <path d="M12 4 C 16.5 4 20 7.5 20 12 v 3.5"/>
+              <path d="M12 7.5 C 9.5 7.5 7.5 9.5 7.5 12 v 3.5"/>
+              <path d="M12 7.5 C 14.5 7.5 16.5 9.5 16.5 12 v 5"/>
+              <path d="M12 11 v 8"/>
+              <path d="M12 11 C 10.6 11 10 12 10 13 v 3.5"/>
+            </svg>
+          </span>
+          <span>אודות</span>
+          <span id="about-update-dot" class="update-dot" style="display:none;margin-right:auto"></span>
         </button>
       </div>
     </nav>
@@ -178,7 +207,7 @@
 
     <!-- באנרי תהליכי רקע — נערמים זה מעל זה, כדי ששני תהליכים במקביל
          (למשל Chazonishnik + Stinknik) יהיו שניהם גלויים ולא יסתירו זה את זה -->
-    <div id="bg-tasks" style="position:fixed;bottom:16px;left:16px;z-index:90;
+    <div id="bg-tasks" style="position:fixed;bottom:47px;left:16px;z-index:90;
          display:flex;flex-direction:column;gap:10px;align-items:flex-end">
 
     <!-- floating stinknik progress -->
