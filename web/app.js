@@ -367,8 +367,6 @@ async function silentUpdateCheck() {
     if (res.update_available) {
       const dot = document.getElementById('update-dot');
       if (dot) dot.style.display = 'inline-block';
-      const adot = document.getElementById('about-update-dot');
-      if (adot) adot.style.display = 'inline-block';
       const foot = document.getElementById('app-footer');
       if (foot) foot.title = `גרסה ${res.latest} זמינה! לחץ לאודות`;
       toast(`🎉 גרסה חדשה זמינה: v${res.latest}`, 'info');
@@ -1379,7 +1377,7 @@ async function restoreBatch(batchId) {
   toast(`שוחזרו ${r.restored} ניקים ✓${extra}`, 'success');
 }
 
-async function openTrash() {
+async function openTrash(back) {
   const batches = await api('get_trash') || [];
   const rows = batches.length ? batches.map(b => `
     <div style="display:flex;gap:10px;align-items:center;padding:9px 0;border-bottom:1px solid var(--border-soft);font-size:13px">
@@ -1398,10 +1396,21 @@ async function openTrash() {
       if (!confirm('לרוקן את סל המחזור לצמיתות?')) return;
       await api('empty_trash'); closeModal(); toast('סל המחזור רוקן', 'info');
     }}] : []),
+    ...(typeof back === 'function'
+        ? [{ label: '↩ חזרה', cls: 'btn-ghost', action: () => { closeModal(); back(); } }]
+        : []),
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-sm');
 }
 
+// "🩺 המאגר" — החלון הזה מרכז עכשיו את כל מה שנוגע לקובץ עצמו: תקינות, גיבוי
+// ושחזור, סל המחזור, התחזוקה והאיפוס. שלושה מהם היו כפתורים נפרדים בתפריט.
+//
+// והתיקון החשוב: שבעת הכפתורים שישבו כאן ב-footer דרשו 915 פיקסל ברוחב פנוי
+// של 426, ומכיוון של-.modal-footer אין flex-wrap — ארבעה מהם צוירו *מחוץ*
+// לחלון ונחתכו, בלי פס גלילה ובלי שום רמז שהם קיימים. כלומר "יומן ייבואים",
+// "תקן קבוצות זהות" ו"גבה עכשיו" לא היו נגישים בשום דרך. הפעולות ירדו לגוף
+// החלון בשורות שנשברות, וב-footer נשאר "סגור" בלבד.
 async function openDbHealth() {
   const h = await api('get_db_health');
   const bk = await api('get_backup_status') || {};
@@ -1411,22 +1420,26 @@ async function openDbHealth() {
   const okQC = h.quick_check === 'ok';
   const row = (k, v) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:7px 0;border-bottom:1px solid var(--border-soft);font-size:13px">
       <span style="color:var(--subtext)">${k}</span><b dir="ltr">${v}</b></div>`;
-  openModal('🩺 בריאות המאגר', `
-    <div style="padding:10px 12px;border-radius:8px;margin-bottom:12px;font-size:13px;
-         background:${okQC ? 'rgba(52,211,153,.10)' : 'rgba(244,84,76,.10)'}">
+  const trashN = c.trash_nicks || 0;
+
+  openModal('🩺 המאגר', `
+    <div style="padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:13px;
+         background:var(--card);border-inline-start:3px solid var(${okQC ? '--success' : '--danger'});
+         color:var(${okQC ? '--success' : '--danger'})">
       ${okQC ? '✅ בדיקת תקינות עברה' : '⚠️ בדיקת התקינות מצאה בעיה: ' + esc(h.quick_check)}
     </div>
+
+    <div class="section-hdr">📊 מצב</div>
     ${row('גרסה', esc(h.version) + ' · ' + (h.install_type === 'installer' ? 'מותקנת' : 'ניידת'))}
     ${row('גודל הקובץ', mb(h.size))}
     ${row('יומן WAL', mb(h.wal))}
     ${row('ניקים', (c.nicks || 0).toLocaleString())}
     ${row('ערכי מקורות', (c.field_values || 0).toLocaleString())}
     ${row('אנשי קשר / זהויות', `${(c.nick_contacts || 0).toLocaleString()} / ${(c.nick_identities || 0).toLocaleString()}`)}
-    ${row('בסל המחזור', (c.trash_nicks || 0).toLocaleString())}
     ${row('חיפוש מהיר (FTS5)', h.fts ? 'פעיל' : 'לא זמין — LIKE')}
     <div style="font-size:11.5px;color:var(--subtext);margin-top:10px;word-break:break-all" dir="ltr">${esc(h.path)}</div>
 
-    <div style="font-size:12px;font-weight:800;margin:16px 0 6px">💾 גיבוי אוטומטי</div>
+    <div class="section-hdr">💾 גיבוי ושחזור</div>
     <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer;margin-bottom:8px">
       <input type="checkbox" id="bk-on" ${bk.enabled !== false ? 'checked' : ''}
              onchange="api('set_auto_backup', this.checked)">
@@ -1435,42 +1448,69 @@ async function openDbHealth() {
     ${row('גיבויים שמורים', `${bk.count || 0} · ${mb(bk.bytes || 0)}`)}
     ${row('גיבוי אחרון', bk.last ? esc(String(bk.last).replace('T', ' ')) : 'עדיין לא')}
     ${(bk.files || []).length ? `
-      <div style="max-height:16vh;overflow:auto;margin-top:6px">
+      <div style="max-height:14vh;overflow:auto;margin-top:6px">
         ${(bk.files || []).map(f => `
           <div style="display:flex;justify-content:space-between;gap:8px;font-size:11px;
                       color:var(--subtext);padding:3px 0" dir="ltr">
-            <span style="overflow:hidden;text-overflow:ellipsis">${esc(f.name)}</span>
-            <span>${mb(f.bytes)}</span>
+            <span style="overflow:hidden;text-overflow:ellipsis;min-width:0">${esc(f.name)}</span>
+            <span style="flex-shrink:0">${mb(f.bytes)}</span>
           </div>`).join('')}
       </div>` : ''}
-    <div style="font-size:11px;color:var(--subtext);margin-top:6px;line-height:1.6">
-      נשמרים ${esc(3)} האחרונים בלבד — עותק מלא שוקל כמו המאגר עצמו.
-      לשחזור: "♻️ שחזור מגיבוי" בהגדרות, ובחר קובץ מהתיקייה הזו.
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">
+      <button class="btn btn-sm btn-ghost" onclick="dbhBackupNow()">💾 גבה עכשיו</button>
+      <button class="btn btn-sm btn-ghost" onclick="dbhBackupToFile()"
+              title="עותק מלא של כל המאגר לקובץ שתבחר">🗄️ גיבוי מלא לקובץ</button>
+      <button class="btn btn-sm btn-ghost" onclick="dbhRestore()"
+              title="החלפת המאגר בגיבוי שנשמר">♻️ שחזור מגיבוי</button>
     </div>
-  `, [
-    { label: '📥 יומן ייבואים', cls: 'btn-ghost', action: () => { closeModal(); openImportLog(); } },
-    { label: '🔧 תקן קבוצות זהות', cls: 'btn-ghost', action: async () => {
-      const r = await api('repair_identity_groups');
-      if (!r?.ok) { toast(r?.error || 'התיקון נכשל', 'error'); return; }
-      toast(r.added ? `${r.added} קישורים חסרים הושלמו ✓` : 'כל קבוצות הזהות תקינות ✓', 'success');
-    }},
-    { label: '💾 גבה עכשיו', cls: 'btn-ghost', action: async () => {
-      setStatus('מגבה…');
-      const r = await api('run_auto_backup', 'manual');
-      if (r?.ok) { toast(`הגיבוי נשמר ✓ (${mb(r.bytes || 0)})`, 'success'); closeModal(); openDbHealth(); }
-      else toast(r?.error || 'הגיבוי נכשל', 'error');
-    }},
-    { label: '📂 פתח תיקיית נתונים', cls: 'btn-ghost', action: () => api('open_data_folder') },
-    { label: '📄 פתח יומן', cls: 'btn-ghost', action: () => api('open_log') },
-    { label: '🧹 כווץ קובץ', cls: 'btn-ghost', action: async () => {
-      setStatus('מכווץ את המאגר…');
-      const r = await api('vacuum_db');
-      if (r?.ok) { toast(`המאגר כווץ ✓ (${mb(r.size)})`, 'success'); closeModal(); openDbHealth(); }
-      else toast(r?.error || 'הכיווץ נכשל', 'error');
-    }},
-    { label: 'סגור', cls: 'btn-primary', action: closeModal },
-  ], 'modal-sm');
+    <div style="font-size:11px;color:var(--subtext);margin-top:6px;line-height:1.6">
+      מהגיבוי האוטומטי נשמרים 3 האחרונים בלבד — עותק מלא שוקל כמו המאגר עצמו.
+    </div>
+
+    <div class="section-hdr">🧰 תחזוקה</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button class="btn btn-sm btn-ghost" onclick="dbhTrash()"
+              title="ניקים שנמחקו — לשחזור עד 30 יום">🗑️ סל מחזור${trashN ? ` (${trashN.toLocaleString()})` : ''}</button>
+      <button class="btn btn-sm btn-ghost" onclick="dbhImportLog()">📥 יומן ייבואים</button>
+      <button class="btn btn-sm btn-ghost" onclick="dbhRepair()">🔧 תקן קבוצות זהות</button>
+      <button class="btn btn-sm btn-ghost" onclick="dbhVacuum()">🧹 כווץ קובץ</button>
+      <button class="btn btn-sm btn-ghost" onclick="api('open_data_folder')">📂 תיקיית נתונים</button>
+      <button class="btn btn-sm btn-ghost" onclick="api('open_log')">📄 פתח יומן</button>
+    </div>
+
+    <div class="section-hdr" style="color:var(--danger);border-bottom-color:var(--danger)">⚠️ אזור מסוכן</div>
+    <p style="font-size:12px;color:var(--subtext);line-height:1.6;margin-bottom:8px">
+      מחיקת נתונים מהמאגר. גיבוי אוטומטי נוצר לפני הפעולה כשהאפשרות למעלה דלוקה.
+    </p>
+    <button class="btn btn-sm btn-danger" onclick="dbhReset()">🔴 איפוס נתונים</button>
+  `, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], '', { id: 'db-health' });
 }
+
+// הפעולות יושבות בגוף החלון, ולכן הן צריכות להיות גלובליות (inline onclick).
+async function dbhBackupNow() {
+  setStatus('מגבה…');
+  const r = await api('run_auto_backup', 'manual');
+  setStatus('');
+  if (r?.ok) { toast(`הגיבוי נשמר ✓ (${(r.bytes / 1048576).toFixed(1)} MB)`, 'success'); closeModal(); openDbHealth(); }
+  else toast(r?.error || 'הגיבוי נכשל', 'error');
+}
+async function dbhBackupToFile() { await backupDb(); }
+async function dbhRestore() { await restoreDb(); }
+async function dbhVacuum() {
+  setStatus('מכווץ את המאגר…');
+  const r = await api('vacuum_db');
+  setStatus('');
+  if (r?.ok) { toast(`המאגר כווץ ✓ (${(r.size / 1048576).toFixed(1)} MB)`, 'success'); closeModal(); openDbHealth(); }
+  else toast(r?.error || 'הכיווץ נכשל', 'error');
+}
+async function dbhRepair() {
+  const r = await api('repair_identity_groups');
+  if (!r?.ok) { toast(r?.error || 'התיקון נכשל', 'error'); return; }
+  toast(r.added ? `${r.added} קישורים חסרים הושלמו ✓` : 'כל קבוצות הזהות תקינות ✓', 'success');
+}
+function dbhTrash() { closeModal(); openTrash(openDbHealth); }
+function dbhImportLog() { closeModal(); openImportLog(openDbHealth); }
+function dbhReset() { closeModal(); confirmReset(); }
 
 // ══ בחירה מרובה + מחיקה בפועל ═══════════════════════════════════════════
 function toggleRowSelected(id, checked) {
@@ -2348,7 +2388,11 @@ function openUserLookup() {
   `, [
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
-  setTimeout(() => document.getElementById('lookup-input')?.focus(), 60);
+  setTimeout(() => {
+    document.getElementById('lookup-input')?.focus();
+    const box = document.getElementById('lookup-results');
+    if (box) renderRecentInto(box);
+  }, 60);
 }
 
 function onLookupInput(val) {
@@ -2359,7 +2403,7 @@ function onLookupInput(val) {
 async function lookupSearch(query) {
   const box = document.getElementById('lookup-results');
   if (!box) return;
-  if (!query.trim()) { box.innerHTML = ''; return; }
+  if (!query.trim()) { renderRecentInto(box); return; }
   const rows = await api('lookup_nicks', query, 12) || [];
   if (!rows.length) {
     box.innerHTML = '<div style="padding:10px;color:var(--subtext);font-size:13px">לא נמצאו ניקים</div>';
@@ -2371,6 +2415,36 @@ async function lookupSearch(query) {
       <span style="font-weight:600;margin-right:6px">${esc(n.username)}</span>
       ${n.real_name ? `<span style="color:var(--subtext);font-size:12px;margin-right:6px">· ${esc(n.real_name)}</span>` : ''}
     </div>`).join('');
+}
+
+// הרשימה שהייתה חלון נפרד ("🕘 נצפו לאחרונה"): עכשיו זו המצב הריק של החיפוש.
+async function renderRecentInto(box) {
+  const rows = await api('get_recent_views', 12) || [];
+  if (!box.isConnected) return;
+  if (!rows.length) {
+    box.innerHTML = '<div style="padding:10px;color:var(--subtext);font-size:12.5px">' +
+                    'עדיין לא נפתח אף ניק.</div>';
+    return;
+  }
+  box.innerHTML = `<div style="font-size:11px;color:var(--subtext);padding:4px 2px 6px;
+        display:flex;justify-content:space-between;align-items:center">
+      <span>🕘 נצפו לאחרונה</span>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px;font-size:11px"
+              onclick="clearRecentFromLookup()">🧹 נקה</button>
+    </div>` + rows.map(n => `
+    <div class="search-result-item" onclick="showMergedProfile(${n.id})">
+      <span style="color:${esc(safeColor(S.forumColors[n.forum], '#8b90a0'))}">[${esc(n.forum)}]</span>
+      <span style="font-weight:600;margin-right:6px">${esc(n.username)}</span>
+      ${n.real_name ? `<span style="color:var(--subtext);font-size:12px;margin-right:6px">· ${esc(n.real_name)}</span>` : ''}
+      <span style="margin-inline-start:auto;color:var(--subtext);font-size:11px">
+        ${esc(relativeTime(String(n.viewed_at).replace(' ', 'T')))}</span>
+    </div>`).join('');
+}
+
+async function clearRecentFromLookup() {
+  await api('clear_recent_views');
+  const box = document.getElementById('lookup-results');
+  if (box) renderRecentInto(box);
 }
 
 async function showMergedProfile(nickId) {
@@ -3212,25 +3286,46 @@ async function openSyncMgr() {
 }
 
 // ══ הצעות זהות: "מי זה אותו אדם" ══════════════════════════════════════
+// נשארת ככניסה חוקית (קיצור/קוד ישן) — ומובילה ללשונית שבתוך חלון הזהויות.
 async function openIdentitySuggestions() {
-  openModal('🔗 הצעות זהות', '<div style="padding:24px;text-align:center;color:var(--subtext)">מחפש התאמות…</div>',
-            [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg',
-            { id: 'id-suggestions' });
+  await openIdentityMap('sug');
+}
+
+// נטענות פעם אחת לכל פתיחה של החלון, ורק כשעוברים ללשונית — החיפוש עצמו יקר.
+async function loadIdentitySuggestions() {
+  const pane = document.getElementById('idsug-pane');
+  if (!pane || pane.dataset.loaded === '1') return;
+  pane.dataset.loaded = '1';
+  pane.innerHTML = '<div style="padding:24px;text-align:center;color:var(--subtext)">מחפש התאמות…</div>';
   const r = await api('suggest_identities', 60);
-  // ייתכן שהמשתמש סגר/החליף חלון בזמן החיפוש — אל תכתוב לתוך חלון אחר
-  if (_currentModalId !== 'id-suggestions') return;
-  const body = document.querySelector('#modal-overlay .modal-body');
-  if (!body) return;
-  if (!r?.ok) { body.innerHTML = `<div style="padding:20px;color:var(--danger)">${esc(r?.error || 'שגיאה')}</div>`; return; }
+  if (_currentModalId !== 'identity-map') return;
+  const box = document.getElementById('idsug-pane');
+  if (!box) return;
+  if (!r?.ok) {
+    box.innerHTML = `<div style="padding:20px;color:var(--danger)">${esc(r?.error || 'שגיאה')}</div>`;
+    return;
+  }
   _idSuggestions = r.groups || [];
   renderIdentitySuggestions();
+}
+
+function switchIdentityTab(tab) {
+  const map = document.getElementById('idm-pane');
+  const sug = document.getElementById('idsug-pane');
+  if (!map || !sug) return;
+  const isSug = tab === 'sug';
+  map.style.display = isSug ? 'none' : '';
+  sug.style.display = isSug ? '' : 'none';
+  document.getElementById('idtab-map')?.classList.toggle('active', !isSug);
+  document.getElementById('idtab-sug')?.classList.toggle('active', isSug);
+  if (isSug) loadIdentitySuggestions();
 }
 
 let _idSuggestions = [];
 
 function renderIdentitySuggestions() {
-  if (_currentModalId !== 'id-suggestions') return;
-  const body = document.querySelector('#modal-overlay .modal-body');
+  if (_currentModalId !== 'identity-map') return;
+  const body = document.getElementById('idsug-pane');
   if (!body) return;
   if (!_idSuggestions.length) {
     body.innerHTML = `<div style="text-align:center;padding:30px;color:var(--subtext)">
@@ -3292,7 +3387,7 @@ async function dismissSuggestion(i) {
 // כבוי כברירת מחדל, ומרגע שמדליקים — עדיין לא סורק כלום עד שמסמנים פורומים.
 // זו לא זהירות יתר: אלה פורומים קטנים שמתנדבים מתחזקים, וסריקה לא מפוקחת
 // מכתובת ביתית היא עומס אמיתי עליהם.
-async function openScheduler() {
+async function openScheduler(back) {
   const cfg = await api('get_schedule') || {};
   // רק פלטפורמות שהסורק באמת יודע לסרוק. XenForo/phpBB נכשלים מיד, וכל טיק
   // היה סופר עוד כישלון עד שהתזמון כולו נכבה בגלל פורום אחד שלא ניתן לסרוק.
@@ -3370,13 +3465,16 @@ async function openScheduler() {
       if (!r?.ok) { toast(r?.error || 'לא ניתן להריץ', 'error'); return; }
       closeModal(); startScrapeMonitor();
     }},
+    ...(typeof back === 'function'
+        ? [{ label: '↩ חזרה', cls: 'btn-ghost', action: () => { closeModal(); back(); } }]
+        : []),
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-sm', { id: 'scheduler' });
 }
 
 // ══ יומן ייבואים ═════════════════════════════════════════════════════
 // כל ייבוא נרשם ב-import_sources מאז הגרסאות הראשונות, ומעולם לא הוצג.
-async function openImportLog() {
+async function openImportLog(back) {
   const rows = await api('get_import_log', 50) || [];
   openModal('📥 יומן ייבואים', rows.length ? `
     <div style="max-height:56vh;overflow:auto">
@@ -3403,7 +3501,10 @@ async function openImportLog() {
       </table>
     </div>` : `<div style="text-align:center;padding:26px;color:var(--subtext);font-size:13px">
       עדיין לא בוצע ייבוא.</div>`,
-    [{ label: 'סגור', cls: 'btn-primary', action: closeModal }], 'modal-lg',
+    [...(typeof back === 'function'
+         ? [{ label: '↩ חזרה', cls: 'btn-ghost', action: () => { closeModal(); back(); } }]
+         : []),
+     { label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg',
     { id: 'import-log' });
 }
 
@@ -3459,43 +3560,24 @@ async function refreshPrintPreview(nickId) {
 }
 
 // ══ נצפו לאחרונה ═════════════════════════════════════════════════════
-async function openRecentViews() {
-  const rows = await api('get_recent_views', 30) || [];
-  openModal('🕘 נצפו לאחרונה', rows.length ? `
-    <div style="max-height:56vh;overflow:auto">
-      ${rows.map(r => `
-        <div class="idm-open" data-nid="${r.id}"
-             style="display:flex;gap:8px;align-items:center;padding:7px 4px;cursor:pointer;
-                    border-bottom:1px solid var(--border-soft)">
-          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;
-                background:${esc(S.forumColors[r.forum] || '#8b90a0')}"></span>
-          <b style="font-size:13px">${esc(r.username)}</b>
-          <span style="color:var(--subtext);font-size:12px">${esc(r.forum)}</span>
-          ${(r.status || '') === 'מורחק' ? '<span style="color:var(--danger,#e5484d)">🚫</span>' : ''}
-          ${r.real_name ? `<span style="color:var(--subtext);font-size:12px">· ${esc(r.real_name)}</span>` : ''}
-          <span style="margin-inline-start:auto;color:var(--subtext);font-size:11px">
-            ${esc(relativeTime(String(r.viewed_at).replace(' ', 'T')))}</span>
-        </div>`).join('')}
-    </div>` : `<div style="text-align:center;padding:26px;color:var(--subtext);font-size:13px">
-      עדיין לא נפתח אף ניק.</div>`, [
-    ...(rows.length ? [{ label: '🧹 נקה', cls: 'btn-ghost', action: async () => {
-      await api('clear_recent_views'); closeModal(); toast('הרשימה נוקתה', 'success');
-    }}] : []),
-    { label: 'סגור', cls: 'btn-primary', action: closeModal },
-  ], 'modal-sm', { id: 'recent-views' });
-}
-
 // ══ מפת זהויות ═══════════════════════════════════════════════════════
 let _idMap = null;
 
-async function openIdentityMap() {
+async function openIdentityMap(tab) {
   setStatus('טוען מפת זהויות…');
   const m = await api('get_identity_map');
   setStatus('');
   if (!m?.ok) { toast('שגיאה: ' + (m?.error || ''), 'error'); return; }
   _idMap = m;
   const forums = [...new Set(m.groups.flatMap(g => g.forums))].sort(HE_COLLATOR.compare);
-  openModal('🗺️ מפת זהויות', `
+  openModal('🗺️ זהויות', `
+    <div class="tab-bar" style="display:flex;gap:6px;margin-bottom:14px;
+         border-bottom:1px solid var(--border-soft)">
+      <button class="tab-btn active" id="idtab-map" onclick="switchIdentityTab('map')">🗺️ מפת זהויות</button>
+      <button class="tab-btn" id="idtab-sug" onclick="switchIdentityTab('sug')">🔗 הצעות לקישור</button>
+    </div>
+    <div id="idsug-pane" style="display:none"></div>
+    <div id="idm-pane">
     <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--subtext);
                 margin-bottom:10px">
       <span><b style="color:var(--accent-2)">${m.total_groups}</b> קבוצות</span>
@@ -3524,10 +3606,12 @@ async function openIdentityMap() {
       <label style="display:flex;gap:5px;align-items:center;font-size:12px;cursor:pointer">
         <input type="checkbox" id="idm-conf" onchange="renderIdentityMap()"> רק עם סתירה</label>
     </div>
-    <div id="idm-body" style="max-height:56vh;overflow:auto"></div>
-  `, [{ label: 'סגור', cls: 'btn-primary', action: closeModal }], 'modal-lg',
+    <div id="idm-body" style="max-height:46vh;overflow:auto"></div>
+    </div>
+  `, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg',
      { id: 'identity-map' });
   renderIdentityMap();
+  if (tab === 'sug') switchIdentityTab('sug');
 }
 
 // גליף קטן: נקודה לכל חבר על מעגל + מיתרים. SVG בעבודת יד — אין ספרייה בחבילה.
@@ -3675,7 +3759,7 @@ async function openStats() {
 }
 
 // ══ מה השתנה בסריקה ═══════════════════════════════════════════════════
-async function openScanRuns() {
+async function openScanRuns(back) {
   const runs = await api('get_scan_runs', 30) || [];
   const rows = runs.length ? runs.map(r => `
     <div style="display:flex;gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid var(--border-soft);font-size:13px">
@@ -3690,7 +3774,12 @@ async function openScanRuns() {
                   : '<span style="color:var(--subtext);font-size:12px">ללא שינוי</span>'}
     </div>`).join('')
     : '<div style="padding:24px;text-align:center;color:var(--subtext)">עדיין לא בוצעו סריקות</div>';
-  openModal('🕒 יומן סריקות', rows, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg');
+  openModal('🕒 יומן סריקות', rows, [
+    ...(typeof back === 'function'
+        ? [{ label: '↩ חזרה', cls: 'btn-ghost', action: () => { closeModal(); back(); } }]
+        : []),
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg');
 }
 
 async function openScanChanges(runId) {
@@ -4434,7 +4523,7 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '', opts = {}) {
         <button class="modal-close" onclick="closeModal()">✕</button>
       </div>
       <div class="modal-body">${bodyHtml}</div>
-      <div class="modal-footer">${btnsHtml}</div>
+      ${buttons.length ? `<div class="modal-footer">${btnsHtml}</div>` : ''}
     </div>`;
 
   document.body.appendChild(overlay);
@@ -4768,6 +4857,14 @@ async function openInternetSync() {
       <input id="sync-maxpages" type="number" min="1" class="form-input" style="width:120px"
              placeholder="הכל" title="כמה עמודי משתמשים לסרוק לכל היותר (ריק = הכל)">
       <span style="font-size:11px;color:var(--subtext)">~50 משתמשים בעמוד</span>
+    </div>
+
+    <div class="section-hdr">אוטומציה ותיעוד</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      <button class="btn btn-ghost btn-sm" onclick="openScheduler(openInternetSync)"
+              title="סריקה אוטומטית לפי לוח זמנים — כבויה כברירת מחדל">⏰ סריקה מתוזמנת</button>
+      <button class="btn btn-ghost btn-sm" onclick="openScanRuns(openInternetSync)"
+              title="מה השתנה בסריקות האחרונות">🕒 יומן סריקות</button>
     </div>
 
     <div id="sync-check-result" style="font-size:13px;margin-bottom:12px;min-height:20px"></div>
