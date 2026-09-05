@@ -196,7 +196,9 @@ function onColPointerMove(e) {
   if (!_colDrag) return;
   if (_colDrag.kind === 'resize') {
     // RTL: הידית על הקצה השמאלי, ולכן גרירה שמאלה (clientX יורד) = רחב יותר
-    const dx = _colDrag.startX - e.clientX;
+    // ב-RTL גרירה שמאלה מרחיבה; באנגלית (LTR) ההפך. הכיוון נקרא מהמסמך.
+    const _rtl = document.documentElement.getAttribute('dir') !== 'ltr';
+    const dx = _rtl ? (_colDrag.startX - e.clientX) : (e.clientX - _colDrag.startX);
     const w = Math.max(MIN_COL_W, Math.min(MAX_COL_W, Math.round(_colDrag.startW + dx)));
     COL_LAYOUT.w[_colDrag.key] = w;
     const cg = document.getElementById('nick-colgroup');
@@ -1428,7 +1430,7 @@ async function openDbHealth() {
       <span style="color:var(--subtext)">${k}</span><b dir="ltr">${v}</b></div>`;
   const trashN = c.trash_nicks || 0;
 
-  openModal('🩺 המאגר', `
+  openModal('🩺 בריאות המאגר', `
     <div style="padding:10px 12px;border-radius:8px;margin-bottom:14px;font-size:13px;
          background:var(--card);border-inline-start:3px solid var(${okQC ? '--success' : '--danger'});
          color:var(${okQC ? '--success' : '--danger'})">
@@ -4630,7 +4632,7 @@ function updateForumLink(forumName) {
 // ══ DISPLAY SETTINGS ══════════════════════════════════════════════════
 const DISPLAY = {
   theme: 'dark', accent: 'amber', view: 'table',
-  density: 'normal', hidden_cols: '', col_layout: '',
+  density: 'normal', hidden_cols: '', col_layout: '', lang: 'he',
 };
 
 const ACCENTS = [
@@ -4648,6 +4650,7 @@ async function applyDisplaySettings() {
   const s = await api('get_display_settings');
   if (s) Object.assign(DISPLAY, s);
   loadColLayout(DISPLAY.col_layout);   // אחרי הטעינה, אחרת נקרא ערך ישן
+  applyLang(DISPLAY.lang || 'he');
   applyTheme();
   applyView();
   document.body.dataset.density  = DISPLAY.density;
@@ -5788,6 +5791,14 @@ async function openDisplaySettings() {
 
   const html = `
     <div class="settings-section">
+      <div class="settings-section-title">שפה / Language</div>
+      ${seg('lang', s.lang || 'he', [['he','עברית'],['en','English']])}
+      <div style="font-size:11.5px;color:var(--subtext);margin-top:7px;line-height:1.6">
+        התרגום מכסה את הממשק. שמות ניקים, פורומים וכל מה שנסרק נשארים כפי שהם.
+      </div>
+    </div>
+
+    <div class="settings-section">
       <div class="settings-section-title">סגנון ערכת נושא</div>
       <div class="theme-cards">
         ${[['dark','כהה','tp-dark'],['light','בהיר','tp-light'],['system','מערכת','tp-system']]
@@ -5874,6 +5885,11 @@ async function changeDisplaySetting(key, val, btn) {
   if (btn) {
     btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
+  }
+  if (key === 'lang') {
+    await api('set_display_setting', key, val);
+    location.reload();   // הטקסט הוחלף במקום; אין ממה לתרגם חזרה
+    return;
   }
   if (key === 'theme')    applyTheme();
   if (key === 'view')     applyView();

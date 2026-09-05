@@ -1227,3 +1227,35 @@ tbody tr:hover td:last-child::after {
    שבשבילו פותחים את התוכנה. משטחי ערכים חוזרים לבחירה רגילה. */
 tbody td, .card-row .cv, #lookup-profile, .tooltip,
 .contact-item .ct-val, .identity-item .id-name, .conflict-val { user-select: text; }
+
+/* ══ ENGLISH (LTR) ═══════════════════════════════════════════════════════
+   הממשק נבנה RTL, ולכן יש בו כללים פיזיים (ימין/שמאל) ולא לוגיים. כשהשפה
+   אנגלית המסמך מקבל dir="ltr", וכאן הופכים את מה שלא מתהפך לבד. הבלוק הזה
+   אינו פעיל בכלל בעברית. */
+[data-lang="en"] body{direction:ltr}
+[data-lang="en"] #sidebar{border-left:none;border-right:1px solid var(--border-soft)}
+[data-lang="en"] #sidebar::before{right:auto;left:-40px}
+[data-lang="en"] .nav-btn{text-align:left}
+[data-lang="en"] .nav-btn::after{background:linear-gradient(90deg,var(--accent-soft),transparent)}
+[data-lang="en"] .nav-btn.danger::after{background:linear-gradient(90deg,rgba(244,84,76,.1),transparent)}
+[data-lang="en"] .nav-btn:hover{transform:translateX(3px)}
+[data-lang="en"] .nav-btn:active{transform:translateX(1px) scale(.98)}
+[data-lang="en"] .search-wrap input{direction:ltr}
+[data-lang="en"] .topbar-stats{margin-right:0;margin-left:auto}
+[data-lang="en"] #table-wrap,
+[data-lang="en"] table,
+[data-lang="en"] #cards-wrap,
+[data-lang="en"] .modal-body,
+[data-lang="en"] #filter-bar,
+[data-lang="en"] #bulk-bar{direction:ltr}
+[data-lang="en"] .form-input:not([dir]),
+[data-lang="en"] .form-select:not([dir]),
+[data-lang="en"] .form-textarea:not([dir]){direction:ltr}
+[data-lang="en"] thead th{text-align:left}
+[data-lang="en"] .col-resize{left:auto;right:0}
+[data-lang="en"] tbody tr.selected td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+[data-lang="en"] .uname-dot{margin-left:0;margin-right:8px}
+[data-lang="en"] .forum-item:hover{transform:translateX(2px)}
+[data-lang="en"] .toggle input:checked+.toggle-slider::before{transform:translateX(19px)}
+/* הבאנרים הצפים יושבים בצד ההפוך מהסרגל — והסרגל עובר צד */
+[data-lang="en"] #bg-tasks{left:auto!important;right:16px!important}

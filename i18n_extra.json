@@ -1,0 +1,415 @@
+[
+ {
+  "he": "גיבוי מלא",
+  "en": "Full backup",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "שחזור מגיבוי",
+  "en": "Restore from backup",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "סל מחזור",
+  "en": "Recycle bin",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "בריאות המאגר",
+  "en": "Database health",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "איפוס נתונים",
+  "en": "Reset data",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "עותק מלא של כל המאגר לקובץ אחד",
+  "en": "A complete copy of the whole database in a single file",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "החלפת המאגר בגיבוי שנשמר",
+  "en": "Replace the database with a saved backup",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "ניקים שנמחקו — לשחזור עד 30 יום",
+  "en": "Deleted nicks — restorable for 30 days",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "תקינות, גיבוי אוטומטי, תחזוקה ויומנים",
+  "en": "Health, automatic backup, maintenance and logs",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🩺 בריאות המאגר",
+  "en": "🩺 Database health",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "📊 מצב",
+  "en": "📊 Status",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "💾 גיבוי ושחזור",
+  "en": "💾 Backup and restore",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🧰 תחזוקה",
+  "en": "🧰 Maintenance",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "⚠️ אזור מסוכן",
+  "en": "⚠️ Danger zone",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🗄️ גיבוי מלא לקובץ",
+  "en": "🗄️ Full backup to a file",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "📂 תיקיית נתונים",
+  "en": "📂 Data folder",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "מהגיבוי האוטומטי נשמרים 3 האחרונים בלבד — עותק מלא שוקל כמו המאגר עצמו.",
+  "en": "Only the last 3 automatic backups are kept — a full copy weighs as much as the database itself.",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "מחיקת נתונים מהמאגר. גיבוי אוטומטי נוצר לפני הפעולה כשהאפשרות למעלה דלוקה.",
+  "en": "Deletes data from the database. An automatic backup is created first when the option above is on.",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🖨️ הדפס (ברירות מחדל)",
+  "en": "🖨️ Print (defaults)",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "↺ אפס את כל הגדרות התצוגה",
+  "en": "↺ Reset all display settings",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "המשך לתצוגה מקדימה",
+  "en": "Continue to preview",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "ראה הדרכה",
+  "en": "See instructions",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "לסגור את החלון? מה שהוזן כאן לא יישמר, ופעולה שכבר התחילה תמשיך לרוץ ברקע.",
+  "en": "Close this window? Anything entered here will not be saved, and an operation already running will continue in the background.",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🗺️ זהויות",
+  "en": "🗺️ Identities",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🗺️ מפת זהויות",
+  "en": "🗺️ Identity map",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🔗 הצעות לקישור",
+  "en": "🔗 Link suggestions",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "שפה / Language",
+  "en": "Language",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "התרגום מכסה את הממשק. שמות ניקים, פורומים וכל מה שנסרק נשארים כפי שהם.",
+  "en": "The translation covers the interface. Nick names, forum names and anything scraped stay as they are.",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🕘 נצפו לאחרונה",
+  "en": "🕘 Recently viewed",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "🧹 נקה",
+  "en": "🧹 Clear",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "אוטומציה ותיעוד",
+  "en": "Automation and logs",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "↩ חזרה",
+  "en": "↩ Back",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "סריקה מהפורומים, סריקה מתוזמנת ויומן סריקות",
+  "en": "Forum scraping, scheduled scrapes and the scrape log",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "חיפוש מאוחד — וגם מי שנצפה לאחרונה",
+  "en": "Unified search — and who you viewed recently",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "קבוצות הזהות, והצעות אוטומטיות לקישור",
+  "en": "Identity groups, and automatic link suggestions",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "מתקדם",
+  "en": "Advanced",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "עדיין לא נפתח אף ניק.",
+  "en": "No nick has been opened yet.",
+  "kind": "static",
+  "where": "manual",
+  "context": "added after the extraction pass"
+ },
+ {
+  "he": "ניקים מקושרים",
+  "en": "linked nicks",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "הקבוצה הגדולה",
+  "en": "largest group",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "חוצות פורומים",
+  "en": "cross-forum",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "עם סתירה",
+  "en": "with a conflict",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "{1} · ניידת",
+  "en": "{1} · Portable",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "{1} · מותקנת",
+  "en": "{1} · Installed",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "אמינות:",
+  "en": "Trust:",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "האמינות שלי",
+  "en": "My trust",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "התנגשויות בייבוא קובץ",
+  "en": "Conflicts when importing a file",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "🎖️ מקורות",
+  "en": "🎖️ Sources",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "לא נדרשת עוגייה",
+  "en": "no cookie is needed",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "היכנס לפורום",
+  "en": "Go to the forum",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "והתחבר לחשבון שלך (אם עדיין לא).",
+  "en": "and sign in to your account (if you have not already).",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "בחלון שנפתח לחץ על הכפתור",
+  "en": "In the window that opens, click the button",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "— ייווצר קובץ טקסט, או שהתוכן יועתק.",
+  "en": "— a text file will be created, or the content will be copied.",
+  "kind": "static",
+  "where": "manual",
+  "context": "gap found by the English sweep"
+ },
+ {
+  "he": "💡 כך גם עובדת הסריקה מהאינטרנט: ערך סותר נשמר לצד הקיים ומסומן ב-❗, והמנצח נקבע לפי דרגות האמינות שקובעים בלשונית",
+  "en": "💡 Internet scraping works the same way: a conflicting value is kept alongside the existing one, marked with ❗, and the winner is decided by the trust levels set on the tab",
+  "kind": "static",
+  "where": "manual",
+  "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": "Stinknik סורק את כל הפוסטים של משתמש ומציג את",
+  "en": "Stinknik scans all of a user's posts and shows",
+  "kind": "static",
+  "where": "manual",
+  "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": "הפוסטים שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק \"שנוי במחלוקת\", כלומר רק פוסטים עם יותר דיסים מלייקים).",
+  "en": "the posts that received downvotes — including the ones the forum hides (the forum only shows \"controversial\" posts, meaning posts with more downvotes than upvotes).",
+  "kind": "static",
+  "where": "manual",
+  "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": "💡 עובד על כל פורום NodeBB. ברוב המקרים",
+  "en": "💡 Works on any NodeBB forum. In most cases",
+  "kind": "static",
+  "where": "manual",
+  "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": "(המידע ציבורי). אם מתקבלת שגיאת הרשאה, אפשר להוסיף עוגייה —",
+  "en": "(the data is public). If you get a permission error, you can add a cookie —",
+  "kind": "static",
+  "where": "manual",
+  "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": "עוגיית התחברות (",
+  "en": "Login cookie (",
+  "kind": "static",
+  "where": "manual",
+  "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": ") — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה). נשמרת לפעם הבאה.",
+  "en": ") — only if the forum requires signing in to view members (optional). It is saved for next time.",
+  "kind": "static",
+  "where": "manual",
+  "context": "text fragment split by an interactive inline element"
+ }
+]
