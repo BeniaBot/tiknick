@@ -1179,7 +1179,8 @@ function contactMenu(type, value) {
     add('💬 וואטסאפ', 'btn-primary', () => api('open_url', waLink(v)));
     add('📞 חיוג', 'btn-ghost', () => api('open_url', 'tel:' + v.replace(/[^\d+]/g, '')));
   } else {
-    add('📧 שלח מייל', 'btn-primary', () => api('open_url', 'mailto:' + v));
+    add('📧 שלח מייל', 'btn-primary', () => api('open_url',
+      'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(v)));
   }
   add('📋 העתק', 'btn-ghost', async () => {
     const r = await api('copy_to_clipboard', v);
