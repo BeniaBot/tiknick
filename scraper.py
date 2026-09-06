@@ -67,6 +67,19 @@ def normalize_cookie(cookie, platform="nodebb"):
         return c
     return f"{name}={c}"
 
+# חתימות של דף אתגר. אנחנו רק *מזהים* אותו כדי לומר למשתמש את האמת —
+# אין כאן שום ניסיון לעקוף אותו, וזו החלטה: הפורומים האלה הם התקנות קטנות
+# שמתנדבים מתחזקים, והסורק מזדהה בשמו במפורש (USER_AGENT).
+_CHALLENGE_MARKS = ("cf-browser-verification", "cf_chl_opt", "__cf_chl",
+                    "just a moment", "checking your browser",
+                    "attention required! | cloudflare")
+
+
+def _looks_like_challenge(text):
+    t = (text or "")[:4000].lower()
+    return any(m in t for m in _CHALLENGE_MARKS)
+
+
 def _fetch_json(url, cookie=None):
     """בקשת GET אחת שמחזירה JSON, עם ניסיונות חוזרים וכיבוד Retry-After.
     cookie — מחרוזת עוגייה אופציונלית (למשל 'express.sid=...') לפורומים
@@ -77,6 +90,7 @@ def _fetch_json(url, cookie=None):
         if cookie:
             headers["Cookie"] = cookie
         req = urllib.request.Request(url, headers=headers)
+        raw = ""
         try:
             with net.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
@@ -89,6 +103,16 @@ def _fetch_json(url, cookie=None):
                 last_err = ScrapeError("הפורום מגביל קצב בקשות (429) — האטתי")
                 continue
             if e.code in (403, 401):
+                # 403 של Cloudflare אינו חוסר הרשאה — עוגייה לא תפתור אותו
+                body = ""
+                try:
+                    body = e.read(4096).decode("utf-8", "replace")
+                except Exception:
+                    pass
+                if _looks_like_challenge(body):
+                    raise ScrapeError(
+                        "הפורום מוגן ב-Cloudflare וחוסם כרגע גישה אוטומטית. "
+                        "אפשר לנסות שוב מאוחר יותר.")
                 raise AuthRequired("אין הרשאה לצפות במשתמשים בפורום זה (ייתכן שנדרשת התחברות)")
             if e.code == 404:
                 raise ScrapeError("נתיב ה-API לא נמצא — ייתכן שאין תמיכת API בפורום זה")
@@ -98,6 +122,13 @@ def _fetch_json(url, cookie=None):
             last_err = ScrapeError(f"בעיית רשת: {e.reason}")
             time.sleep(attempt * 2)
         except json.JSONDecodeError:
+            # דף אתגר של Cloudflare חוזר כ-HTML עם קוד 200, וההודעה הקודמת
+            # אמרה "אין API בכתובת זו" — מסקנה שגויה שמצדיקה ויתור. עם 403
+            # זה היה גרוע יותר: המשתמש נשלח לחפש עוגייה שלא תעזור.
+            if _looks_like_challenge(raw):
+                raise ScrapeError(
+                    "הפורום מוגן ב-Cloudflare וחוסם כרגע גישה אוטומטית. "
+                    "אפשר לנסות שוב מאוחר יותר.")
             raise ScrapeError("התקבלה תשובה שאינה JSON — ככל הנראה אין API בכתובת זו")
     raise last_err or ScrapeError("הבקשה נכשלה")
 

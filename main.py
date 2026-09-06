@@ -76,7 +76,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.22"
+APP_VERSION = "0.8.23"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):

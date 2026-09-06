@@ -13,6 +13,7 @@ import time
 import i18n
 import net
 import html
+import logging
 
 _LOCAL_EN = {"תגובה": "Reply", "מתוך": "of"}
 
@@ -135,11 +136,13 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
                 if e.code in (401, 403):
                     return {"ok": False, "error": "נדרשת עוגייה / הרשאה"}
                 return {"ok": False, "error": f"שגיאת רשת: {e.code}"}
+            logging.warning("Stinknik: page %s of %s failed: HTTP %s", page, slug, e.code)
             stopped_early = True
             break
         except Exception as e:
             if page == 1:
                 return {"ok": False, "error": f"שגיאה: {e}"}
+            logging.warning("Stinknik: page %s of %s failed: %s", page, slug, e)
             stopped_early = True
             break
 

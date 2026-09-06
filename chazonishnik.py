@@ -18,12 +18,14 @@ from datetime import datetime
 import i18n
 import net
 import html
+import logging
 
 DEFAULT_BASE = "https://mitmachim.top"
 # 12 בקשות במקביל בלי כל השהיה היו מפציצות פורום קטן באלפי בקשות בדקה —
 # הסורק ממתין 0.6 שניות בין עמודים ו-Stinknik 0.4, ואין סיבה שהניתוח יהיה גס יותר.
 CONCURRENCY = 4
-DETAIL_DELAY = 0.15          # השהיה קצרה בכל בקשת פרטים (per worker)
+DETAIL_DELAY = 0.15
+PAGE_DELAY = 0.5      # בין עמודי היסטוריה — כמו בסורק ובסטינקניק          # השהיה קצרה בכל בקשת פרטים (per worker)
 MAX_PAGES = 1500
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -106,8 +108,11 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=N
         url = f"{base}/api/user/{urllib.parse.quote(slug)}/posts?page={page}"
         try:
             data = _get_json(url, cookie=cookie)
-        except Exception:
-            # עצירה על שגיאה = דוח חלקי; מסמנים כדי לדווח למשתמש
+        except Exception as e:
+            # עצירה על שגיאה = דוח חלקי; מסמנים כדי לדווח למשתמש.
+            # וגם רושמים ליומן: בלי זה המשתמש רואה "הדוח חלקי" ואי אפשר
+            # לענות לו למה — היומן שקט לגמרי.
+            logging.warning("Chazonishnik: page %s of %s failed: %s", page, slug, e)
             if stats is not None and page > 1:
                 stats["stopped_early"] = True
             break
@@ -120,6 +125,10 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=N
         if max_posts and len(all_posts) >= max_posts:
             break
         page += 1
+        # לולאת העמודים הזו רצה בלי שום השהיה, בזמן שהסורק ממתין 0.6 שניות
+        # ו-Stinknik 0.4 — כלומר דווקא הכלי שמושך את כל היסטוריית הפוסטים של
+        # משתמש היה הכי אגרסיבי מבין השלושה. אלה התקנות NodeBB קטנות.
+        time.sleep(PAGE_DELAY)
     uniq = {p.get("pid"): p for p in all_posts if p.get("pid")}
     posts = list(uniq.values())
     if max_posts and len(posts) > max_posts:
