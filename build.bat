@@ -8,6 +8,9 @@ echo.
 echo [1/3] Installing build tools (one-time)...
 pip install pyinstaller pywebview pillow --quiet
 echo.
+rem Version flows one way: main.py APP_VERSION -> version_info.txt + installer.iss
+python tools\sync_version.py
+echo.
 echo [2/3] Cleaning old builds...
 if exist build rmdir /s /q build
 if exist dist rmdir /s /q dist

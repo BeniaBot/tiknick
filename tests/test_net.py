@@ -10,6 +10,7 @@ import io
 import os
 import sys
 import tempfile
+import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import net            # noqa: E402
@@ -25,10 +26,24 @@ def ok(name, cond, detail=""):
         fails.append(name)
 
 
+def _proxies_of(opener):
+    for h in opener.handlers:
+        if isinstance(h, urllib.request.ProxyHandler):
+            return dict(h.proxies)
+    return None
+
+
 # ══ נרמול כתובת פרוקסי ═══════════════════════════════════════════════════
 ok("host:port מקבל http", net.normalize_url("10.0.0.5:8080") == "http://10.0.0.5:8080")
 ok("בלי פורט — ברירת מחדל 8080", net.normalize_url("http://p.local") == "http://p.local:8080")
-ok("https נשמר", net.normalize_url("https://p.local:3128") == "https://p.local:3128")
+# אל הפרוקסי עצמו פונים תמיד ב-HTTP: urllib שולח CONNECT על הסוקט הגולמי
+# ורק אחר כך עוטף ב-TLS. "https://" בכתובת הפרוקסי הבטיח הצפנה שלא קיימת.
+ok("https מנורמל ל-http", net.normalize_url("https://p.local:3128") == "http://p.local:3128")
+ok("https עם פרטי התחברות מנורמל גם הוא",
+   net.normalize_url("https://u:p@h:3128") == "http://u:p@h:3128")
+ok("ה-opener מצביע על אותה כתובת http לשני הפרוטוקולים",
+   _proxies_of(net.build_opener("manual", "https://p.local:3128")) ==
+   {"http": "http://p.local:3128", "https": "http://p.local:3128"})
 ok("שם משתמש וסיסמה נשמרים",
    net.normalize_url("http://u:p@h:3128") == "http://u:p@h:3128")
 ok("IPv6 בסוגריים", net.normalize_url("http://[::1]:8080") == "http://[::1]:8080")
@@ -148,6 +163,66 @@ for f in ("scraper.py", "chazonishnik.py", "stinknik.py", "main.py"):
 main_src = io.open(os.path.join(ROOT, "main.py"), encoding="utf-8").read()
 ok("ההגדרה נטענת בעלייה", "net.apply_from_settings(db.get_setting)" in main_src)
 ok("יש בדיקה שלא מחילה", "def test_net_settings" in main_src)
+
+
+# ══ מיגרציית הפענוח — הבאג הקריטי של 0.8.21 ═══════════════════════════════
+# שוחזר: הסריקה הראשונה אחרי השדרוג יצרה ניק *כפול* לכל שם עם ישות HTML,
+# כי ההתאמה היא לפי (פורום, שם משתמש) והשם החדש לא שווה לשמור.
+tmp2 = tempfile.mkdtemp(prefix="tiknick_mig_")
+db.close_pool()
+db.DB_PATH = os.path.join(tmp2, "mig.db")
+db.init_db()
+db.add_forum("בינה", "#111", "https://a.example")
+db.merge_scraped_users("בינה", [('ע&quot;ה דכו&quot;ע',
+                                 {"reputation": "5", "full_name": "ר&#39; משה"})], "סריקה")
+with db.get_connection() as _c:
+    _c.execute("DELETE FROM settings WHERE key='entities_decoded_done'")
+
+db.close_pool()
+db.init_db()          # הפעלה מחדש של התוכנה = המיגרציה רצה
+rows = db.get_all_nicks("")["rows"]
+ok("המיגרציה מפענחת בעלייה", rows[0]["username"] == 'ע"ה דכו"ע', rows[0]["username"])
+ok("גם שדות אחרים", rows[0]["full_name"] == "ר' משה", rows[0]["full_name"])
+ok("הדגל נשמר", db.get_setting("entities_decoded_done", "") == "1")
+
+before = db.get_all_nicks("")["total"]
+db.merge_scraped_users("בינה", [('ע"ה דכו"ע', {"reputation": "6"})], "סריקה")
+ok("הסריקה אחרי המיגרציה לא יוצרת כפול",
+   db.get_all_nicks("")["total"] == before, str(db.get_all_nicks("")["total"]))
+
+# ══ מיזוג ניקים כפולים ════════════════════════════════════════════════════
+tmp3 = tempfile.mkdtemp(prefix="tiknick_dup_")
+db.close_pool()
+db.DB_PATH = os.path.join(tmp3, "dup.db")
+db.init_db()
+db.add_forum("בינה", "#111", "")
+db.add_forum("נטפרי", "#222", "")
+keep_id = db.create_nick({"forum": "בינה", "username": 'ע&quot;ה',
+                          "phone": "0501234567", "notes": "עבודה ידנית"})
+other = db.create_nick({"forum": "נטפרי", "username": "אחר"})
+db.add_identity(keep_id, other)
+db.add_contact(keep_id, "phone", "0521111111", "בית", 0)
+db.create_nick({"forum": "בינה", "username": 'ע"ה', "reputation": "50"})
+with db.get_connection() as _c:
+    _c.execute("DELETE FROM settings WHERE key='entities_decoded_done'")
+db.close_pool()
+db.init_db()
+
+dups = db.find_duplicate_nicks()
+ok("כפילות מזוהה", len(dups) == 1 and dups[0]["keep"] == keep_id, str(dups))
+res = db.merge_duplicate_nicks()
+ok("המיזוג בוצע", res["merged"] == 1, str(res))
+kept = [r for r in db.get_all_nicks("")["rows"] if r["id"] == keep_id][0]
+ok("העבודה הידנית נשמרה", kept["phone"] == "0501234567" and kept["notes"] == "עבודה ידנית")
+ok("מה שנאסף בכפול עבר", str(kept["reputation"]) == "50", repr(kept["reputation"]))
+ok("אנשי הקשר נשמרו", any(c["value"] == "0521111111" for c in db.get_contacts(keep_id)))
+ok("הזהות נשמרה", any(i["username"] == "אחר" for i in db.get_identities(keep_id)))
+ok("הכפול בסל המחזור (הפיך)", len(db.list_trash()) > 0)
+ok("לא נשארו כפילויות", db.find_duplicate_nicks() == [])
+ok("הרצה שנייה לא עושה כלום", db.merge_duplicate_nicks()["merged"] == 0)
+with db.get_connection() as _c:
+    ok("שלמות המאגר", _c.execute("PRAGMA integrity_check").fetchone()[0] == "ok")
+    ok("מפתחות זרים תקינים", _c.execute("PRAGMA foreign_key_check").fetchall() == [])
 
 print()
 if fails:

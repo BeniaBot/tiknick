@@ -51,7 +51,8 @@ def normalize_url(raw):
     except ValueError:
         raise ProxyError("הפורט חייב להיות מספר בין 1 ל-65535")
     if p.scheme not in ("http", "https"):
-        raise ProxyError("נתמכים פרוקסי http ו-https בלבד (לא SOCKS)")
+        raise ProxyError("כתובת הפרוקסי נכתבת עם http:// (גם פרוקסי שמעביר "
+                         "תעבורת https). SOCKS אינו נתמך.")
     if not host:
         raise ProxyError("חסרה כתובת של שרת הפרוקסי")
     if p.path.strip("/") or p.query or p.fragment:
@@ -59,8 +60,11 @@ def normalize_url(raw):
     # שם המשתמש והסיסמה נשארים כפי שהודבקו — urllib מפענח %XX בעצמו
     userinfo = p.netloc.rpartition("@")[0]
     hostpart = "[%s]" % host if ":" in host else host
-    return "%s://%s%s:%d" % (p.scheme, userinfo + "@" if userinfo else "",
-                             hostpart, port or DEFAULT_PORT)
+    # אל *הפרוקסי עצמו* פונים תמיד ב-HTTP רגיל, גם כשהוא מעביר תעבורת https:
+    # urllib שולח CONNECT על הסוקט הגולמי ורק אחר כך עוטף ב-TLS. "https://"
+    # בכתובת הפרוקסי היה מבטיח הצפנה שלא קיימת, ולכן הוא מנורמל.
+    return "http://%s%s:%d" % (userinfo + "@" if userinfo else "",
+                               hostpart, port or DEFAULT_PORT)
 
 
 def mask_url(url):
@@ -139,6 +143,10 @@ def test_connection(mode, url="", target=None, timeout=12):
     target = (target or "").strip()
     if not target:
         return {"ok": False, "error": "אין פורום עם כתובת לבדוק מולו"}
+    # כתובת פורום נשמרת לפעמים בלי סכימה. בלי ההשלמה הזו הבדיקה נכשלה
+    # ב-"unknown url type" והאשימה את הגדרות הרשת במשהו שאינו קשור אליהן.
+    if not target.startswith(("http://", "https://")):
+        target = "https://" + target
     try:
         opener = build_opener(mode, url)
         req = urllib.request.Request(target, headers={"User-Agent": "Tik-Nick"})

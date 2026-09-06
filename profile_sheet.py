@@ -167,12 +167,17 @@ def build_sheet(data, include_private=False, include_history=True, generated="")
             continue
         vals = []
         for v in f.get("values") or []:
+            # רק ה-enum של התוכנה מתורגם — לא ערך של משתמש
+            if f.get("key") == "status":
+                v = dict(v, value=i18n.t(v.get("value")))
             src = ""
             if len(members) > 1:
                 src = f' <span class="src">({_esc(v.get("forum"))} · {_esc(v.get("username"))})</span>'
             vals.append(f'<div>{_esc(v.get("value"))}{src}</div>')
         if vals:
-            rows.append((f.get("label", f.get("key", "")), "".join(vals)))
+            # התווית מגיעה מ-_MERGE_DISPLAY והיא מפתח מדויק בקטלוג. בלי זה
+            # הגיליון באנגלית הציג כותרות מקטעים באנגלית ושורות בעברית.
+            rows.append((i18n.t(f.get("label") or f.get("key", "")), "".join(vals)))
     fields_html = ('<div class="sec"><h2>' + _t("פרטים") + '</h2>'
                    + _table(rows) + '</div>') if rows else ""
 

@@ -41,14 +41,16 @@ MAX_PAGES = 2000
 def _get_json(url, cookie=None, timeout=15, retries=3):
     """GET JSON עם ניסיונות חוזרים וכיבוד Retry-After (429) — בלי זה כל תקלת רשת
     רגעית קטעה את הסריקה בשקט והדוח הוצג כמלא."""
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", _UA)
-    req.add_header("Accept", "application/json")
-    if cookie:
-        val = cookie if cookie.startswith("express.sid=") else f"express.sid={cookie}"
-        req.add_header("Cookie", val)
     last = None
     for attempt in range(1, retries + 1):
+        # ה-Request נבנה מחדש בכל ניסיון: urllib *משנה* אותו כשיש פרוקסי
+        # (set_proxy), וניסיון חוזר על אותו אובייקט יוצא בטקסט גלוי לפורט 80.
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", _UA)
+        req.add_header("Accept", "application/json")
+        if cookie:
+            val = cookie if cookie.startswith("express.sid=") else f"express.sid={cookie}"
+            req.add_header("Cookie", val)
         try:
             with net.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))

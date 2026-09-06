@@ -33,14 +33,16 @@ _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 
 def _get_json(url, cookie=None, timeout=15, retries=3):
     """GET JSON עם ניסיונות חוזרים וכיבוד Retry-After (429)."""
-    req = urllib.request.Request(url)
-    req.add_header("User-Agent", _UA)
-    req.add_header("Accept", "application/json")
-    if cookie:
-        val = cookie if cookie.startswith("express.sid=") else f"express.sid={cookie}"
-        req.add_header("Cookie", val)
     last = None
     for attempt in range(1, retries + 1):
+        # ה-Request נבנה מחדש בכל ניסיון: urllib *משנה* אותו כשיש פרוקסי
+        # (set_proxy), וניסיון חוזר על אותו אובייקט יוצא בטקסט גלוי לפורט 80.
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", _UA)
+        req.add_header("Accept", "application/json")
+        if cookie:
+            val = cookie if cookie.startswith("express.sid=") else f"express.sid={cookie}"
+            req.add_header("Cookie", val)
         try:
             with net.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))
@@ -203,6 +205,9 @@ def _fetch_detail(base, cookie, post):
             "ts": ts,
             "date": dt.strftime("%Y-%m-%d"),
             "hour": dt.hour,
+            # המספר הוא הנתון; השם הוא תצוגה. קודם נשמר כאן שם מתורגם,
+            # ואם השפה התחלפה באמצע ריצה החיפוש החוזר נכשל וגרף הימים יצא ריק.
+            "dow": dt.weekday(),
             "day": _days()[dt.weekday()],
             "month": dt.strftime("%Y-%m"),
             "likes": len(upvoters),
@@ -274,10 +279,14 @@ def _summarize(posts):
     cats = {}
     for p in posts:
         hours[p["hour"] % 24] += 1
-        try:
-            days[_days().index(p["day"])] += 1
-        except ValueError:
-            pass
+        dow = p.get("dow")
+        if dow is None:                      # דוח שנשמר בגרסה ישנה
+            try:
+                dow = _days().index(p.get("day"))
+            except ValueError:
+                dow = None
+        if dow is not None:
+            days[dow % 7] += 1
         months[p["month"]] = months.get(p["month"], 0) + 1
         likes += p.get("likes", 0)
         words += p.get("words", 0)
@@ -525,7 +534,10 @@ new Chart(document.getElementById('chart-hourly'),{type:'bar',data:{labels:Array
 const fans={};data.forEach(p=>p.voters.forEach(v=>{if(v.uid!=myUid)fans[v.username]=(fans[v.username]||0)+1}));
 Object.entries(fans).sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(([name,count])=>{document.getElementById('list-fans').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/user/${escAttr(name)}" target="_blank">${esc(name)}</a><span class="badge">${esc(count)}</span></div>`;});
 const dayOrder=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
-const dayCounts=dayOrder.map(day=>data.filter(d=>d.day===day).length);
+// קיבוץ לפי מספר היום ולא לפי שמו: השם מתורגם בזמן הבנייה בעוד
+// הנתונים נאספו קודם, והשוואת המחרוזות ביניהם החזירה גרף ריק.
+// dayOrder מתחיל בראשון ו-weekday של פייתון בשני — מכאן (i+6)%7.
+const dayCounts=dayOrder.map((_,i)=>data.filter(d=>d.dow===(i+6)%7).length);
 new Chart(document.getElementById('chart-weekly'),{type:'radar',data:{labels:dayOrder,datasets:[{label:'פוסטים',data:dayCounts,borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,.2)'}]},options:{responsive:true,maintainAspectRatio:false,scales:{r:{grid:{color:'#334155'}}}}});
 const lens={'קצר':0,'בינוני':0,'ארוך':0};data.forEach(d=>{if(d.words<20)lens['קצר']++;else if(d.words<100)lens['בינוני']++;else lens['ארוך']++;});
 new Chart(document.getElementById('chart-length'),{type:'doughnut',data:{labels:Object.keys(lens),datasets:[{data:Object.values(lens),backgroundColor:['#ef4444','#3b82f6','#10b981'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'70%'}});

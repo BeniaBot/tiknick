@@ -1491,8 +1491,8 @@ async function openDbHealth() {
               title="ניקים שנמחקו — לשחזור עד 30 יום">🗑️ סל מחזור${trashN ? ` (${trashN.toLocaleString()})` : ''}</button>
       <button class="btn btn-sm btn-ghost" onclick="dbhImportLog()">📥 יומן ייבואים</button>
       <button class="btn btn-sm btn-ghost" onclick="dbhRepair()">🔧 תקן קבוצות זהות</button>
-      <button class="btn btn-sm btn-ghost" onclick="dbhFixEncoded()"
-              title="שמות שנשמרו מקודדים (ע&quot;ה נשמר כ-ע&amp;quot;ה)">🔤 תקן שמות מקודדים</button>
+      <button class="btn btn-sm btn-ghost" onclick="dbhMergeDups()"
+              title="שני ניקים באותו פורום עם אותו שם — מיזוג לישן שבהם">🔗 מזג ניקים כפולים</button>
       <button class="btn btn-sm btn-ghost" onclick="dbhVacuum()">🧹 כווץ קובץ</button>
       <button class="btn btn-sm btn-ghost" onclick="api('open_data_folder')">📂 תיקיית נתונים</button>
       <button class="btn btn-sm btn-ghost" onclick="api('open_log')">📄 פתח יומן</button>
@@ -1523,6 +1523,31 @@ async function dbhVacuum() {
   if (r?.ok) { toast(`המאגר כווץ ✓ (${(r.size / 1048576).toFixed(1)} MB)`, 'success'); closeModal(); openDbHealth(); }
   else toast(r?.error || 'הכיווץ נכשל', 'error');
 }
+// שני ניקים באותו פורום עם אותו שם הם אותו אדם. זה קרה למי שסרק בין 0.8.21
+// ל-0.8.23, לפני שפענוח הישויות הפך למיגרציה בעלייה: השם המפוענח לא התאים
+// לשמור המקודד, ולכן נוצרה שורה שנייה. המיזוג שומר את הישן — הוא זה שהמשתמש
+// עבד עליו — ומעביר אליו את מה שנאסף בחדש.
+async function dbhMergeDups() {
+  const c = await api('count_duplicate_nicks');
+  const n = (c && c.groups) || 0;
+  if (!n) { toast('לא נמצאו ניקים כפולים ✓', 'success'); return; }
+  const sample = (c.sample || []).join(', ');
+  const lines = [
+    `נמצאו ${n} קבוצות של ניקים כפולים (${c.extra} כפילויות)`,
+    sample ? `למשל: ${sample}` : '',
+    'למזג? אנשי הקשר, הזהויות והערכים יעברו לניק הישן, והכפולים יעברו לסל ' +
+    'המחזור (הפיך 30 יום). גיבוי אוטומטי ייווצר לפני הפעולה.',
+  ].filter(Boolean);
+  if (!confirm(lines.join('\n\n'))) return;
+  setStatus('ממזג…');
+  const r = await api('merge_duplicates');
+  setStatus('');
+  if (!r?.ok) { toast(r?.error || 'המיזוג נכשל', 'error'); return; }
+  await loadNicks(document.getElementById('search-input').value);
+  toast(`${r.merged} ניקים כפולים מוזגו ✓`, 'success');
+  closeModal(); openDbHealth();
+}
+
 // פורומים מסוג NodeBB מחזירים טקסט מקודד ל-HTML, והוא נשמר כך עד 0.8.21.
 // זה נראה שבור בטבלה וגם שובר את "פתח בדפדפן". הסורק תוקן; זה מנקה את העבר.
 async function dbhFixEncoded() {
@@ -4933,7 +4958,9 @@ async function openNetSettings(back) {
       <input id="net-url" class="form-input" style="width:100%" dir="ltr"
              placeholder="http://1.2.3.4:8080" value="${esc(st.url || '')}">
       <div style="font-size:11.5px;color:var(--subtext);margin-top:6px;line-height:1.6">
-        פרוקסי http או https בלבד (לא SOCKS). בלי פורט מפורש נלקח 8080.
+        הכתובת נכתבת עם <span dir="ltr">http://</span> — גם פרוקסי שמעביר
+        תעבורת https מקבל אליו חיבור רגיל ומעביר אותה בתוך מנהרה. SOCKS אינו
+        נתמך. בלי פורט מפורש נלקח 8080.
         פרוקסי שדורש סיסמה נכתב <span dir="ltr">http://user:pass@host:port</span> —
         והסיסמה נשמרת במאגר כטקסט גלוי, בדיוק כמו העוגיות.
       </div>

@@ -1301,6 +1301,11 @@ class API:
         # רק כשרצים כ-EXE (frozen)
         if not getattr(_sys, "frozen", False):
             return {"ok": False, "error": "עדכון מתוך התוכנה זמין רק בגרסת ה-EXE"}
+        # בלי האיפוס הזה, ניסיון שני מתחיל עם המונים של הניסיון הקודם — הפס
+        # נצבע מלא כבר בסקר הראשון, לפני שהגיע בייט אחד, ואם ההורדה נכשלת
+        # באמצע נשאר "100%" על המסך.
+        _update_state["downloaded"] = 0
+        _update_state["total"] = 0
         try:
             cur_exe = _sys.executable
             if _install_type() == "installer":
@@ -1574,6 +1579,18 @@ del "%~f0"
             logging.exception("apply_update failed")
             return {"ok": False, "error": str(e)}
 
+    @staticmethod
+    def _url_exists(url, timeout=6):
+        """HEAD קצר. נכשל בצד הבטוח: ספק = לא קיים."""
+        import urllib.request
+        try:
+            req = urllib.request.Request(url, method="HEAD",
+                                         headers={"User-Agent": "TikNick-UpdateCheck"})
+            with net.urlopen(req, timeout=timeout) as resp:
+                return 200 <= getattr(resp, "status", 200) < 400
+        except Exception:
+            return False
+
     def _fallback_latest(self):
         """
         גרסה אחרונה בלי ה-API: קוראים את changelog.json מ-raw (אותו קובץ
@@ -1590,14 +1607,21 @@ del "%~f0"
         if not ver:
             raise ValueError("changelog.json without a version")
         base = f"https://github.com/{GITHUB_REPO}/releases/download/v{ver}"
+        assets = [{"name": "TikNick-Setup.exe",
+                   "browser_download_url": base + "/TikNick-Setup.exe"},
+                  {"name": "TikNick.exe",
+                   "browser_download_url": base + "/TikNick.exe"}]
+        # changelog.json נדחף למאגר **לפני** שהשחרור עצמו קיים, ולכן הכתובות
+        # שנבנו לפי המוסכמה יכולות להחזיר 404. כתובת שלא אומתה לא נמסרת
+        # לממשק: עדיף לשלוח את המשתמש לדף הגרסאות מאשר לתת לו הורדה שתיפול.
+        ok_assets = [a for a in assets if self._url_exists(a["browser_download_url"])]
         return {
             "tag_name": "v" + ver,
-            "html_url": f"https://github.com/{GITHUB_REPO}/releases/tag/v{ver}",
+            "html_url": (f"https://github.com/{GITHUB_REPO}/releases/tag/v{ver}"
+                         if ok_assets else
+                         f"https://github.com/{GITHUB_REPO}/releases/latest"),
             "body": "",
-            "assets": [{"name": "TikNick-Setup.exe",
-                        "browser_download_url": base + "/TikNick-Setup.exe"},
-                       {"name": "TikNick.exe",
-                        "browser_download_url": base + "/TikNick.exe"}],
+            "assets": ok_assets,
         }
 
     def check_for_updates(self):
@@ -2314,6 +2338,21 @@ del "%~f0"
             t = self._net_test_targets()
             target = t[0]["url"] if t else ""
         return net.test_connection(mode, url, target)
+
+    def count_duplicate_nicks(self):
+        """קבוצות של אותו (פורום, שם משתמש) — לתצוגה לפני שמציעים למזג."""
+        g = db.find_duplicate_nicks()
+        return {"groups": len(g), "extra": sum(len(x["drop"]) for x in g),
+                "sample": [x["members"][0]["username"] for x in g[:5]]}
+
+    def merge_duplicates(self):
+        """ממזג לניק הישן ביותר. הכפולים עוברים לסל המחזור — הפיך 30 יום."""
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
+        bk = db.auto_backup("merge-duplicates")
+        r = db.merge_duplicate_nicks()
+        return dict(r, ok=True, backed_up=bool(bk and bk.get("ok")))
 
     def count_encoded_names(self):
         """כמה ערכים נשמרו מקודדים ל-HTML — לתצוגה לפני שמציעים לתקן."""

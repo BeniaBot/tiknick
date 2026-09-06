@@ -6,6 +6,7 @@ import json
 import os
 import threading
 from datetime import datetime, timedelta
+import logging
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(_HERE, "tiknick.db")
@@ -464,6 +465,7 @@ def init_db():
     _migrate()
     _init_fts()
     _backfill_sources()
+    _decode_entities_once()
     # סל המחזור נשמר 30 יום; היסטוריה ויומן סריקות — שנה (אחרת גדלים בלי גבול)
     try:
         empty_trash(30)
@@ -2155,6 +2157,127 @@ def fix_encoded_values():
                     fixed + [nid])
                 changed_nicks += 1
     return {"nicks": changed_nicks, "field_values": changed_vals}
+
+
+def _decode_entities_once():
+    """
+    עד 0.8.20 הסורק שמר את מה ש-NodeBB החזיר בדיוק כפי שהוא, ו-NodeBB מחזיר
+    טקסט **מקודד ל-HTML**. מ-0.8.21 הוא מפענח — ואז נוצר פער מסוכן:
+
+    ההתאמה בסריקה היא לפי (פורום, שם משתמש). ניק ששמו נשמר כ-`ע&quot;ה` לא
+    יימצא כשהסריקה מחזירה `ע"ה`, ולכן **נוצר ניק חדש לצד הישן** — עם היסטוריה
+    מפוצלת, קישורי זהות שנשארים על הישן, ושתי שורות לאותו אדם. נמדד: על 2000
+    ניקים, סריקה אחת אחרי השדרוג = 2000 "עודכנו" ו-4000 שורות שינוי.
+
+    לכן זה רץ **בעליית התוכנה**, לפני שהתזמון יכול להתחיל לסרוק — ולא ככפתור
+    שהמשתמש אולי ילחץ. חד-פעמי, מסומן בדגל, וזול: סריקת LIKE על 20 אלף ניקים
+    נמדדה ב-0.12 שניות.
+    """
+    with get_connection() as conn:
+        done = conn.execute(
+            "SELECT value FROM settings WHERE key='entities_decoded_done'").fetchone()
+    if done:
+        return
+    try:
+        r = fix_encoded_values()
+        if r.get("nicks") or r.get("field_values"):
+            logging.info("Decoded stored HTML entities: %s nicks, %s values",
+                         r.get("nicks"), r.get("field_values"))
+    except Exception:
+        logging.exception("Entity decode migration failed")
+        return          # בלי דגל — ננסה שוב בהפעלה הבאה
+    with get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key,value) "
+                     "VALUES ('entities_decoded_done','1')")
+
+
+# ── ניקים כפולים (אותו פורום, אותו שם) ───────────────────────────────────
+def find_duplicate_nicks():
+    """
+    קבוצות של אותו (פורום, שם משתמש). נוצרות כשסריקה רצה בין 0.8.21 ל-0.8.23
+    לפני שהפענוח הוחל — אבל גם מייבוא ידני חוזר. מחזיר את הישן ביותר ככזה
+    שיישמר: הוא זה שהמשתמש עבד עליו.
+    """
+    out = []
+    with get_connection() as conn:
+        rows = conn.execute("""
+            SELECT forum, lower(trim(username)) AS k, GROUP_CONCAT(id) AS ids, COUNT(*) AS c
+            FROM nicks WHERE trim(username) != ''
+            GROUP BY forum, k HAVING c > 1 ORDER BY c DESC""").fetchall()
+        for r in rows:
+            ids = sorted(int(i) for i in str(r["ids"]).split(","))
+            members = [dict(m) for m in conn.execute(
+                "SELECT id, username, forum, updated_at FROM nicks WHERE id IN (%s) ORDER BY id"
+                % ",".join("?" * len(ids)), ids)]
+            out.append({"forum": r["forum"], "keep": ids[0], "drop": ids[1:],
+                        "members": members})
+    return out
+
+
+def merge_duplicate_nicks():
+    """
+    ממזג כל קבוצה לניק הישן ביותר: אנשי קשר, זהויות וערכי מקורות עוברים
+    אליו, והשאר נמחקים **דרך סל המחזור** — כלומר הפעולה הפיכה 30 יום.
+    """
+    groups = find_duplicate_nicks()
+    if not groups:
+        return {"groups": 0, "merged": 0}
+    merged = 0
+    for g in groups:
+        keep, drops = g["keep"], g["drop"]
+        with get_connection() as conn:
+            for did in drops:
+                # ערכי מקורות: **החדש מנצח**. INSERT OR IGNORE היה משאיר את
+                # הערך של השומר גם כשהוא ישן יותר — כלומר סריקה טרייה שישבה
+                # על הכפול הייתה נזרקת, והמשתמש היה נשאר עם מוניטין וסטטוס
+                # מלפני חודשיים.
+                conn.execute("""
+                    INSERT INTO field_values (nick_id, field_name, value, source_id, created_at)
+                    SELECT ?, field_name, value, source_id, created_at
+                    FROM field_values WHERE nick_id=?
+                    ON CONFLICT(nick_id, field_name, source_id) DO UPDATE
+                      SET value = excluded.value, created_at = excluded.created_at
+                      WHERE excluded.created_at > field_values.created_at""",
+                    (keep, did))
+                # ההיסטוריה מוצמדת לניק ב-CASCADE — בלי ההעברה הזו ציר הזמן
+                # של הכפול נמחק איתו
+                conn.execute("UPDATE field_history SET nick_id=? WHERE nick_id=?",
+                             (keep, did))
+                # אנשי קשר — דה-דופליקציה לפי הערך המנורמל נעשית ב-add_contact,
+                # וכאן מספיק לדלג על ערך זהה שכבר קיים אצל השומר
+                conn.execute("""
+                    INSERT INTO nick_contacts (nick_id, type, value, label, is_private)
+                    SELECT ?, type, value, label, is_private FROM nick_contacts c
+                    WHERE c.nick_id=? AND NOT EXISTS (
+                        SELECT 1 FROM nick_contacts k
+                        WHERE k.nick_id=? AND k.type=c.type AND k.value=c.value)""",
+                    (keep, did, keep))
+        # קישורי זהות — דרך ה-API הרגיל, שמחזיק את הסגור הטרנזיטיבי.
+        # **לכל הכפולים יחד**: קודם השאילתה ישבה מחוץ ללולאה והשתמשה ב-did
+        # שדלף ממנה, כלומר רק הזהויות של הכפול האחרון עברו — והשאר נמחקו
+        # בשקט עם השורה.
+        ph = ",".join("?" * len(drops))
+        with get_connection() as conn:
+            partners = {r[0] for r in conn.execute(
+                "SELECT CASE WHEN nick_id_a IN (%s) THEN nick_id_b ELSE nick_id_a END "
+                "FROM nick_identities WHERE nick_id_a IN (%s) OR nick_id_b IN (%s)"
+                % (ph, ph, ph), drops + drops + drops)}
+            partners -= set(drops)
+        for pid in partners:
+            if pid != keep:
+                try:
+                    add_identity(keep, pid)
+                except Exception:
+                    pass
+        # מחיקה דרך סל המחזור — הפיך
+        delete_nicks(drops)
+        for f in _NICK_FIELDS:
+            try:
+                resolve_field(keep, f)
+            except Exception:
+                pass
+        merged += len(drops)
+    return {"groups": len(groups), "merged": merged}
 
 
 def repair_identity_groups():
