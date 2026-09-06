@@ -2081,6 +2081,82 @@ def get_identity_map(limit=IDENTITY_MAP_LIMIT):
     return {"groups": out, "total_groups": total_groups, "linked_nicks": linked,
             "truncated": truncated}
 
+# ── תיקון ערכים שנשמרו מקודדים ל-HTML ─────────────────────────────────────
+# עד 0.8.21 הסורק שמר את מה ש-NodeBB החזיר בדיוק כפי שהוא, ו-NodeBB מחזיר
+# טקסט **מקודד**: ע"ה נשמר כ-ע&quot;ה. התוצאה נראתה שבורה בטבלה, ובעיקר
+# שברה את "פתח בדפדפן" — הקישור נבנה מהשם המקודד ולכן לא מצא את המשתמש.
+# הסורק תוקן בגבול הרשת; כאן מנקים את מה שכבר נשמר.
+#
+# רק שדות שמקורם בפורום. הערות שהמשתמש כתב בעצמו לא נוגעים בהן: אם הוא
+# הקליד "&quot;" ידנית, זה מה שהוא התכוון לכתוב.
+_ENCODED_FIELDS = ("username", "full_name", "groups", "address", "email",
+                   "scraped_real_name", "scraped_email", "extra_info")
+_ENTITY_LIKE = ("%&quot;%", "%&amp;%", "%&lt;%", "%&gt;%", "%&#39;%",
+                "%&apos;%", "%&nbsp;%")
+
+
+def _entity_where(col):
+    return "(" + " OR ".join("%s LIKE ?" % col for _ in _ENTITY_LIKE) + ")"
+
+
+def count_encoded_values():
+    """כמה ניקים וכמה ערכי מקורות מכילים ישויות HTML. לא משנה כלום."""
+    with get_connection() as conn:
+        nick_where = " OR ".join(_entity_where(c) for c in _ENCODED_FIELDS)
+        params = list(_ENTITY_LIKE) * len(_ENCODED_FIELDS)
+        nicks = conn.execute(
+            "SELECT COUNT(*) FROM nicks WHERE " + nick_where, params).fetchone()[0]
+        names = conn.execute(
+            "SELECT COUNT(*) FROM nicks WHERE " + _entity_where("username"),
+            list(_ENTITY_LIKE)).fetchone()[0]
+        vals = conn.execute(
+            "SELECT COUNT(*) FROM field_values WHERE field_name IN (%s) AND %s"
+            % (",".join("?" * len(_ENCODED_FIELDS)), _entity_where("value")),
+            list(_ENCODED_FIELDS) + list(_ENTITY_LIKE)).fetchone()[0]
+    return {"nicks": nicks, "usernames": names, "field_values": vals}
+
+
+def fix_encoded_values():
+    """
+    מפענח את הישויות במקום. הפענוח הוא נורמליזציה של אותו ערך ולא ערך חדש,
+    ולכן מעדכנים ישירות גם את field_values וגם את ה-cache — בלי להריץ הכרעה
+    מחדש על 90 אלף ניקים.
+    """
+    import html as _html
+    changed_nicks = changed_vals = 0
+    with get_connection() as conn:
+        # field_values — UPDATE OR REPLACE, כי הפענוח יכול להתנגש בשורה קיימת
+        # שכבר מחזיקה את הערך המפוענח מאותו מקור.
+        rows = conn.execute(
+            "SELECT id, value FROM field_values WHERE field_name IN (%s) AND %s"
+            % (",".join("?" * len(_ENCODED_FIELDS)), _entity_where("value")),
+            list(_ENCODED_FIELDS) + list(_ENTITY_LIKE)).fetchall()
+        for vid, val in rows:
+            fixed = _html.unescape(val or "")
+            if fixed != val:
+                conn.execute("UPDATE OR REPLACE field_values SET value=? WHERE id=?",
+                             (fixed, vid))
+                changed_vals += 1
+
+        # ה-cache עצמו
+        nick_where = " OR ".join(_entity_where(c) for c in _ENCODED_FIELDS)
+        params = list(_ENTITY_LIKE) * len(_ENCODED_FIELDS)
+        rows = conn.execute(
+            "SELECT id, %s FROM nicks WHERE %s" % (",".join(_ENCODED_FIELDS), nick_where),
+            params).fetchall()
+        for row in rows:
+            nid, vals = row[0], list(row[1:])
+            fixed = [_html.unescape(v) if isinstance(v, str) and "&" in v else v
+                     for v in vals]
+            if fixed != vals:
+                conn.execute(
+                    "UPDATE nicks SET %s WHERE id=?"
+                    % ",".join("%s=?" % c for c in _ENCODED_FIELDS),
+                    fixed + [nid])
+                changed_nicks += 1
+    return {"nicks": changed_nicks, "field_values": changed_vals}
+
+
 def repair_identity_groups():
     """
     משלים קישורים חסרים כך שכל קבוצה תהיה סגורה (כל זוג שמור), כפי ששאר הקוד

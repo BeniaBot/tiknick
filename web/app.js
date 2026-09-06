@@ -1072,6 +1072,10 @@ function renderUsername(td, n) {
     td.appendChild(dot);
   }
   const txt = document.createElement('span');
+  // שם עם גרשיים, סוגריים או ספרות מכיל תווים "נייטרליים", והם נצמדים לכיוון
+  // של מה שמסביב — כלומר בתא מעורב הם קופצים לצד הלא נכון. isolate מקבע
+  // את השם כיחידה אחת בפני עצמה.
+  txt.style.unicodeBidi = 'isolate';
   txt.textContent = n.username || '';
   td.appendChild(txt);
   if (n.conflict_count > 0) {
@@ -1481,6 +1485,8 @@ async function openDbHealth() {
               title="ניקים שנמחקו — לשחזור עד 30 יום">🗑️ סל מחזור${trashN ? ` (${trashN.toLocaleString()})` : ''}</button>
       <button class="btn btn-sm btn-ghost" onclick="dbhImportLog()">📥 יומן ייבואים</button>
       <button class="btn btn-sm btn-ghost" onclick="dbhRepair()">🔧 תקן קבוצות זהות</button>
+      <button class="btn btn-sm btn-ghost" onclick="dbhFixEncoded()"
+              title="שמות שנשמרו מקודדים (ע&quot;ה נשמר כ-ע&amp;quot;ה)">🔤 תקן שמות מקודדים</button>
       <button class="btn btn-sm btn-ghost" onclick="dbhVacuum()">🧹 כווץ קובץ</button>
       <button class="btn btn-sm btn-ghost" onclick="api('open_data_folder')">📂 תיקיית נתונים</button>
       <button class="btn btn-sm btn-ghost" onclick="api('open_log')">📄 פתח יומן</button>
@@ -1511,6 +1517,25 @@ async function dbhVacuum() {
   if (r?.ok) { toast(`המאגר כווץ ✓ (${(r.size / 1048576).toFixed(1)} MB)`, 'success'); closeModal(); openDbHealth(); }
   else toast(r?.error || 'הכיווץ נכשל', 'error');
 }
+// פורומים מסוג NodeBB מחזירים טקסט מקודד ל-HTML, והוא נשמר כך עד 0.8.21.
+// זה נראה שבור בטבלה וגם שובר את "פתח בדפדפן". הסורק תוקן; זה מנקה את העבר.
+async function dbhFixEncoded() {
+  const c = await api('count_encoded_names');
+  const n = (c && c.nicks) || 0;
+  if (!n) { toast('לא נמצאו שמות מקודדים ✓', 'success'); return; }
+  if (!confirm(`נמצאו ${n} ניקים עם טקסט מקודד (למשל ע&quot;ה במקום ע"ה).
+
+` +
+               'לתקן? גיבוי אוטומטי ייווצר לפני הפעולה. הערות שכתבת בעצמך לא ישתנו.')) return;
+  setStatus('מתקן שמות…');
+  const r = await api('fix_encoded_names');
+  setStatus('');
+  if (!r?.ok) { toast(r?.error || 'התיקון נכשל', 'error'); return; }
+  await loadNicks(document.getElementById('search-input').value);
+  toast(`${r.nicks} ניקים תוקנו ✓`, 'success');
+  closeModal(); openDbHealth();
+}
+
 async function dbhRepair() {
   const r = await api('repair_identity_groups');
   if (!r?.ok) { toast(r?.error || 'התיקון נכשל', 'error'); return; }
@@ -2064,7 +2089,8 @@ async function onTagInput(e) {
   _tagField = ta;
   const pos = ta.selectionStart;
   const upto = ta.value.slice(0, pos);
-  const m = upto.match(/@([^\s@]{1,30})$/);   // @ ואז מילה, עד הסמן
+  // אותו כלל בדיוק כמו בתצוגה: תיוג פותח מילה, ומייל אינו תיוג
+  const m = upto.match(new RegExp(TAG_OPEN + '@([^\\s@]{1,30})$'));
   let box = document.getElementById('tag-autocomplete');
   // ודא שה-dropdown תלוי ישירות ב-body (לא נחתך/מוסתר ע"י המודאל)
   if (box && box.parentElement !== document.body) {
@@ -2072,7 +2098,7 @@ async function onTagInput(e) {
   }
   if (!box) return;
   box.style.zIndex = '99999';
-  if (!m) { box.style.display = 'none'; return; }
+  if (!m || !tagCandidate(m[1])) { box.style.display = 'none'; return; }
   const prefix = m[1];
   const seq = ++_tagSeq;
   const results = await api('search_usernames', prefix, 8) || [];
@@ -2082,8 +2108,8 @@ async function onTagInput(e) {
   box.innerHTML = results.map(r => `
     <div class="tag-opt" style="padding:7px 12px;cursor:pointer;font-size:13px;direction:rtl"
          data-username="${esc(r.username)}">
-      <span style="color:${S.forumColors[r.forum]||'#8b90a0'}">[${esc(r.forum)}]</span>
-      ${esc(r.username)}
+      <span style="color:${esc(safeColor(S.forumColors[r.forum], '#8b90a0'))}">[<bdi>${esc(r.forum)}</bdi>]</span>
+      <bdi>${esc(r.username)}</bdi>
     </div>`).join('');
   const rect = ta.getBoundingClientRect();
   // ב-RTL הסמן יושב בקצה הימני של השדה; עיגון לשמאל פתח את הרשימה
@@ -2101,7 +2127,9 @@ function pickTag(e, username) {
   const pos = ta.selectionStart;
   // רווחים → קו תחתון, כדי שהתיוג יישאר מילה אחת ולא יישבר על רווח
   const tagText = '@' + username.replace(/\s+/g, '_') + ' ';
-  const before = ta.value.slice(0, pos).replace(/@[^\s@]*$/, tagText);
+  const before = ta.value.slice(0, pos)
+                   .replace(new RegExp(TAG_OPEN + '@[^\\s@]*$'),
+                            (mm) => mm.slice(0, mm.indexOf('@')) + tagText);
   const after = ta.value.slice(pos);
   ta.value = before + after;
   ta.focus();
@@ -2117,21 +2145,43 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// ── מתי "@" הוא תיוג ומתי הוא מייל ───────────────────────────────────────
+// "beni@gmail.com" הוא כתובת מייל, אבל הכלל הישן תפס בה "@gmail.com" והציע
+// להשלים ניק בשם הזה — וגם צייר אותו כתג לחיץ בהערות. תיוג פותח מילה: הוא
+// חייב לשבת בתחילת הטקסט או אחרי רווח/פיסוק. בנוסף, מה שנראה כמו דומיין
+// (נקודה ואחריה סיומת לטינית) לעולם אינו ניק.
+const TAG_OPEN = '(?:^|[\\s(\\[{<,;:!?"\'\u05f3\u05f4\u00ab\u2013\u2014-])';
+const TAG_DOMAIN_RX = /\.[a-z]{2,}$/i;
+
+function tagCandidate(token) {
+  return !!token && !TAG_DOMAIN_RX.test(token);
+}
+
 function renderTaggedText(text) {
   if (!text) return '';
-  // מפצל טקסט ל-@תיוגים לחיצים ושאר טקסט (בטוח מפני HTML)
-  const parts = String(text).split(/(@[^\s@]{1,40})/g);
-  return parts.map(p => {
-    const m = p.match(/^@([^\s@]{1,40})$/);
-    if (m) {
-      const raw = m[1];                      // עם קווים תחתונים
-      const display = raw.replace(/_/g, ' '); // תצוגה עם רווחים
-      // ה-handlers מחוברים בהאצלה לפי data-tag — לא מחרוזת JS מוטבעת (גרש/לוכסן שוברים אותה)
-      return `<span class="nick-tag" style="color:var(--accent);cursor:pointer;font-weight:600"
-                data-tag="${esc(raw)}">@${esc(display)}</span>`;
-    }
-    return esc(p);
-  }).join('');
+  const s = String(text);
+  // סריקה אחת עם התו שלפני ה-@ כקבוצה, במקום split — כדי שאפשר יהיה להבחין
+  // בין "@ניק" (תיוג) לבין "beni@gmail.com" (מייל).
+  const rx = new RegExp(TAG_OPEN + '@([^\\s@]{1,40})', 'g');
+  let out = '', last = 0, m;
+  while ((m = rx.exec(s)) !== null) {
+    // פיסוק סוגר בסוף משפט אינו חלק מהשם: "(@דוד)" הוא תיוג של דוד ועוד סוגר.
+    // גרשיים לא נחתכות — הן חלק לגיטימי משם עברי (ר"מ, רמב"ם).
+    let raw = m[1], tail = '';
+    const tr = raw.match(/[).,;:!?\]}»]+$/);
+    if (tr) { tail = tr[0]; raw = raw.slice(0, -tail.length); }
+    if (!raw || !tagCandidate(raw)) continue;   // דומיין או ריק — לא תג
+    const at = m.index + m[0].length - raw.length - 1;   // מיקום ה-@ עצמו
+    out += esc(s.slice(last, at));
+    const display = raw.replace(/_/g, ' ');  // הוזן עם קווים תחתונים במקום רווחים
+    // ה-handlers מחוברים בהאצלה לפי data-tag — לא מחרוזת JS מוטבעת
+    // (גרשיים או לוכסן בשם שוברים מחרוזת מוטבעת). bdi מבודד שם עם גרשיים
+    // או ספרות, כדי שהתווים הנייטרליים לא יקפצו לצד השני בהקשר מעורב.
+    out += `<span class="nick-tag" style="color:var(--accent);cursor:pointer;font-weight:600"
+              data-tag="${esc(raw)}">@<bdi>${esc(display)}</bdi></span>` + esc(tail);
+    last = m.index + m[0].length;
+  }
+  return out + esc(s.slice(last));
 }
 
 async function goToTag(e, username) {
@@ -4822,18 +4872,122 @@ const PLATFORM_LABELS = { nodebb: 'NodeBB', discourse: 'Discourse',
   xenforo: 'XenForo', phpbb: 'phpBB', custom: 'מערכת ייחודית' };
 const SCRAPABLE_PLATFORMS = new Set(['nodebb', 'discourse']);
 
+// ══ רשת ופרוקסי ══════════════════════════════════════════════════════════
+// לא כפתור בתפריט: זו הגדרה שנוגעים בה פעם אחת, והמקום הטבעי שלה הוא ליד
+// הסריקה — הפעולה היחידה שבגללה בכלל יוצאים לאינטרנט.
+async function openNetSettings(back) {
+  const st = await api('get_net_settings') || { mode: 'system', url: '', forums: [] };
+  const mode = st.mode || 'system';
+  const targets = st.forums || [];
+  const seg = (val, label) =>
+    `<button class="${mode === val ? 'active' : ''}" data-netmode="${val}"
+             onclick="pickNetMode('${val}',this)">${label}</button>`;
+
+  openModal('🛡️ רשת ופרוקסי', `
+    <p style="color:var(--subtext);font-size:12.5px;line-height:1.7;margin-bottom:14px">
+      חל על כל מה שהתוכנה שולחת החוצה: סריקת פורומים, Chazonishnik, Stinknik
+      ובדיקת עדכונים. תמונות פרופיל נטענות ע"י רכיב הדפדפן של Windows ולכן
+      ממשיכות לפי הגדרות המערכת.
+    </p>
+
+    <div class="section-hdr">מצב</div>
+    <div class="segmented" id="net-modes">
+      ${seg('system', 'לפי המערכת')}${seg('off', 'ישיר')}${seg('manual', 'פרוקסי')}
+    </div>
+    <div style="font-size:11.5px;color:var(--subtext);margin-top:7px;line-height:1.6">
+      <b>לפי המערכת</b> — ברירת המחדל, בדיוק ההתנהגות שהייתה עד היום.
+      <b>ישיר</b> — התעלמות מפרוקסי שהוגדר ב-Windows.
+      <b>פרוקסי</b> — כתובת מפורשת.
+    </div>
+
+    <div id="net-manual" style="display:${mode === 'manual' ? '' : 'none'};margin-top:14px">
+      <label class="form-label">כתובת הפרוקסי</label>
+      <input id="net-url" class="form-input" style="width:100%" dir="ltr"
+             placeholder="http://1.2.3.4:8080" value="${esc(st.url || '')}">
+      <div style="font-size:11.5px;color:var(--subtext);margin-top:6px;line-height:1.6">
+        פרוקסי http או https בלבד (לא SOCKS). בלי פורט מפורש נלקח 8080.
+        פרוקסי שדורש סיסמה נכתב <span dir="ltr">http://user:pass@host:port</span> —
+        והסיסמה נשמרת במאגר כטקסט גלוי, בדיוק כמו העוגיות.
+      </div>
+    </div>
+
+    ${targets.length ? `
+      <div class="section-hdr">בדיקה</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="net-target" class="form-select" style="flex:1;min-width:150px">
+          ${targets.map(t => `<option value="${esc(t.url)}">${esc(t.name)}</option>`).join('')}
+        </select>
+        <button class="btn btn-sm btn-ghost" onclick="doNetTest()">בדוק חיבור</button>
+      </div>
+      <div id="net-test-result" style="font-size:12.5px;margin-top:8px;min-height:18px"></div>
+      <div style="font-size:11px;color:var(--subtext);margin-top:4px">
+        הבדיקה שולחת בקשה אחת לפורום שנבחר — בלי לשמור ובלי לשנות את המצב הפעיל,
+        כדי שכתובת שגויה לא תשבור סריקה שרצה ברקע.
+      </div>` : ''}
+  `, [
+    { label: '💾 שמור', cls: 'btn-primary', action: async () => {
+      const m = document.querySelector('#net-modes button.active')?.dataset.netmode || 'system';
+      const url = document.getElementById('net-url')?.value.trim() || '';
+      const r = await api('set_net_settings', m, url);
+      if (!r?.ok) { toast(r?.error || 'ההגדרה נדחתה', 'error'); return; }
+      toast('הגדרות הרשת נשמרו ✓ · ' + (r.description || ''), 'success');
+      closeModal();
+      if (typeof back === 'function') back();
+    }},
+    ...(typeof back === 'function'
+        ? [{ label: '↩ חזרה', cls: 'btn-ghost', action: () => { closeModal(); back(); } }]
+        : []),
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm', { id: 'net-settings' });
+}
+
+function pickNetMode(val, btn) {
+  btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const box = document.getElementById('net-manual');
+  if (box) box.style.display = val === 'manual' ? '' : 'none';
+}
+
+async function doNetTest() {
+  const m = document.querySelector('#net-modes button.active')?.dataset.netmode || 'system';
+  const url = document.getElementById('net-url')?.value.trim() || '';
+  const target = document.getElementById('net-target')?.value || '';
+  const box = document.getElementById('net-test-result');
+  if (box) box.innerHTML = '<span style="color:var(--subtext)">בודק…</span>';
+  const r = await api('test_net_settings', m, url, target);
+  if (!box) return;
+  box.innerHTML = r?.ok
+    ? `<span style="color:var(--success)">✅ ${esc(r.note || 'החיבור עובד')}` +
+      (r.ms ? ` <span dir="ltr">(${r.ms} ms)</span>` : '') + '</span>'
+    : `<span style="color:var(--danger)">❌ ${esc(r?.error || 'הבדיקה נכשלה')}</span>`;
+}
+
 async function openInternetSync() {
   const forums = await api('get_scrapable_forums') || [];
   const known = await api('get_known_forums') || [];
+  // נדרש כבר בבניית השורות — כל שורה מציגה מתי הפורום שלה נסרק
+  S.lastScrapes = await api('get_last_scrapes') || {};
   const loginOf = {};
   known.forEach(k => { loginOf[k.name] = !!k.needs_login; });
-  const opts = forums.map(f => {
+  const opts = forums.map((f, i) => {
     const plat = f.platform || 'nodebb';
     const needsLogin = loginOf[f.name];
     const scrapable = SCRAPABLE_PLATFORMS.has(plat);
     const tag = !scrapable ? ' ⛔' : (needsLogin ? ' 🔒' : '');
-    return `<option value="${esc(f.name)}" data-url="${esc(f.url || '')}"
-             data-platform="${esc(plat)}" data-login="${needsLogin?'1':'0'}">${esc(f.name)}${tag}</option>`;
+    // זמן הסריקה יושב בצומת טקסט משלו כדי שמנוע התרגום יתפוס אותו כתבנית
+    const last = (S.lastScrapes || {})[f.name];
+    const when = last ? relativeTime(String(last).replace('T', ' ')) : '';
+    return `<div class="col-picker-item">
+      <input type="checkbox" class="sync-forum-cb" id="sync-f-${i}"
+             value="${esc(f.name)}" data-url="${esc(f.url || '')}"
+             data-platform="${esc(plat)}" data-login="${needsLogin ? '1' : '0'}"
+             ${i === 0 ? 'checked' : ''} onchange="onSyncForumChange()">
+      <label for="sync-f-${i}" style="flex:1;display:flex;gap:8px;align-items:baseline">
+        <span><bdi>${esc(f.name)}</bdi>${tag}</span>
+        <span style="margin-inline-start:auto;font-size:11px;color:var(--subtext)"
+              >${when ? esc(when) : 'טרם נסרק'}</span>
+      </label>
+    </div>`;
   }).join('');
 
   // הפעלה ראשונה: אין עדיין פורומים עם כתובת — הסבר במקום דיאלוג ריק
@@ -4859,9 +5013,10 @@ async function openInternetSync() {
       ניקים אוטומטית. שדות ריקים מתמלאים; ערך סרוק סותר נשמר לצד הקיים ומוכרע לפי אמינות.
     </p>
 
-    <div class="section-hdr">בחירת פורום</div>
-    <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">פורום לסריקה</label>
-    <select id="sync-forum" class="form-select" style="width:100%;margin-bottom:6px" onchange="onSyncForumChange()">${opts}</select>
+    <div class="section-hdr">בחירת פורומים</div>
+    <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">
+      סמן פורום אחד או כמה — הם ייסרקו בזה אחר זה</label>
+    <div class="col-picker" style="margin-bottom:6px">${opts}</div>
     <div id="sync-forum-hint" style="font-size:12px;margin-bottom:12px;min-height:16px"></div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px">
@@ -4888,6 +5043,8 @@ async function openInternetSync() {
               title="סריקה אוטומטית לפי לוח זמנים — כבויה כברירת מחדל">⏰ סריקה מתוזמנת</button>
       <button class="btn btn-ghost btn-sm" onclick="openScanRuns(openInternetSync)"
               title="מה השתנה בסריקות האחרונות">🕒 יומן סריקות</button>
+      <button class="btn btn-ghost btn-sm" onclick="openNetSettings(openInternetSync)"
+              title="פרוקסי — אם הרשת שלך חוסמת גישה ישירה לפורומים">🛡️ רשת ופרוקסי</button>
     </div>
 
     <div id="sync-check-result" style="font-size:13px;margin-bottom:12px;min-height:20px"></div>
@@ -4904,7 +5061,6 @@ async function openInternetSync() {
     { label: '🌍 סרוק הכל', cls: 'btn-ghost', action: doStartScrapeAll },
     { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
   ], 'modal-lg');
-  S.lastScrapes = await api('get_last_scrapes') || {};
   onSyncForumChange();
   // אם סריקה כבר רצה ברקע — הראה זאת במקום דיאלוג שנראה "רדום"
   api('get_scrape_progress').then(p => {
@@ -4918,9 +5074,19 @@ async function openInternetSync() {
 }
 
 // טוען את העוגייה השמורה לפורום הנבחר לתוך שדה העוגייה
+// הפורום ה"פעיל" הוא הראשון שסומן: שדה העוגייה, הרמז ו"בדוק פורום" הם
+// מטבעם חד-פורומיים, ולכן הם מתייחסים אליו. סריקה, לעומת זאת, רצה על כל
+// מה שסומן.
+function syncPicked() {
+  return [...document.querySelectorAll('.sync-forum-cb')].filter(c => c.checked);
+}
+
+function syncActive() {
+  return syncPicked()[0] || document.querySelector('.sync-forum-cb') || null;
+}
+
 async function syncPrefillCookie() {
-  const sel = document.getElementById('sync-forum');
-  const url = sel?.selectedOptions[0]?.dataset.url || '';
+  const url = syncActive()?.dataset.url || '';
   const input = document.getElementById('sync-cookie');
   if (!input || !url) return;
   const saved = await api('get_saved_cookie', url);
@@ -4944,8 +5110,7 @@ function closeSyncModal() {
 }
 
 async function doForumCheck() {
-  const sel = document.getElementById('sync-forum');
-  const url = sel.selectedOptions[0]?.dataset.url || '';
+  const url = syncActive()?.dataset.url || '';
   const cookie = document.getElementById('sync-cookie').value.trim();
   const box = document.getElementById('sync-check-result');
   if (!url) { box.innerHTML = '<span style="color:var(--danger)">לפורום זה אין כתובת URL</span>'; return; }
@@ -4964,20 +5129,27 @@ async function doForumCheck() {
 }
 
 async function doStartScrape() {
-  const sel = document.getElementById('sync-forum');
-  const name = sel.value;
-  const opt  = sel.selectedOptions[0];
-  const url  = opt?.dataset.url || '';
-  const plat = opt?.dataset.platform || 'nodebb';
-  const cookie = document.getElementById('sync-cookie').value.trim();
+  const picked = syncPicked();
+  if (!picked.length) { toast('לא סומן אף פורום', 'error'); return; }
   const maxPages = parseInt(document.getElementById('sync-maxpages')?.value) || null;
-  if (!url) { toast('לפורום זה אין כתובת URL', 'error'); return; }
-  if (!SCRAPABLE_PLATFORMS.has(plat)) {
-    toast(`פלטפורמת ${PLATFORM_LABELS[plat] || plat} אינה נתמכת לסריקה אוטומטית`, 'error');
-    return;
-  }
 
-  const start = await api('start_scrape', name, url, cookie, maxPages);
+  let start;
+  if (picked.length > 1) {
+    // הבקנד כבר יודע לסרוק רשימה (start_scrape_all עם only_forums), ושם כל
+    // פורום מקבל את העוגייה השמורה *שלו* — כלל הפרטיות מ-0.8.3 לא נחלש.
+    start = await api('start_scrape_all', '', maxPages, picked.map(c => c.value));
+  } else {
+    const opt = picked[0];
+    const url = opt.dataset.url || '';
+    const plat = opt.dataset.platform || 'nodebb';
+    const cookie = document.getElementById('sync-cookie').value.trim();
+    if (!url) { toast('לפורום זה אין כתובת URL', 'error'); return; }
+    if (!SCRAPABLE_PLATFORMS.has(plat)) {
+      toast(`פלטפורמת ${PLATFORM_LABELS[plat] || plat} אינה נתמכת לסריקה אוטומטית`, 'error');
+      return;
+    }
+    start = await api('start_scrape', opt.value, url, cookie, maxPages);
+  }
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל סריקה', 'error'); return; }
 
   const wrap = document.getElementById('sync-progress-wrap');
@@ -5123,10 +5295,10 @@ function toggleCookieHelp(containerId) {
 }
 
 function updateSyncHint() {
-  const sel = document.getElementById('sync-forum');
-  const opt = sel?.selectedOptions[0];
+  const opt = syncActive();
   const hint = document.getElementById('sync-forum-hint');
   if (!opt || !hint) return;
+  const picked = syncPicked();
   const plat = opt.dataset.platform || 'nodebb';
   // שם העוגייה תלוי בפלטפורמה: NodeBB → express.sid, Discourse → _t
   const cookieName = plat === 'discourse' ? '_t' : 'express.sid';
@@ -5142,13 +5314,13 @@ function updateSyncHint() {
   } else {
     hint.innerHTML = '';
   }
-  // נסרק לאחרונה
-  const last = (S.lastScrapes || {})[opt.value];
-  if (last) {
+  // זמן הסריקה מוצג עכשיו בכל שורה, ולכן כאן נשאר רק מה שנוגע לריבוי בחירה
+  if (picked.length > 1) {
     hint.innerHTML += (hint.innerHTML ? '<br>' : '') +
-      `<span style="color:var(--subtext)">🕒 נסרק לאחרונה: ${esc(relativeTime(last.replace('T', ' ')))}</span>`;
-  } else if (!hint.innerHTML) {
-    hint.innerHTML = '<span style="color:var(--subtext)">🕒 טרם נסרק</span>';
+      `<span style="color:var(--subtext)">🌐 ${picked.length} פורומים סומנו — הם ייסרקו בזה אחר זה,
+       ולכל אחד תשמש רק העוגייה השמורה שלו.</span>`;
+  } else if (!picked.length) {
+    hint.innerHTML = '<span style="color:var(--danger)">לא סומן אף פורום</span>';
   }
 }
 

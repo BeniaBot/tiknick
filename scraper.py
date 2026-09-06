@@ -18,6 +18,8 @@ import time
 import urllib.request
 import urllib.parse
 import urllib.error
+import net
+import html
 
 USER_AGENT = "Tik-Nick/1.0 (+https://github.com/BeniaBot/tiknick)"
 PAGE_DELAY_SEC = 0.6          # השהיה בין עמודים — לא להעמיס על השרת
@@ -76,7 +78,7 @@ def _fetch_json(url, cookie=None):
             headers["Cookie"] = cookie
         req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            with net.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
                 return json.loads(raw)
         except urllib.error.HTTPError as e:
@@ -217,6 +219,16 @@ def check_forum(forum_url, cookie=None):
             "error": "לא זוהתה מערכת פורום נתמכת (NodeBB/Discourse) עם רשימת משתמשים ציבורית בכתובת זו."}
 
 
+def _txt(v):
+    """
+    טקסט מהפורום. NodeBB מחזיר ערכים **מקודדים ל-HTML** (ע"ה → ע&quot;ה), ואם
+    שומרים אותם כך הם מוצגים שבורים וגם הקישור לפרופיל לא מוצא את המשתמש.
+    הפענוח נעשה כאן, בגבול הרשת, כדי שכל השאר יעבוד על טקסט אמיתי.
+    """
+    s = "" if v is None else str(v)
+    return html.unescape(s) if "&" in s else s
+
+
 def _num_str(v):
     """מספר → מחרוזת, כולל 0. (g() מתייחס ל-0 כחסר, ולכן ירידת מוניטין ל-0
     או ספירת הודעות 0 לא הייתה מתעדכנת לעולם.)"""
@@ -235,16 +247,16 @@ def _map_user(u):
         for k in keys:
             v = u.get(k)
             if v not in (None, "", 0):
-                return v
+                return _txt(v)
         return ""
 
     groups = ""
     gl = u.get("groupTitleArray") or u.get("groups")
     if isinstance(gl, list):
         names = [x.get("name") if isinstance(x, dict) else str(x) for x in gl]
-        groups = ", ".join([n for n in names if n])
+        groups = ", ".join([_txt(n) for n in names if n])
     elif isinstance(gl, str):
-        groups = gl
+        groups = _txt(gl)
 
     join_ts = u.get("joindate") or u.get("joindateISO")
     join_date = ""
@@ -418,7 +430,7 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
 
     def handle_users(users):
         # ממפים את כל העמוד ואז ממזגים בטרנזקציית DB אחת — מהיר בסדרי גודל
-        pairs = [((u.get("username") or "").strip(), _map_user(u))
+        pairs = [(_txt(u.get("username") or "").strip(), _map_user(u))
                  for u in users if (u.get("username") or "").strip()]
         if not pairs:
             return
@@ -499,7 +511,7 @@ def _scrape_discourse(forum_name, base, db, cookie, progress_cb,
         total_pages = min(total_pages, max_pages)
 
     def handle_items(items):
-        pairs = [((it.get("user") or {}).get("username", "").strip(),
+        pairs = [(_txt((it.get("user") or {}).get("username", "")).strip(),
                   _map_discourse_dir_item(it, base))
                  for it in items if (it.get("user") or {}).get("username")]
         pairs = [(u, m) for u, m in pairs if u]

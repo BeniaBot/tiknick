@@ -11,6 +11,8 @@ import urllib.parse
 import urllib.error
 import time
 import i18n
+import net
+import html
 
 _LOCAL_EN = {"תגובה": "Reply", "מתוך": "of"}
 
@@ -47,7 +49,7 @@ def _get_json(url, cookie=None, timeout=15, retries=3):
     last = None
     for attempt in range(1, retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with net.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries:
@@ -162,7 +164,7 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
                     title = topic.get("title", "")
                 disliked.append({
                     "pid": pid, "upvotes": up, "downvotes": down,
-                    "reputation": rep, "title": title or _t("תגובה"),
+                    "reputation": rep, "title": _unesc(title) or _t("תגובה"),
                     "link": f"{base}/post/{pid}",
                     "timestamp": post.get("timestamp", 0),
                 })
@@ -216,6 +218,12 @@ def _build_html(slug, disliked, checked, up, down, rep, postcount=0):
         .replace("__REP__", str(rep)) \
         .replace("__DISCOUNT__", str(len(disliked))) \
         .replace("__POSTS__", posts_html)
+
+
+def _unesc(v):
+    """טקסט מהפורום מגיע מקודד ל-HTML — ראו scraper._txt."""
+    s = "" if v is None else str(v)
+    return html.unescape(s) if "&" in s else s
 
 
 def _esc(s):

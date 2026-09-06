@@ -572,5 +572,180 @@
   "kind": "static",
   "where": "manual",
   "context": "report template phrase"
+ },
+ {
+  "he": "🛡️ רשת ופרוקסי",
+  "en": "🛡️ Network & proxy",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "פרוקסי — אם הרשת שלך חוסמת גישה ישירה לפורומים",
+  "en": "Proxy — if your network blocks direct access to the forums",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "חל על כל מה שהתוכנה שולחת החוצה: סריקת פורומים, Chazonishnik, Stinknik ובדיקת עדכונים. תמונות פרופיל נטענות ע\"י רכיב הדפדפן של Windows ולכן ממשיכות לפי הגדרות המערכת.",
+  "en": "Applies to everything the app sends out: forum scraping, Chazonishnik, Stinknik and update checks. Profile pictures are loaded by the Windows browser component and so keep following the system settings.",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "מצב",
+  "en": "Mode",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "לפי המערכת",
+  "en": "System",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "ישיר",
+  "en": "Direct",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "פרוקסי",
+  "en": "Proxy",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "כתובת הפרוקסי",
+  "en": "Proxy address",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "בדיקה",
+  "en": "Test",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "בדוק חיבור",
+  "en": "Test connection",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "הבדיקה שולחת בקשה אחת לפורום שנבחר — בלי לשמור ובלי לשנות את המצב הפעיל, כדי שכתובת שגויה לא תשבור סריקה שרצה ברקע.",
+  "en": "The test sends one request to the selected forum — without saving and without changing the active setting, so a wrong address cannot break a scan running in the background.",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "פרוקסי http או https בלבד (לא SOCKS). בלי פורט מפורש נלקח 8080. פרוקסי שדורש סיסמה נכתב",
+  "en": "http or https proxies only (not SOCKS). Without an explicit port, 8080 is used. A proxy that needs a password is written",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "והסיסמה נשמרת במאגר כטקסט גלוי, בדיוק כמו העוגיות.",
+  "en": "and the password is stored in the database as plain text, exactly like the cookies.",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "החיבור עובד",
+  "en": "The connection works",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "החיבור עובד (הפורום דורש התחברות)",
+  "en": "The connection works (the forum requires signing in)",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "הבדיקה נכשלה",
+  "en": "The test failed",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "ההגדרה נדחתה",
+  "en": "The setting was rejected",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "בחירת פורומים",
+  "en": "Choose forums",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "סמן פורום אחד או כמה — הם ייסרקו בזה אחר זה",
+  "en": "Tick one forum or several — they will be scanned one after another",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "לא סומן אף פורום",
+  "en": "No forum is selected",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "🔤 תקן שמות מקודדים",
+  "en": "🔤 Fix encoded names",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "{1} ניקים תוקנו ✓",
+  "en": "{1} nicks fixed ✓",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "לא נמצאו שמות מקודדים ✓",
+  "en": "No encoded names found ✓",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "התיקון נכשל",
+  "en": "The repair failed",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
+ },
+ {
+  "he": "מתקן שמות…",
+  "en": "Fixing names…",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.21 UI"
  }
 ]

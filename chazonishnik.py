@@ -16,6 +16,8 @@ import urllib.error
 import concurrent.futures
 from datetime import datetime
 import i18n
+import net
+import html
 
 DEFAULT_BASE = "https://mitmachim.top"
 # 12 בקשות במקביל בלי כל השהיה היו מפציצות פורום קטן באלפי בקשות בדקה —
@@ -38,7 +40,7 @@ def _get_json(url, cookie=None, timeout=15, retries=3):
     last = None
     for attempt in range(1, retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with net.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries:
@@ -188,7 +190,7 @@ def _fetch_detail(base, cookie, post):
         dt = datetime.fromtimestamp(ts / 1000) if ts else datetime.now()
         return {
             "pid": pid,
-            "title": (post.get("topic", {}) or {}).get("title", _t("תגובה")),
+            "title": _unesc((post.get("topic", {}) or {}).get("title", "")) or _t("תגובה"),
             "ts": ts,
             "date": dt.strftime("%Y-%m-%d"),
             "hour": dt.hour,
@@ -416,6 +418,12 @@ def _chartjs_tag():
     except Exception:
         return ('<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/'
                 'dist/chart.umd.min.js"></script>')
+
+
+def _unesc(v):
+    """טקסט מהפורום מגיע מקודד ל-HTML — ראו scraper._txt."""
+    s = "" if v is None else str(v)
+    return html.unescape(s) if "&" in s else s
 
 
 def _esc(s):

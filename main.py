@@ -26,6 +26,7 @@ import scraper
 import csv_import
 import profile_sheet
 import i18n
+import net
 
 
 # ── מצב סריקה פעילה (למעקב התקדמות מהממשק) ─────────────────────────
@@ -75,7 +76,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.20"
+APP_VERSION = "0.8.21"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -1289,7 +1290,7 @@ class API:
             else:
                 new_path = os.path.join(os.path.dirname(cur_exe), "TikNick_new.exe")
             req = urllib.request.Request(download_url, headers={"User-Agent": "TikNick-Updater"})
-            with urllib.request.urlopen(req, timeout=60) as resp, open(new_path, "wb") as out:
+            with net.urlopen(req, timeout=60) as resp, open(new_path, "wb") as out:
                 total = int(resp.headers.get("Content-Length", 0))
                 got = 0
                 while True:
@@ -1562,7 +1563,7 @@ del "%~f0"
         try:
             req = urllib.request.Request(
                 api_url, headers={"User-Agent": "TikNick-UpdateCheck"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with net.urlopen(req, timeout=8) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             logging.info("Update check failed: %s", e)
@@ -1633,7 +1634,7 @@ del "%~f0"
         try:
             url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/changelog.json"
             req = urllib.request.Request(url, headers={"User-Agent": "TikNick-Updater"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with net.urlopen(req, timeout=8) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             logging.info("changelog fetch failed: %s", e)
@@ -2228,6 +2229,51 @@ del "%~f0"
         return db.get_field_sources(int(nick_id), field_name)
 
     # ── תיוג ניקים בטקסט חופשי (@username) ─────────────────────────
+    # ── רשת ופרוקסי ────────────────────────────────────────────────
+    def get_net_settings(self):
+        """מה חל *עכשיו* על היציאה לאינטרנט — לא רק מה ששמור במאגר."""
+        return dict(net.current(), forums=self._net_test_targets())
+
+    def _net_test_targets(self):
+        """כתובות אמיתיות לבדיקה — הפורומים שהמשתמש עצמו הגדיר."""
+        out = []
+        for f in db.get_forums():
+            url = (f.get("url") or "").strip()
+            if url:
+                out.append({"name": f["name"], "url": url})
+        return out[:12]
+
+    def set_net_settings(self, mode="system", url=""):
+        """מחיל ושומר. הגדרה פסולה נדחית — הקיימת ממשיכה לעבוד."""
+        try:
+            state = net.apply(mode, url)
+        except net.ProxyError as e:
+            return {"ok": False, "error": str(e)}
+        db.set_setting(net.SETTING_MODE, state["mode"])
+        db.set_setting(net.SETTING_URL, state["url"])
+        logging.info("Network: %s", state["description"])
+        return dict(state, ok=True)
+
+    def test_net_settings(self, mode="system", url="", target=""):
+        """בודק בלי להחיל, כדי שסריקה שרצה ברקע לא תיפגע מכתובת שגויה."""
+        if not target:
+            t = self._net_test_targets()
+            target = t[0]["url"] if t else ""
+        return net.test_connection(mode, url, target)
+
+    def count_encoded_names(self):
+        """כמה ערכים נשמרו מקודדים ל-HTML — לתצוגה לפני שמציעים לתקן."""
+        return db.count_encoded_values()
+
+    def fix_encoded_names(self):
+        """מפענח אותם. פעולה על נתונים — ולכן גיבוי לפניה, כמו כל פעולה כזו."""
+        busy = self._busy()
+        if busy:
+            return {"ok": False, "error": busy}
+        bk = db.auto_backup("fix-encoded")
+        r = db.fix_encoded_values()
+        return dict(r, ok=True, backed_up=bool(bk and bk.get("ok")))
+
     def resolve_tag(self, username):
         """מאתר ניק לפי שם משתמש מדויק (ללא תלות בפורום) — ללחיצה על תיוג"""
         return db.find_nick_by_username(username)
@@ -2301,6 +2347,12 @@ if __name__ == "__main__":
         try:
             db.init_db()
             i18n.set_lang(db.get_setting("display_lang", "he"))
+            # חייב לחול לפני הבקשה היוצאת הראשונה — התזמון ובדיקת
+            # העדכון יוצאים לדרך שניות אחרי העלייה.
+            _net = net.apply_from_settings(db.get_setting)
+            if not _net.get("ok"):
+                logging.warning("Saved network settings ignored: %s", _net.get("error"))
+            logging.info("Network: %s", _net.get("description"))
         except Exception as e:
             logging.exception("init_db failed")
             _msgbox("לא ניתן לפתוח את מאגר הנתונים.\n\n"
