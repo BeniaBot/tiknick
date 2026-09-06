@@ -4827,13 +4827,22 @@ async function openInternetSync() {
   const known = await api('get_known_forums') || [];
   const loginOf = {};
   known.forEach(k => { loginOf[k.name] = !!k.needs_login; });
-  const opts = forums.map(f => {
+  const lastScrapes = await api('get_last_scrapes') || {};
+  const opts = forums.map((f, i) => {
     const plat = f.platform || 'nodebb';
     const needsLogin = loginOf[f.name];
     const scrapable = SCRAPABLE_PLATFORMS.has(plat);
     const tag = !scrapable ? ' ⛔' : (needsLogin ? ' 🔒' : '');
-    return `<option value="${esc(f.name)}" data-url="${esc(f.url || '')}"
-             data-platform="${esc(plat)}" data-login="${needsLogin?'1':'0'}">${esc(f.name)}${tag}</option>`;
+    const ts = lastScrapes[f.name];
+    const when = ts ? esc(relativeTime(ts.replace('T', ' '))) : 'טרם נסרק';
+    return `<div class="col-picker-item">
+      <input type="checkbox" class="sync-forum-cb" id="sync-f-${i}" value="${esc(f.name)}"
+             data-url="${esc(f.url || '')}" data-platform="${esc(plat)}"
+             data-login="${needsLogin?'1':'0'}" ${i === 0 ? 'checked' : ''}
+             onchange="onSyncForumChange()">
+      <label for="sync-f-${i}">${esc(f.name)}${tag}</label>
+      <span style="font-size:11.5px;color:var(--subtext);white-space:nowrap">🕒 <span>${when}</span></span>
+    </div>`;
   }).join('');
 
   // הפעלה ראשונה: אין עדיין פורומים עם כתובת — הסבר במקום דיאלוג ריק
@@ -4859,9 +4868,11 @@ async function openInternetSync() {
       ניקים אוטומטית. שדות ריקים מתמלאים; ערך סרוק סותר נשמר לצד הקיים ומוכרע לפי אמינות.
     </p>
 
-    <div class="section-hdr">בחירת פורום</div>
-    <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">פורום לסריקה</label>
-    <select id="sync-forum" class="form-select" style="width:100%;margin-bottom:6px" onchange="onSyncForumChange()">${opts}</select>
+    <div class="section-hdr">בחירת פורומים</div>
+    <label style="display:block;font-size:12px;margin-bottom:6px;color:var(--subtext)">
+      סמן פורום אחד או כמה. הזמן שליד כל פורום הוא הסריקה האחרונה שלו.
+    </label>
+    <div class="col-picker" style="margin-bottom:6px">${opts}</div>
     <div id="sync-forum-hint" style="font-size:12px;margin-bottom:12px;min-height:16px"></div>
 
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;gap:8px">
@@ -4904,7 +4915,6 @@ async function openInternetSync() {
     { label: '🌍 סרוק הכל', cls: 'btn-ghost', action: doStartScrapeAll },
     { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
   ], 'modal-lg');
-  S.lastScrapes = await api('get_last_scrapes') || {};
   onSyncForumChange();
   // אם סריקה כבר רצה ברקע — הראה זאת במקום דיאלוג שנראה "רדום"
   api('get_scrape_progress').then(p => {
@@ -4917,10 +4927,19 @@ async function openInternetSync() {
   });
 }
 
+function syncChecked() {
+  return [...document.querySelectorAll('.sync-forum-cb')].filter(c => c.checked);
+}
+
+// הפורום ה"ראשי": הרמז, שדה העוגייה ו"בדוק פורום" מתייחסים אליו. כשמסומנים
+// כמה, הסריקה משתמשת בעוגייה השמורה של כל פורום ולא בשדה הזה.
+function syncPrimary() {
+  return syncChecked()[0] || document.querySelector('.sync-forum-cb');
+}
+
 // טוען את העוגייה השמורה לפורום הנבחר לתוך שדה העוגייה
 async function syncPrefillCookie() {
-  const sel = document.getElementById('sync-forum');
-  const url = sel?.selectedOptions[0]?.dataset.url || '';
+  const url = syncPrimary()?.dataset.url || '';
   const input = document.getElementById('sync-cookie');
   if (!input || !url) return;
   const saved = await api('get_saved_cookie', url);
@@ -4944,8 +4963,8 @@ function closeSyncModal() {
 }
 
 async function doForumCheck() {
-  const sel = document.getElementById('sync-forum');
-  const url = sel.selectedOptions[0]?.dataset.url || '';
+  const el = syncPrimary();
+  const url = el?.dataset.url || '';
   const cookie = document.getElementById('sync-cookie').value.trim();
   const box = document.getElementById('sync-check-result');
   if (!url) { box.innerHTML = '<span style="color:var(--danger)">לפורום זה אין כתובת URL</span>'; return; }
@@ -4956,7 +4975,7 @@ async function doForumCheck() {
     const cnt = r.user_count != null ? `~${r.user_count} משתמשים` : 'זמין';
     box.innerHTML = `<span style="color:var(--success)">✓ ${esc(platName)} תקין (${esc(String(cnt))})</span>`;
     // עדכן את סימון הפלטפורמה באופציה הנבחרת (נשמר גם בצד השרת)
-    if (sel.selectedOptions[0] && r.platform) sel.selectedOptions[0].dataset.platform = r.platform;
+    if (el && r.platform) el.dataset.platform = r.platform;
     updateSyncHint();   // רק הרמז — לא לדרוס את העוגייה שהוקלדה זה עתה
   } else {
     box.innerHTML = `<span style="color:var(--danger)">✕ ${esc(r?.error || 'בדיקה נכשלה')}</span>`;
@@ -4964,20 +4983,26 @@ async function doForumCheck() {
 }
 
 async function doStartScrape() {
-  const sel = document.getElementById('sync-forum');
-  const name = sel.value;
-  const opt  = sel.selectedOptions[0];
-  const url  = opt?.dataset.url || '';
-  const plat = opt?.dataset.platform || 'nodebb';
-  const cookie = document.getElementById('sync-cookie').value.trim();
+  const picked = syncChecked();
+  if (!picked.length) { toast('לא סומן אף פורום לסריקה', 'error'); return; }
   const maxPages = parseInt(document.getElementById('sync-maxpages')?.value) || null;
-  if (!url) { toast('לפורום זה אין כתובת URL', 'error'); return; }
-  if (!SCRAPABLE_PLATFORMS.has(plat)) {
-    toast(`פלטפורמת ${PLATFORM_LABELS[plat] || plat} אינה נתמכת לסריקה אוטומטית`, 'error');
-    return;
+  let start;
+  if (picked.length > 1) {
+    // כמה פורומים = אותו מסלול של "סרוק הכל", מוגבל לנבחרים. העוגייה שבשדה
+    // לא נשלחת: לכל פורום משמשת רק העוגייה השמורה שלו.
+    start = await api('start_scrape_all', '', maxPages, picked.map(c => c.value));
+  } else {
+    const el = picked[0];
+    const url = el.dataset.url || '';
+    const plat = el.dataset.platform || 'nodebb';
+    const cookie = document.getElementById('sync-cookie').value.trim();
+    if (!url) { toast('לפורום זה אין כתובת URL', 'error'); return; }
+    if (!SCRAPABLE_PLATFORMS.has(plat)) {
+      toast(`פלטפורמת ${PLATFORM_LABELS[plat] || plat} אינה נתמכת לסריקה אוטומטית`, 'error');
+      return;
+    }
+    start = await api('start_scrape', el.value, url, cookie, maxPages);
   }
-
-  const start = await api('start_scrape', name, url, cookie, maxPages);
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל סריקה', 'error'); return; }
 
   const wrap = document.getElementById('sync-progress-wrap');
@@ -5123,8 +5148,7 @@ function toggleCookieHelp(containerId) {
 }
 
 function updateSyncHint() {
-  const sel = document.getElementById('sync-forum');
-  const opt = sel?.selectedOptions[0];
+  const opt = syncPrimary();
   const hint = document.getElementById('sync-forum-hint');
   if (!opt || !hint) return;
   const plat = opt.dataset.platform || 'nodebb';
@@ -5142,13 +5166,11 @@ function updateSyncHint() {
   } else {
     hint.innerHTML = '';
   }
-  // נסרק לאחרונה
-  const last = (S.lastScrapes || {})[opt.value];
-  if (last) {
+  // כמה פורומים סומנו — ואיזו עוגייה תשמש אז
+  const n = syncChecked().length;
+  if (n > 1) {
     hint.innerHTML += (hint.innerHTML ? '<br>' : '') +
-      `<span style="color:var(--subtext)">🕒 נסרק לאחרונה: ${esc(relativeTime(last.replace('T', ' ')))}</span>`;
-  } else if (!hint.innerHTML) {
-    hint.innerHTML = '<span style="color:var(--subtext)">🕒 טרם נסרק</span>';
+      `<span style="color:var(--subtext)">🌐 סומנו ${n} פורומים — לכל אחד תשמש העוגייה השמורה שלו.</span>`;
   }
 }
 

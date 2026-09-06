@@ -1,5 +1,5 @@
 // ═══ נוצר אוטומטית ע"י tools/build_i18n.py — אין לערוך ביד ═══
-// 886 מחרוזות קבועות, 224 תבניות.
+// 890 מחרוזות קבועות, 225 תבניות.
 const I18N_EN = {
   "כל מידע משויך למקור (\"אב\"). בכל שדה — הערך מהמקור בעל האמינות הגבוהה מוצג. שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד. \"אבסולוטי\" (רק ל\"אני\") = תמיד מנצח. את התנהגות הסריקה מנהלים בלשונית \"התנגשויות\".": "Every piece of information belongs to a source (a \"parent\"). For each field, the value from the highest-trust source is shown. Changing trust or deleting a source affects the data immediately. \"Absolute\" (for \"Me\" only) = always wins. Scrape behavior is managed on the \"Conflicts\" tab.",
   "Stinknik סורק את כל הפוסטים של משתמש ומציג את כל הפוסטים שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק \"שנוי במחלוקת\", כלומר רק פוסטים עם יותר דיסים מלייקים).": "Stinknik scans all of a user's posts and shows every post that received downvotes — including the ones the forum hides (the forum only shows \"controversial\" posts, meaning posts with more downvotes than upvotes).",
@@ -47,6 +47,7 @@ const I18N_EN = {
   "🔒 העוגייה היא אישית ומאפשרת גישה לחשבון שלך — אל תשתף אותה עם אחרים.": "🔒 The cookie is personal and grants access to your account — don't share it with anyone.",
   "העדכון הקודם ירד אך לא הוחל (הקובץ היה נעול). נסה שוב דרך \"אודות\".": "The previous update was downloaded but not applied (the file was locked). Try again from \"About\".",
   "לחץ עליה, העתק את הערך שבעמודת Value (מתחיל ב-s%3A), והדבק למטה.": "Click it, copy the value in the Value column (it starts with s%3A), and paste it below.",
+  "סמן פורום אחד או כמה. הזמן שליד כל פורום הוא הסריקה האחרונה שלו.": "Check one forum or several. The time next to each forum is its last scrape.",
   "עבור ללשונית Application (או \"אחסון\"/Storage בדפדפנים מסוימים).": "Go to the Application tab (called Storage in some browsers).",
   "רוקן ערכים בעמודות נבחרות בכל הניקים, בלי למחוק את השורות עצמן": "Clear the values in the selected columns across all nicks, without deleting the rows themselves",
   "גיבוי יומי אוטומטי בהפעלת התוכנה, וגיבוי לפני כל פעולת איפוס": "Back up daily on startup, and before every reset",
@@ -233,6 +234,7 @@ const I18N_EN = {
   "📞 טלפונים ומיילים נוספים": "📞 Additional phones and emails",
   "(לפי סך הפוסטים בפורום)": "(based on total posts on the forum)",
   "אין פרטים מלאים לניק זה": "No details recorded for this nick",
+  "לא סומן אף פורום לסריקה": "No forum is checked for scraping",
   "לחץ לסטטיסטיקות מפורטות": "Click for detailed statistics",
   "למשל: בני ברק בלי טלפון": "e.g. Bnei Brak without a phone",
   "לפורום זה אין כתובת URL": "This forum has no URL",
@@ -453,6 +455,7 @@ const I18N_EN = {
   "🗑️ מאגר הניקים": "🗑️ Nick database",
   "🩺 בריאות המאגר": "🩺 Database health",
   "(@ לתיוג ניק)": "(@ to tag a nick)",
+  "בחירת פורומים": "Forum selection",
   "בטוח לחלוטין?": "Are you absolutely sure?",
   "הגדרות סנכרון": "Sync settings",
   "ההגדרות אופסו": "Settings reset",
@@ -677,6 +680,7 @@ const I18N_EN = {
   "בני הבוט": "Beni the Bot",
   "הזן טקסט": "Enter text",
   "זהות אחת": "One identity",
+  "טרם נסרק": "Never scraped",
   "יומן WAL": "WAL file",
   "כל פורום": "All forums",
   "כל פריסה": "Any spread",
@@ -924,6 +928,7 @@ const I18N_EN_PAT = [
   ["^•\\ <b>([\\s\\S]*?)</b>\\ כתב\\ בערך\\ אותה\\ כמות\\ פוסטים\\ מ־<b>([\\s\\S]*?)</b>([\\s\\S]*?)\\.$", "• <b>$1</b> wrote about as many posts as <b>$2</b>$3."],
   ["^הגיבוי\\ לא\\ נטען\\ \\(([\\s\\S]*?)\\)\\.\\ המאגר\\ הקודם\\ שוחזר\\ —\\ לא\\ אבד\\ מידע\\.$", "The backup did not load ($1). Your previous database was restored — no data was lost."],
   ["^•\\ <b>([\\s\\S]*?)</b>\\ כותב\\ ארוך\\ יותר\\ \\(([\\s\\S]*?)\\ מילים\\ לפוסט\\ מול\\ ([\\s\\S]*?)\\)\\.$", "• <b>$1</b> writes longer posts ($2 words per post vs. $3)."],
+  ["^🌐\\ סומנו\\ ([\\s\\S]*?)\\ פורומים\\ —\\ לכל\\ אחד\\ תשמש\\ העוגייה\\ השמורה\\ שלו\\.$", "🌐 $1 forums checked — each one will use its own saved cookie."],
   ["^•\\ <b>([\\s\\S]*?)</b>\\ כתב\\ פי\\ ([\\s\\S]*?)\\ יותר\\ פוסטים\\ מ־<b>([\\s\\S]*?)</b>([\\s\\S]*?)\\.$", "• <b>$1</b> wrote $2× more posts than <b>$3</b>$4."],
   ["^מנתח\\ את\\ הפעילות\\ של\\ ([\\s\\S]*?)\\ —\\ רץ\\ ברקע,\\ אפשר\\ לצאת\\ ולחזור$", "Analyzing $1's activity — this runs in the background, you can leave and come back"],
   ["^סורק\\ את\\ הפוסטים\\ של\\ ([\\s\\S]*?)\\ —\\ רץ\\ ברקע,\\ אפשר\\ לצאת\\ ולחזור$", "Scanning $1's posts — this runs in the background, you can leave and come back"],

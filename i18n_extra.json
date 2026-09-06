@@ -411,5 +411,40 @@
   "kind": "static",
   "where": "manual",
   "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": "בחירת פורומים",
+  "en": "Forum selection",
+  "kind": "static",
+  "where": "manual",
+  "context": "multi-forum scrape picker"
+ },
+ {
+  "he": "סמן פורום אחד או כמה. הזמן שליד כל פורום הוא הסריקה האחרונה שלו.",
+  "en": "Check one forum or several. The time next to each forum is its last scrape.",
+  "kind": "static",
+  "where": "manual",
+  "context": "multi-forum scrape picker"
+ },
+ {
+  "he": "טרם נסרק",
+  "en": "Never scraped",
+  "kind": "static",
+  "where": "manual",
+  "context": "multi-forum scrape picker"
+ },
+ {
+  "he": "לא סומן אף פורום לסריקה",
+  "en": "No forum is checked for scraping",
+  "kind": "static",
+  "where": "manual",
+  "context": "multi-forum scrape picker"
+ },
+ {
+  "he": "🌐 סומנו {1} פורומים — לכל אחד תשמש העוגייה השמורה שלו.",
+  "en": "🌐 {1} forums checked — each one will use its own saved cookie.",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "multi-forum scrape picker"
  }
 ]
