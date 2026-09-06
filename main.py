@@ -22,6 +22,7 @@ import logging
 import webbrowser
 import threading
 import database as db
+import net
 import scraper
 import csv_import
 import profile_sheet
@@ -1283,7 +1284,7 @@ class API:
             else:
                 new_path = os.path.join(os.path.dirname(cur_exe), "TikNick_new.exe")
             req = urllib.request.Request(download_url, headers={"User-Agent": "TikNick-Updater"})
-            with urllib.request.urlopen(req, timeout=60) as resp, open(new_path, "wb") as out:
+            with net.urlopen(req, timeout=60) as resp, open(new_path, "wb") as out:
                 total = int(resp.headers.get("Content-Length", 0))
                 got = 0
                 while True:
@@ -1556,7 +1557,7 @@ del "%~f0"
         try:
             req = urllib.request.Request(
                 api_url, headers={"User-Agent": "TikNick-UpdateCheck"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with net.urlopen(req, timeout=8) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             logging.info("Update check failed: %s", e)
@@ -1627,7 +1628,7 @@ del "%~f0"
         try:
             url = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/changelog.json"
             req = urllib.request.Request(url, headers={"User-Agent": "TikNick-Updater"})
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with net.urlopen(req, timeout=8) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
         except Exception as e:
             logging.info("changelog fetch failed: %s", e)
@@ -1803,6 +1804,26 @@ del "%~f0"
     def set_setting(self, key, value):
         db.set_setting(key, value)
         return {"ok": True}
+
+    # ── פרוקסי ─────────────────────────────────────────────────────
+    def get_proxy_settings(self):
+        """מה חל *עכשיו* על היציאה לאינטרנט — ולא רק מה ששמור במאגר."""
+        return net.current()
+
+    def set_proxy_settings(self, mode="system", url=""):
+        """מחיל ושומר. הגדרה פסולה נדחית ולא נשמרת — הקיימת ממשיכה לעבוד."""
+        try:
+            state = net.apply(mode, url)
+        except net.ProxyError as e:
+            return {"ok": False, "error": str(e)}
+        db.set_setting(net.SETTING_MODE, state["mode"])
+        db.set_setting(net.SETTING_URL, state["url"])
+        logging.info("Network: %s", state["description"])
+        return dict(state, ok=True)
+
+    def test_proxy(self, mode="system", url=""):
+        """בודק הגדרה בלי להחיל אותה, כדי שסריקה שרצה ברקע לא תיפגע."""
+        return net.test_connection(mode, url)
 
     # ── ייצוא / ייבוא ──────────────────────────────────────────────
     def get_export_counts(self):
@@ -2301,6 +2322,13 @@ if __name__ == "__main__":
                     "אם הקובץ פגום — שחזר מגיבוי (קובץ .db) או העבר אותו הצידה כדי להתחיל מחדש.")
             raise
         logging.info("Database ready at %s", db.DB_PATH)
+
+        # הגדרת הפרוקסי חייבת לחול לפני הבקשה היוצאת הראשונה — הסריקה
+        # המתוזמנת ובדיקת העדכון יוצאות לדרך שניות אחרי העלייה.
+        _proxy = net.apply_from_settings(db.get_setting)
+        if not _proxy.get("ok"):
+            logging.warning("Saved proxy settings ignored: %s", _proxy.get("error"))
+        logging.info("Network: %s", _proxy.get("description"))
 
         # גיבוי יומי — ב-thread, כי 88MB דרך ה-backup API לוקחים כמה שניות
         # והמשתמש לא אמור להמתין לחלון. כישלון נרשם ללוג ולא עוצר את ההפעלה.

@@ -411,5 +411,187 @@
   "kind": "static",
   "where": "manual",
   "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": "הגדרות רשת",
+  "en": "Network settings",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "🛡️ הגדרות רשת",
+  "en": "🛡️ Network settings",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "פרוקסי — חל על כל מה שיוצא מהתוכנה",
+  "en": "Proxy — applies to everything the app sends out",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "איך Tik-Nick יוצא לאינטרנט",
+  "en": "How Tik-Nick reaches the internet",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "🖥️ לפי המערכת",
+  "en": "🖥️ System",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "🚫 ישיר",
+  "en": "🚫 Direct",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "🛡️ פרוקסי",
+  "en": "🛡️ Proxy",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "ההגדרה חלה על סריקת הפורומים, Chazonishnik, Stinknik ובדיקת העדכונים. לפי המערכת = ההתנהגות הרגילה של Windows · ישיר = התעלמות מפרוקסי שהוגדר במערכת. תמונות הפרופיל נטענות ע\"י רכיב הדפדפן וממשיכות לפי הגדרות המערכת.",
+  "en": "This setting applies to forum scraping, Chazonishnik, Stinknik and the update check. System = the normal Windows behavior · Direct = ignore any proxy configured in the system. Profile pictures are loaded by the browser component and keep following the system settings.",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "כתובת הפרוקסי",
+  "en": "Proxy address",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "פרוקסי http או https, למשל 1.2.3.4:8080 (בלי פורט מפורש נלקח 8080). פרוקסי שדורש סיסמה נכתב בצורה http://user:password@host:port, והסיסמה נשמרת במאגר כטקסט גלוי — כמו העוגיות.",
+  "en": "An http or https proxy, for example 1.2.3.4:8080 (without an explicit port, 8080 is used). A proxy that needs a password is written http://user:password@host:port, and the password is stored in the database as plain text — just like the cookies.",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "בדיקת חיבור",
+  "en": "Connection test",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "בקשה אחת לפורום דרך ההגדרה שנבחרה — בלי לשמור אותה",
+  "en": "One request to the forum through the selected setting — without saving it",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "🔌 בדוק",
+  "en": "🔌 Test",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "⏳ בודק...",
+  "en": "⏳ Testing...",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "החיבור עובד — {1} מ\"ש",
+  "en": "Connection works — {1} ms",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "החיבור נכשל",
+  "en": "The connection failed",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "הגדרה שגויה",
+  "en": "Invalid setting",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "הגדרות הרשת נשמרו",
+  "en": "Network settings saved",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "לא הוזנה כתובת פרוקסי",
+  "en": "No proxy address was entered",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "כתובת הפרוקסי מכילה רווח",
+  "en": "The proxy address contains a space",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "נתמכים פרוקסי http ו-https בלבד",
+  "en": "Only http and https proxies are supported",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "הפורט חייב להיות מספר בין 1 ל-65535",
+  "en": "The port must be a number between 1 and 65535",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "חסרה כתובת של שרת הפרוקסי",
+  "en": "The proxy server address is missing",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "כתובת פרוקסי היא שרת ופורט בלבד — בלי נתיב",
+  "en": "A proxy address is a host and a port only — without a path",
+  "kind": "static",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "השרת החזיר שגיאה {1}",
+  "en": "The server returned error {1}",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "proxy settings"
+ },
+ {
+  "he": "לא ניתן להתחבר: {1}",
+  "en": "Cannot connect: {1}",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "proxy settings"
  }
 ]

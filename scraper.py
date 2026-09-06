@@ -19,6 +19,8 @@ import urllib.request
 import urllib.parse
 import urllib.error
 
+import net
+
 USER_AGENT = "Tik-Nick/1.0 (+https://github.com/BeniaBot/tiknick)"
 PAGE_DELAY_SEC = 0.6          # השהיה בין עמודים — לא להעמיס על השרת
 HARD_PAGE_CAP = 4000          # בלם ביטחון: פורום תקול שמחזיר עמודים בלי סוף
@@ -76,7 +78,7 @@ def _fetch_json(url, cookie=None):
             headers["Cookie"] = cookie
         req = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
+            with net.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 raw = resp.read().decode("utf-8", errors="replace")
                 return json.loads(raw)
         except urllib.error.HTTPError as e:

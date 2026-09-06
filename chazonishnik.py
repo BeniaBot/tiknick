@@ -14,6 +14,8 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import concurrent.futures
+
+import net
 from datetime import datetime
 
 DEFAULT_BASE = "https://mitmachim.top"
@@ -37,7 +39,7 @@ def _get_json(url, cookie=None, timeout=15, retries=3):
     last = None
     for attempt in range(1, retries + 1):
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with net.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8", "replace"))
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries:

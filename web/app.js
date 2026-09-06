@@ -5923,6 +5923,92 @@ async function resetDisplay() {
   toast('הגדרות התצוגה אופסו', 'info');
 }
 
+// ══ הגדרות רשת / פרוקסי ═══════════════════════════════════════════════
+// הגדרה אחת שחלה על כל מה שיוצא מהתוכנה. נשמרת רק אחרי שהבקנד אישר אותה,
+// כדי שכתובת שגויה לא תשתיק את הסריקה עד להפעלה הבאה.
+let PROXY = { mode: 'system', url: '' };
+
+async function openProxySettings() {
+  Object.assign(PROXY, await api('get_proxy_settings') || {});
+  const modes = [['system', '🖥️ לפי המערכת'], ['off', '🚫 ישיר'], ['manual', '🛡️ פרוקסי']];
+  openModal('🛡️ הגדרות רשת', `
+    <div class="settings-section">
+      <div class="settings-section-title">איך Tik-Nick יוצא לאינטרנט</div>
+      <div class="segmented">
+        ${modes.map(([v, lbl]) => `<button class="${PROXY.mode === v ? 'active' : ''}"
+          onclick="pickProxyMode('${v}',this)">${lbl}</button>`).join('')}
+      </div>
+      <div style="font-size:11.5px;color:var(--subtext);margin-top:9px;line-height:1.7">
+        ההגדרה חלה על סריקת הפורומים, Chazonishnik, Stinknik ובדיקת העדכונים.
+        לפי המערכת = ההתנהגות הרגילה של Windows · ישיר = התעלמות מפרוקסי שהוגדר במערכת.
+        תמונות הפרופיל נטענות ע"י רכיב הדפדפן וממשיכות לפי הגדרות המערכת.
+      </div>
+    </div>
+    <div class="settings-section" id="proxy-manual-box">
+      <div class="settings-section-title">כתובת הפרוקסי</div>
+      <div class="form-group">
+        <input class="form-input" id="proxy-url" dir="ltr" spellcheck="false" autocomplete="off"
+               placeholder="http://1.2.3.4:8080" value="${esc(PROXY.url || '')}">
+      </div>
+      <div style="font-size:11.5px;color:var(--subtext);margin-top:8px;line-height:1.7">
+        פרוקסי http או https, למשל 1.2.3.4:8080 (בלי פורט מפורש נלקח 8080).
+        פרוקסי שדורש סיסמה נכתב בצורה http://user:password@host:port, והסיסמה
+        נשמרת במאגר כטקסט גלוי — כמו העוגיות.
+      </div>
+    </div>
+    <div class="settings-section">
+      <div class="settings-row">
+        <div><div class="settings-label">בדיקת חיבור</div>
+             <div class="settings-desc">בקשה אחת לפורום דרך ההגדרה שנבחרה — בלי לשמור אותה</div></div>
+        <button class="btn btn-ghost btn-sm" id="proxy-test-btn" onclick="testProxy()">🔌 בדוק</button>
+      </div>
+      <div id="proxy-test-result" style="font-size:12.5px;line-height:1.7"></div>
+    </div>`, [
+    { label: '💾 שמור', cls: 'btn-primary', action: saveProxySettings },
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ]);
+  applyProxyModeUi();
+}
+
+function pickProxyMode(mode, btn) {
+  PROXY.mode = mode;
+  btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  applyProxyModeUi();
+}
+
+function applyProxyModeUi() {
+  const box = document.getElementById('proxy-manual-box');
+  if (box) box.style.display = PROXY.mode === 'manual' ? '' : 'none';
+}
+
+// הסמל והטקסט בצמתים נפרדים: מנוע התרגום מחפש התאמה מדויקת, והודעת שגיאה
+// שהודבקה ל-"❌ " באותו צומת לא הייתה נמצאת בקטלוג.
+function showProxyResult(icon, text, color) {
+  const el = document.getElementById('proxy-test-result');
+  if (el) el.innerHTML = text ? `<span style="color:${color}">${icon} <span>${esc(text)}</span></span>` : '';
+}
+
+async function testProxy() {
+  const btn = document.getElementById('proxy-test-btn');
+  const url = (document.getElementById('proxy-url')?.value || '').trim();
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ בודק...'; }
+  showProxyResult('', '', '');
+  const r = await api('test_proxy', PROXY.mode, url) || {};
+  if (btn) { btn.disabled = false; btn.textContent = '🔌 בדוק'; }
+  if (r.ok) showProxyResult('✅', `החיבור עובד — ${r.ms} מ"ש`, 'var(--success)');
+  else showProxyResult('❌', r.error || 'החיבור נכשל', 'var(--danger)');
+}
+
+async function saveProxySettings() {
+  const url = (document.getElementById('proxy-url')?.value || '').trim();
+  const r = await api('set_proxy_settings', PROXY.mode, url) || {};
+  if (!r.ok) { showProxyResult('❌', r.error || 'הגדרה שגויה', 'var(--danger)'); return; }
+  Object.assign(PROXY, r);
+  closeModal();
+  toast('הגדרות הרשת נשמרו', 'success');
+}
+
 function esc(s) {
   return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
                          .replace(/>/g,'&gt;').replace(/"/g,'&quot;')
