@@ -15,6 +15,7 @@ import urllib.parse
 import urllib.error
 import concurrent.futures
 from datetime import datetime
+import i18n
 
 DEFAULT_BASE = "https://mitmachim.top"
 # 12 בקשות במקביל בלי כל השהיה היו מפציצות פורום קטן באלפי בקשות בדקה —
@@ -124,7 +125,51 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=N
     return posts
 
 
+# שמות הימים נכנסים לדוח כנתונים (תוויות ציר), ולכן מתורגמים כאן ולא בתבנית
 _DAYS_HE = ["שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת", "ראשון"]
+
+# מילים קצרות שאסור להן להיכנס לקטלוג המשותף — "שני" הוא גם יום וגם המספר,
+# ו-translate_template היה הופך "משתמש שני" ל-"משתמש Monday".
+_DAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+_LOCAL_EN = {"תגובה": "Reply"}
+
+# חיבורים קצרים בתוך ה-JS של הדוחות. הם לא יכולים לשבת בקטלוג המשותף —
+# "מול" או "פי " היו נדרסים בכל מקום בתוכנה — אבל בתבניות האלה הם חד-משמעיים.
+_TPL_EN = {
+    "פוסטים": "Posts",
+    "דק'": "min",
+    "קצר": "Short", "בינוני": "Medium", "ארוך": "Long",
+    'const dayOrder=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];':
+        'const dayOrder=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];',
+}
+
+_CMP_EN = {
+    'const DAYS = ["שני","שלישי","רביעי","חמישי","שישי","שבת","ראשון"];':
+        'const DAYS = ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"];',
+    "השוואה:": "Comparison:",
+    "מול": "vs.",
+    "נסרקו ": "scanned ",
+    " מתוך ": " of ",
+    " פוסטים; השאר כנראה בקטגוריות שדורשות התחברות.":
+        " posts; the rest are probably in categories that require signing in.",
+    " כתב ": " wrote ",
+    "פי ": "\u00d7", "יותר": "more",
+    " פוסטים מ־": " posts compared with ",
+    " (לפי סך הפוסטים בפורום)": " (based on the total post count in the forum)",
+    " (מתוך מה שנסרק בלבד)": " (out of what was scanned only)",
+    " מילים לפוסט מול ": " words per post vs. ",
+    " ב־": " at ",
+}
+
+
+
+def _t(s):
+    return _LOCAL_EN.get(s, s) if i18n.lang() == "en" else s
+
+
+
+def _days():
+    return _DAYS_EN if i18n.lang() == "en" else _DAYS_HE
 
 
 def _fetch_detail(base, cookie, post):
@@ -143,11 +188,11 @@ def _fetch_detail(base, cookie, post):
         dt = datetime.fromtimestamp(ts / 1000) if ts else datetime.now()
         return {
             "pid": pid,
-            "title": (post.get("topic", {}) or {}).get("title", "תגובה"),
+            "title": (post.get("topic", {}) or {}).get("title", _t("תגובה")),
             "ts": ts,
             "date": dt.strftime("%Y-%m-%d"),
             "hour": dt.hour,
-            "day": _DAYS_HE[dt.weekday()],
+            "day": _days()[dt.weekday()],
             "month": dt.strftime("%Y-%m"),
             "likes": len(upvoters),
             "voters": upvoters,
@@ -219,7 +264,7 @@ def _summarize(posts):
     for p in posts:
         hours[p["hour"] % 24] += 1
         try:
-            days[_DAYS_HE.index(p["day"])] += 1
+            days[_days().index(p["day"])] += 1
         except ValueError:
             pass
         months[p["month"]] = months.get(p["month"], 0) + 1
@@ -235,7 +280,7 @@ def _summarize(posts):
         "avg_likes": round(likes / n, 2),
         "hours": hours, "days": days, "months": months,
         "top_hour": hours.index(max(hours)) if posts else 0,
-        "top_day": _DAYS_HE[days.index(max(days))] if posts else "",
+        "top_day": _days()[days.index(max(days))] if posts else "",
         "first": posts[0]["date"] if posts else "",
         "last": posts[-1]["date"] if posts else "",
         "top_topics": sorted(cats.items(), key=lambda kv: -kv[1])[:5],
@@ -286,7 +331,9 @@ def _build_compare_html(base_url, a, b):
         "b": {"user": b["slug"], "stats": b["stats"], "meta": b["meta"]},
         "base": base_url,
     }
-    return COMPARE_TEMPLATE.replace("__CHARTJS__", _chartjs_tag()) \
+    # התבנית מתורגמת *לפני* הזרקת הנתונים — כך התרגום לא נוגע בתוכן מהפורום
+    return i18n.translate_template(COMPARE_TEMPLATE, _CMP_EN)\
+        .replace("__CHARTJS__", _chartjs_tag()) \
         .replace("__A__", _esc(a["slug"])) \
         .replace("__B__", _esc(b["slug"])) \
         .replace("__JSON_DATA__", _json_for_script(payload))
@@ -387,7 +434,8 @@ def _json_for_script(obj):
 
 
 def _build_html(user_slug, base_url, my_uid, posts_data):
-    return HTML_TEMPLATE.replace("__CHARTJS__", _chartjs_tag()) \
+    return i18n.translate_template(HTML_TEMPLATE, _TPL_EN)\
+        .replace("__CHARTJS__", _chartjs_tag()) \
         .replace("__USER__", _esc(user_slug)) \
         .replace("__JSON_DATA__", _json_for_script(posts_data)) \
         .replace("__MY_UID__", _json_for_script(my_uid)) \

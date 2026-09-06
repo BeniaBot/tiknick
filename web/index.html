@@ -29,7 +29,9 @@
     <!-- מה שנוסף בגרסאות 0.8.5-0.8.10 ירד מכאן אל תוך החלון שכבר מחזיק את
          הנושא שלו: הצעות זהות ← "זהויות", תזמון ויומן סריקות ← "סנכרון
          לאינטרנט", נצפו לאחרונה ← "תצוגת משתמש", סטטיסטיקות ← לחיצה על המונים
-         בסרגל העליון. הכפתורים הוותיקים נשארו במקומם — הם מה שהמשתמש מכיר.
+         בסרגל העליון. גיבוי, שחזור וסל המחזור חיים ב"🩺 בריאות המאגר" — הם
+         פעולות על הקובץ, ושם ממילא מוצג מצבו. מה שנשאר בתפריט הוא מה שנפתח
+         באמת ביום-יום.
          הסיבה: 24 כפתורים היו 1070 פיקסל של תפריט בעמודה של 716, כלומר שליש
          מהתפריט מתחת לקו הקיפול מאחורי פס גלילה כמעט בלתי נראה. -->
     <nav class="sidebar-nav">
@@ -59,12 +61,6 @@
         <button class="nav-btn" onclick="importData()">
           <span class="icon">📥</span> ייבוא
         </button>
-        <button class="nav-btn" onclick="backupDb()" title="עותק מלא של כל המאגר לקובץ אחד">
-          <span class="icon">🗄️</span> גיבוי מלא
-        </button>
-        <button class="nav-btn" onclick="restoreDb()" title="החלפת המאגר בגיבוי שנשמר">
-          <span class="icon">♻️</span> שחזור מגיבוי
-        </button>
       </div>
       <div class="nav-group">
         <div class="nav-label">הגדרות</div>
@@ -92,9 +88,6 @@
       </div>
       <div class="nav-group">
         <div class="nav-label">מתקדם</div>
-        <button class="nav-btn" onclick="openTrash()" title="ניקים שנמחקו — לשחזור עד 30 יום">
-          <span class="icon">🗑️</span> סל מחזור
-        </button>
         <button class="nav-btn" onclick="openDbHealth()" title="תקינות, גיבוי אוטומטי, תחזוקה ויומנים">
           <span class="icon">🩺</span> בריאות המאגר
         </button>

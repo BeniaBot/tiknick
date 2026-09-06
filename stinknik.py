@@ -10,6 +10,23 @@ import urllib.request
 import urllib.parse
 import urllib.error
 import time
+import i18n
+
+_LOCAL_EN = {"תגובה": "Reply", "מתוך": "of"}
+
+# ראו chazonishnik._TPL_EN — חיבורים שחד-משמעיים בתבנית הזו בלבד
+_TPL_EN = {
+    "דוח דיסלייקים": "Downvote report",
+    "המשתמש:": "User:",
+    "לייקים": "Upvotes", "דיסלייקים": "Downvotes",
+    "פוסטים עם דיסים": "Posts with downvotes",
+}
+
+
+
+def _t(s):
+    return _LOCAL_EN.get(s, s) if i18n.lang() == "en" else s
+
 
 DEFAULT_BASE = "https://mitmachim.top"
 _UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -145,7 +162,7 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
                     title = topic.get("title", "")
                 disliked.append({
                     "pid": pid, "upvotes": up, "downvotes": down,
-                    "reputation": rep, "title": title or "תגובה",
+                    "reputation": rep, "title": title or _t("תגובה"),
                     "link": f"{base}/post/{pid}",
                     "timestamp": post.get("timestamp", 0),
                 })
@@ -168,6 +185,7 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
 
 
 def _build_html(slug, disliked, checked, up, down, rep, postcount=0):
+    _link = i18n.t("למעבר לפוסט 🌐")
     if disliked:
         rows = []
         for p in disliked:
@@ -180,15 +198,18 @@ def _build_html(slug, disliked, checked, up, down, rep, postcount=0):
                 <span class="dis">👎 {_esc(p['downvotes'])}</span>
                 <span>⭐ {_esc(p['reputation'])}</span>
               </div>
-              <a href="{_esc(p['link'])}" target="_blank" class="post-link">למעבר לפוסט 🌐</a>
+              <a href="{_esc(p['link'])}" target="_blank" class="post-link">{_link}</a>
             </div>""")
         posts_html = "".join(rows)
     else:
-        posts_html = '<div class="success-message">🎉 לא נמצאו פוסטים עם דיסלייקים כלל.</div>'
+        posts_html = ('<div class="success-message">'
+                      + i18n.t("🎉 לא נמצאו פוסטים עם דיסלייקים כלל.")
+                      + '</div>')
 
-    return _TEMPLATE \
+    return i18n.translate_template(_TEMPLATE, _TPL_EN) \
         .replace("__SLUG__", _esc(slug)) \
-        .replace("__SCANNOTE__", f" מתוך {postcount:,}" if postcount else "") \
+        .replace("__SCANNOTE__",
+                 (" " + _t("מתוך") + " {:,}".format(postcount)) if postcount else "") \
         .replace("__CHECKED__", f"{checked:,}") \
         .replace("__UP__", str(up)) \
         .replace("__DOWN__", str(down)) \

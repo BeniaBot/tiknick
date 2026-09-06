@@ -218,6 +218,19 @@ def main():
     out = os.path.join(ROOT, "web", "i18n.js")
     io.open(out, "w", encoding="utf-8").write(body + "\n" + RUNTIME)
     print("wrote %s — %d static, %d patterns" % (out, n_static, n_pat))
+
+    # אותו קטלוג לצד הפייתון: הדוחות של Chazonishnik/Stinknik והגיליון להדפסה
+    # הם מסמכים נפרדים, וה-observer של הדפדפן לא מגיע אליהם.
+    flat = {}
+    for e in catalog:
+        he, en = (e.get("he") or "").strip(), (e.get("en") or "").strip()
+        # גם תבניות: בצד הפייתון הן נשלפות לפי המחרוזת עם {1} ומוחלפות ידנית
+        if he and en and he != en:
+            flat[he] = en
+    pyout = os.path.join(ROOT, "i18n_en.json")
+    io.open(pyout, "w", encoding="utf-8").write(
+        json.dumps(flat, ensure_ascii=False, indent=0, sort_keys=True) + "\n")
+    print("wrote %s — %d strings" % (pyout, len(flat)))
     return 0
 
 

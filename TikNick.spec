@@ -10,6 +10,7 @@ a = Analysis(
     datas=[
         ('web', 'web'),          # HTML/CSS/JS bundled inside the exe
         ('icon.ico', '.'),       # window icon
+        ('i18n_en.json', '.'),   # תרגום הדוחות והגיליון להדפסה (i18n.py קורא אותו)
     ],
     hiddenimports=[
         # pywebview loads its Windows backend dynamically — pin them so

@@ -19,6 +19,18 @@ data:image (העלאה של המשתמש); avatar_url מרוחק מודפס כט
 """
 import re
 import html
+import i18n
+
+# מילים קצרות — מקומיות מאותה סיבה (ראו chazonishnik._LOCAL_EN)
+_LOCAL_EN = {
+    "פרטים": "Details", "הערות": "Notes", "טלפון": "Phone", "מייל": "Email",
+    "זהויות": "identities", "פרופיל": "Profile", "ציר זמן": "Timeline",
+}
+
+
+def _t(s):
+    return _LOCAL_EN.get(s, s) if i18n.lang() == "en" else s
+
 
 # שדות שלא נדפסים אלא אם המשתמש ביקש במפורש. get_merged_profile מחזיר את
 # private_notes בתוך fields, ולכן לא מספיק לסנן את מקטע ההערות בלבד.
@@ -119,7 +131,7 @@ def build_sheet(data, include_private=False, include_history=True, generated="")
     heading = nick.get("username", "")
     forums = sorted({m.get("forum", "") for m in members if m.get("forum")})
     subtitle = " · ".join(filter(None, [
-        f"{len(members)} זהויות" if len(members) > 1 else nick.get("forum", ""),
+        f"{len(members)} " + _t("זהויות") if len(members) > 1 else nick.get("forum", ""),
         ", ".join(forums) if len(members) > 1 else "",
         nick.get("real_name", "") or "",
     ]))
@@ -133,15 +145,19 @@ def build_sheet(data, include_private=False, include_history=True, generated="")
         chips = []
         for m in members[:MAX_MEMBERS]:
             col = _css_color(m.get("nick_color"))
-            ban = ' <span class="ban">🚫 מורחק</span>' if (m.get("status") or "") == "מורחק" else ""
+            ban = (' <span class="ban">' + i18n.t("🚫 מורחק") + '</span>'
+                   if (m.get("status") or "") == "מורחק" else "")
             chips.append(
                 f'<span class="chip"><span class="dot" style="background:{_esc(col)}"></span>'
                 f'<b>{_esc(m.get("username"))}</b> <span class="src">{_esc(m.get("forum"))}</span>{ban}</span>')
         extra = ""
         if data.get("truncated_members"):
-            extra = (f'<div class="src">מוצגות {MAX_MEMBERS} זהויות מתוך '
-                     f'{_esc(data["truncated_members"])}.</div>')
-        members_html = ('<div class="sec"><h2>זהויות מקושרות</h2>'
+            extra = ('<div class="src">'
+                     + i18n.t("מוצגות {1} זהויות מתוך {2}.")
+                        .replace("{1}", str(MAX_MEMBERS))
+                        .replace("{2}", str(_esc(data["truncated_members"])))
+                     + '</div>')
+        members_html = ('<div class="sec"><h2>' + i18n.t("זהויות מקושרות") + '</h2>'
                         + "".join(chips) + extra + "</div>")
 
     # ── שדות, עם ייחוס למקור ──
@@ -157,30 +173,33 @@ def build_sheet(data, include_private=False, include_history=True, generated="")
             vals.append(f'<div>{_esc(v.get("value"))}{src}</div>')
         if vals:
             rows.append((f.get("label", f.get("key", "")), "".join(vals)))
-    fields_html = f'<div class="sec"><h2>פרטים</h2>{_table(rows)}</div>' if rows else ""
+    fields_html = ('<div class="sec"><h2>' + _t("פרטים") + '</h2>'
+                   + _table(rows) + '</div>') if rows else ""
 
     # ── אנשי קשר ──
     crows = []
     for c in data.get("contacts") or []:
         if c.get("is_private") and not include_private:
             continue
-        kind = {"phone": "טלפון", "email": "מייל"}.get(c.get("type"), c.get("type", ""))
+        kind = {"phone": _t("טלפון"), "email": _t("מייל")}.get(
+            c.get("type"), c.get("type", ""))
         label = f' <span class="src">{_esc(c.get("label"))}</span>' if c.get("label") else ""
         lock = ' <span class="warn">🔒</span>' if c.get("is_private") else ""
         crows.append((kind, f'{_esc(c.get("value"))}{label}{lock}'))
-    contacts_html = (f'<div class="sec"><h2>טלפונים ומיילים נוספים</h2>{_table(crows)}</div>'
-                     if crows else "")
+    contacts_html = ('<div class="sec"><h2>' + i18n.t("טלפונים ומיילים נוספים")
+                     + '</h2>' + _table(crows) + '</div>' if crows else "")
 
     # ── הערות ──
     printed_keys = {f.get("key") for f in (data.get("fields") or [])}
     nrows = []
     if (nick.get("notes") or "").strip() and "notes" not in printed_keys:
-        nrows.append(("הערות", f'<div class="note">{_esc(nick["notes"])}</div>'))
+        nrows.append((_t("הערות"), f'<div class="note">{_esc(nick["notes"])}</div>'))
     if (include_private and (nick.get("private_notes") or "").strip()
             and "private_notes" not in printed_keys):
-        nrows.append(("הערות אישיות 🔒",
+        nrows.append((i18n.t("הערות אישיות 🔒"),
                       f'<div class="note">{_esc(nick["private_notes"])}</div>'))
-    notes_html = f'<div class="sec"><h2>הערות</h2>{_table(nrows)}</div>' if nrows else ""
+    notes_html = ('<div class="sec"><h2>' + _t("הערות") + '</h2>'
+                  + _table(nrows) + '</div>') if nrows else ""
 
     # ── ציר זמן ──
     history_html = ""
@@ -194,18 +213,22 @@ def build_sheet(data, include_private=False, include_history=True, generated="")
             for h in hist)
         more = ""
         if data.get("truncated_history"):
-            more = (f'<div class="src">מוצגים {MAX_HISTORY} שינויים מתוך '
-                    f'{_esc(data["truncated_history"])}.</div>')
-        history_html = f'<div class="sec"><h2>ציר זמן</h2><table>{hrows}</table>{more}</div>'
+            more = ('<div class="src">'
+                    + i18n.t("מוצגים {1} שינויים מתוך {2}.")
+                       .replace("{1}", str(MAX_HISTORY))
+                       .replace("{2}", str(_esc(data["truncated_history"])))
+                    + '</div>')
+        history_html = ('<div class="sec"><h2>' + _t("ציר זמן") + '</h2><table>'
+                        + hrows + '</table>' + more + '</div>')
 
-    foot_left = ("⚠️ כולל הערות אישיות ואנשי קשר סודיים"
+    foot_left = (i18n.t("⚠️ כולל הערות אישיות ואנשי קשר סודיים")
                  if include_private else "")
 
     values = {
         # heading הוא שם משתמש מהפורום. בלי בריחה כאן אפשר לסגור את <title>
         # ולהחדיר <img src=https://…> לגיליון — בדיוק ההפניה החיצונית שהמודול
         # הזה מבטיח שאין בו.
-        "TITLE": f"פרופיל · {_esc(heading)}",
+        "TITLE": _t("פרופיל") + " · " + _esc(heading),
         "AVATAR": avatar_html,
         "HEADING": _esc(heading),
         "SUBTITLE": _esc(subtitle),
@@ -218,4 +241,6 @@ def build_sheet(data, include_private=False, include_history=True, generated="")
         "DATE": _esc(generated),
     }
     # מעבר אחד: טקסט שהוחלף לא נסרק מחדש
-    return re.sub(r"__([A-Z_]+)__", lambda m: values.get(m.group(1), ""), _TEMPLATE)
+    # התבנית מתורגמת לפני ההחלפה — התרגום לא רואה שום ערך של משתמש
+    return re.sub(r"__([A-Z_]+)__", lambda m: values.get(m.group(1), ""),
+                  i18n.translate_template(_TEMPLATE))

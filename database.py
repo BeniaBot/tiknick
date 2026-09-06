@@ -2132,6 +2132,7 @@ DEFAULT_DISPLAY = {
     "density":      "normal",   # compact | normal | cozy
     "hidden_cols":  "",         # comma-separated column keys
     "col_layout":   "",         # JSON: {"order":[keys],"w":{key:px}} — רוחב וסדר עמודות
+    "lang":         "he",       # he | en — אנגלית מתרגמת גם את הדוחות
 }
 
 def get_display_settings():

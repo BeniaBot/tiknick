@@ -110,6 +110,83 @@ nav_labels = re.findall(r'<span class="icon">[^<]*</span>\s*([^\n<]+)', idx)
 nav_missing = [t.strip() for t in nav_labels if t.strip() and t.strip() not in keys]
 ok("אין תווית תפריט שנשארה בלי תרגום", not nav_missing, str(nav_missing))
 
+# ── צד הפייתון: הדוחות והגיליון להדפסה ───────────────────────────────────
+py_cat = os.path.join(ROOT, "i18n_en.json")
+ok("i18n_en.json קיים (הקטלוג של הדוחות)", os.path.exists(py_cat))
+
+import i18n as pyi18n  # noqa: E402
+import chazonishnik, stinknik, profile_sheet  # noqa: E402
+
+# בעברית שום דבר לא זז — זו ברירת המחדל וחייבת להישאר זהה בת-בית
+pyi18n.set_lang("he")
+ok("בעברית התבנית חוזרת כמו שהיא",
+   pyi18n.translate_template(stinknik._TEMPLATE) == stinknik._TEMPLATE)
+ok("בעברית t() מחזירה את המקור", pyi18n.t("ניק חדש") == "ניק חדש")
+ok("שמות הימים בעברית", chazonishnik._days()[0] == "שני")
+
+pyi18n.set_lang("en")
+ok("באנגלית t() מתרגמת", pyi18n.t("ניק חדש") == "New nick", pyi18n.t("ניק חדש"))
+ok("שמות הימים באנגלית", chazonishnik._days()[0] == "Monday")
+
+# מפתח קצר בן מילה אחת חייב להישאר מחוץ למנוע התבניות: "כל" היה הופך כל
+# מופע בתבנית — כולל בהערות קוד — ל-"Every".
+pyi18n._load()
+short = [k for k in pyi18n._MAP if len(k) < 6 and " " not in k]
+ok("יש מפתחות קצרים בקטלוג (הבדיקה רלוונטית)", len(short) > 0, str(len(short)))
+ok("מפתח קצר לא נכנס למנוע התבניות",
+   all(not pyi18n._RX.fullmatch(k) for k in short[:40]))
+
+# הערת קוד עברית בתוך <script> אינה ממשק ואסור לתרגם אותה
+probe = "\n".join(["<script>", "// הערה בעברית: ניק חדש", "const x=1;",
+                  "</script>", "<div>ניק חדש</div>"])
+out = pyi18n.translate_template(probe)
+ok("הערת קוד לא מתורגמת", "// הערה בעברית: ניק חדש" in out)
+ok("טקסט ממשק כן מתורגם", "<div>New nick</div>" in out, out[-40:])
+
+# ארבע התבניות חייבות לצאת נקיות לגמרי מעברית (מלבד הערות קוד)
+def leftovers(html):
+    out = []
+    for ln in html.splitlines():
+        if ln.strip().startswith("//") or not HE.search(ln):
+            continue
+        out += [h.strip() for h in re.findall(r"[^<>\"'{};()]*[֐-׿][^<>\"'{};()]*", ln) if h.strip()]
+    return sorted(set(out))
+
+for nm, html in (
+    ("Stinknik", pyi18n.translate_template(stinknik._TEMPLATE, stinknik._TPL_EN)),
+    ("Chazonishnik", pyi18n.translate_template(chazonishnik.HTML_TEMPLATE, chazonishnik._TPL_EN)),
+    ("השוואה", pyi18n.translate_template(chazonishnik.COMPARE_TEMPLATE, chazonishnik._CMP_EN)),
+    ("גיליון הדפסה", pyi18n.translate_template(profile_sheet._TEMPLATE)),
+):
+    lo = leftovers(html)
+    ok("תבנית %s מתורגמת במלואה" % nm, not lo, str(lo[:3]))
+
+ok("מסמך באנגלית אינו RTL",
+   'dir="rtl"' not in pyi18n.translate_template(stinknik._TEMPLATE, stinknik._TPL_EN))
+
+# הדוח כולו, כולל מה שנבנה בקוד ולא בתבנית
+report = stinknik._build_html("beni", [], 120, 5, 3, 2, postcount=300)
+ok("דוח Stinknik מלא יוצא באנגלית", not HE.search(report),
+   str(sorted(set(re.findall(r"[֐-׿]+", report)))[:3]))
+
+sheet = profile_sheet.build_sheet(
+    {"nick": {"username": "beni", "forum": "F", "notes": "n"}, "members": [],
+     "fields": [], "contacts": [], "history": [],
+     "truncated_members": 0, "truncated_history": 0}, generated="x")
+ok("גיליון ההדפסה יוצא באנגלית", not HE.search(sheet),
+   str(sorted(set(re.findall(r"[֐-׿]+", sheet)))[:3]))
+
+pyi18n.set_lang("he")
+ok("חוזרים לעברית בסוף", pyi18n.lang() == "he")
+
+# בלי זה הקטלוג לא נארז ב-EXE, והדוחות היו נשארים בעברית רק בגרסה הבנויה
+spec = io.open(os.path.join(ROOT, "TikNick.spec"), encoding="utf-8").read()
+ok("i18n_en.json נארז ב-EXE", "('i18n_en.json', '.')" in spec)
+
+ok("main מחבר את השפה לצד הפייתון",
+   'i18n.set_lang(db.get_setting("display_lang", "he"))' in
+   io.open(os.path.join(ROOT, "main.py"), encoding="utf-8").read())
+
 print()
 if fails:
     print("FAILED:", fails)

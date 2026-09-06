@@ -411,5 +411,166 @@
   "kind": "static",
   "where": "manual",
   "context": "text fragment split by an interactive inline element"
+ },
+ {
+  "he": "מוצגות {1} זהויות מתוך {2}.",
+  "en": "Showing {1} of {2} identities.",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "מוצגים {1} שינויים מתוך {2}.",
+  "en": "Showing {1} of {2} changes.",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "זהויות מקושרות",
+  "en": "Linked identities",
+  "kind": "static",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "טלפונים ומיילים נוספים",
+  "en": "Additional phones and emails",
+  "kind": "static",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "הערות אישיות 🔒",
+  "en": "Private notes 🔒",
+  "kind": "static",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "⚠️ כולל הערות אישיות ואנשי קשר סודיים",
+  "en": "⚠️ Includes private notes and confidential contacts",
+  "kind": "static",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "🚫 מורחק",
+  "en": "🚫 Banned",
+  "kind": "static",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "למעבר לפוסט 🌐",
+  "en": "Go to the post 🌐",
+  "kind": "static",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "🎉 לא נמצאו פוסטים עם דיסלייקים כלל.",
+  "en": "🎉 No posts with downvotes were found at all.",
+  "kind": "static",
+  "where": "manual",
+  "context": "report / print-sheet label built in Python"
+ },
+ {
+  "he": "ניתוח פעילות:",
+  "en": "Activity analysis:",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "📊 ניתוח פעילות:",
+  "en": "📊 Activity analysis:",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": ": הסריקה נעצרה בגלל תקלת רשת — הנתונים חלקיים.",
+  "en": ": the scan stopped because of a network error — the data is partial.",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": ": נסרקו רק הפוסטים האחרונים לפי ההגבלה שהגדרת.",
+  "en": ": only the most recent posts were scanned, per the limit you set.",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "בערך אותה כמות",
+  "en": "about the same amount",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "הפוסטים האחרונים של כל אחד, לפי ההגבלה שהגדרת.",
+  "en": "the most recent posts of each, per the limit you set.",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "כותב ארוך יותר",
+  "en": "writes longer posts",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "מקבל בממוצע יותר לייקים",
+  "en": "gets more upvotes on average",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "• נושאים משותפים בין הבולטים:",
+  "en": "• Shared topics among the top ones:",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "• פוסט של",
+  "en": "• A post by",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "• שאר ההשוואה מבוססת על",
+  "en": "• The rest of the comparison is based on",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "• שניהם פעילים במיוחד ביום",
+  "en": "• Both are especially active on",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "• שניהם פעילים בעיקר סביב",
+  "en": "• Both are mainly active around",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
+ },
+ {
+  "he": "• שעות השיא שונות:",
+  "en": "• Peak hours differ:",
+  "kind": "static",
+  "where": "manual",
+  "context": "report template phrase"
  }
 ]

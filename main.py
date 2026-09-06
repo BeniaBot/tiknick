@@ -25,6 +25,7 @@ import database as db
 import scraper
 import csv_import
 import profile_sheet
+import i18n
 
 
 # ── מצב סריקה פעילה (למעקב התקדמות מהממשק) ─────────────────────────
@@ -74,7 +75,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.19"
+APP_VERSION = "0.8.20"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -979,10 +980,15 @@ class API:
 
     def set_display_setting(self, key, value):
         db.set_display_setting(key, value)
+        # הדוחות והגיליון להדפסה נוצרים בפייתון ולא עוברים דרך ה-DOM,
+        # ולכן צד השרת חייב לדעת מה השפה הנבחרת.
+        if key == "lang":
+            i18n.set_lang(value)
         return {"ok": True}
 
     def reset_display_settings(self):
         db.reset_display_settings()
+        i18n.set_lang("he")
         return {"ok": True}
 
     def open_url(self, url):
@@ -2294,6 +2300,7 @@ if __name__ == "__main__":
         db.DB_PATH = os.path.join(_DATA_DIR, "tiknick.db")
         try:
             db.init_db()
+            i18n.set_lang(db.get_setting("display_lang", "he"))
         except Exception as e:
             logging.exception("init_db failed")
             _msgbox("לא ניתן לפתוח את מאגר הנתונים.\n\n"
