@@ -76,7 +76,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.8.21"
+APP_VERSION = "0.8.22"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -193,6 +193,25 @@ sys.excepthook = _excepthook
 
 logging.info("Tik-Nick %s starting | data_dir=%s | frozen=%s",
              APP_VERSION, _DATA_DIR, getattr(sys, "frozen", False))
+
+def _update_error_text(e):
+    """
+    הודעה שאומרת מה קרה. "לא ניתן לבדוק עדכונים כרגע" נכון תמיד וחסר תועלת
+    תמיד — המשתמש לא יודע אם הוא מנותק, חסום, או שהשרת עמוס.
+    """
+    import urllib.error
+    if isinstance(e, urllib.error.HTTPError):
+        if e.code == 403 and "rate limit" in str(getattr(e, "reason", "")).lower():
+            return ("GitHub חוסם זמנית בדיקות מרובות מאותו חיבור (מגבלת קצב). "
+                    "נסה שוב בעוד כשעה — או הורד ידנית מדף הגרסאות.")
+        if e.code == 404:
+            return "לא נמצאה גרסה משוחררת בכתובת המעודכנת."
+        return "השרת החזיר שגיאה %s." % e.code
+    if isinstance(e, urllib.error.URLError):
+        return ("אין חיבור לאינטרנט, או שהגישה ל-GitHub חסומה ברשת שלך. "
+                "אם הרשת דורשת פרוקסי — אפשר להגדיר אותו ב\"סנכרון לאינטרנט\".")
+    return "לא ניתן לבדוק עדכונים כרגע: %s" % e
+
 
 class API:
     """כל method כאן זמינה ב-JS כ: window.pywebview.api.method_name()"""
@@ -1555,19 +1574,54 @@ del "%~f0"
             logging.exception("apply_update failed")
             return {"ok": False, "error": str(e)}
 
+    def _fallback_latest(self):
+        """
+        גרסה אחרונה בלי ה-API: קוראים את changelog.json מ-raw (אותו קובץ
+        שהתקציר כבר נשען עליו) ובונים את כתובות ההורדה לפי המוסכמה הקבועה
+        של השחרורים. raw.githubusercontent.com אינו תחת אותה תקרת בקשות.
+        """
+        import urllib.request
+        import json as _json
+        url = (f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/changelog.json")
+        req = urllib.request.Request(url, headers={"User-Agent": "TikNick-UpdateCheck"})
+        with net.urlopen(req, timeout=8) as resp:
+            log = _json.loads(resp.read().decode("utf-8"))
+        ver = ((log.get("versions") or [{}])[0].get("v") or "").strip()
+        if not ver:
+            raise ValueError("changelog.json without a version")
+        base = f"https://github.com/{GITHUB_REPO}/releases/download/v{ver}"
+        return {
+            "tag_name": "v" + ver,
+            "html_url": f"https://github.com/{GITHUB_REPO}/releases/tag/v{ver}",
+            "body": "",
+            "assets": [{"name": "TikNick-Setup.exe",
+                        "browser_download_url": base + "/TikNick-Setup.exe"},
+                       {"name": "TikNick.exe",
+                        "browser_download_url": base + "/TikNick.exe"}],
+        }
+
     def check_for_updates(self):
         """בודק אם קיימת גרסה חדשה יותר ב-GitHub Releases."""
         import urllib.request
         import json as _json
         api_url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        why = ""
         try:
             req = urllib.request.Request(
                 api_url, headers={"User-Agent": "TikNick-UpdateCheck"})
             with net.urlopen(req, timeout=8) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
         except Exception as e:
-            logging.info("Update check failed: %s", e)
-            return {"ok": False, "error": "לא ניתן לבדוק עדכונים כרגע"}
+            # ה-API נפל — עדיין אפשר לדעת מה הגרסה האחרונה בלעדיו.
+            logging.info("Update check via API failed: %s", e)
+            why = _update_error_text(e)
+            try:
+                data = self._fallback_latest()
+                logging.info("Update check fell back to raw changelog.json")
+                why = ""
+            except Exception as e2:
+                logging.info("Update fallback failed too: %s", e2)
+                return {"ok": False, "error": why or _update_error_text(e2)}
 
         tag = (data.get("tag_name") or "").lstrip("vV").strip()
         latest = tag or "0.0.0"

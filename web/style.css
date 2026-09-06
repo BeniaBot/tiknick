@@ -189,6 +189,10 @@
 [data-density="cozy"] .nav-btn{padding:9px 13px;font-size:14.5px}
 [data-density="cozy"] .nav-btn .icon{font-size:17px;width:22px}
 
+  .nav-group{margin-bottom:2px}
+  .nav-label{font-size:9px;padding:1px 12px;letter-spacing:.08em}
+}
+
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
 html,body{
@@ -1259,3 +1263,17 @@ tbody td, .card-row .cv, #lookup-profile, .tooltip,
 [data-lang="en"] .toggle input:checked+.toggle-slider::before{transform:translateX(19px)}
 /* הבאנרים הצפים יושבים בצד ההפוך מהסרגל — והסרגל עובר צד */
 [data-lang="en"] #bg-tasks{left:auto!important;right:16px!important}
+
+/* התפריט נמדד מול הגובה *הזמין*, וזה לא גובה החלון: קנה מידה של Windows
+   (125%/150%) מקטין את ה-viewport ב-CSS, ואז מה שנכנס במסך אחד מתחיל לגלול.
+   במקום להצר את התפריט לכולם — הוא מתהדק לבד כשאין מקום. */
+@media (max-height: 780px) {
+  .nav-btn{padding:4px 13px;font-size:13.5px}
+  .nav-btn .icon{font-size:14px;width:19px}
+  .nav-group{margin-bottom:4px}
+  .nav-label{font-size:9.5px;padding:2px 12px}
+  .sidebar-logo{padding:14px 20px 11px;font-size:18px}
+}
+@media (max-height: 640px) {
+  .nav-btn{padding:2px 13px;font-size:13px}
+  .nav-btn .icon{font-size:13px;width:18px}

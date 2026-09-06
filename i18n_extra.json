@@ -747,5 +747,89 @@
   "kind": "static",
   "where": "manual",
   "context": "0.8.21 UI"
+ },
+ {
+  "he": "🔎 חיפוש",
+  "en": "🔎 Search",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "חיפוש מאוחד, מפת הזהויות והצעות לקישור",
+  "en": "Unified search, the identity map and link suggestions",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "שם משתמש זהה",
+  "en": "Same username",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "תוכנה זו משוחררת ברישיון",
+  "en": "This software is released under the",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "✓ מותר להשתמש, להעתיק, לשנות, להפיץ ואף למכור — גם מסחרית",
+  "en": "✓ You may use, copy, modify, distribute and even sell it — commercially too",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "✓ צריך רק לשמר את הודעת הרישיון וזכויות היוצרים",
+  "en": "✓ You only need to keep the license and copyright notice",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "✓ הנתונים שלך שייכים לך ונשמרים מקומית בלבד",
+  "en": "✓ Your data belongs to you and is stored locally only",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "📄 נוסח הרישיון המלא",
+  "en": "📄 Full license text",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "GitHub חוסם זמנית בדיקות מרובות מאותו חיבור (מגבלת קצב). נסה שוב בעוד כשעה — או הורד ידנית מדף הגרסאות.",
+  "en": "GitHub is temporarily blocking repeated checks from the same connection (rate limit). Try again in about an hour — or download manually from the releases page.",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "לא נמצאה גרסה משוחררת בכתובת המעודכנת.",
+  "en": "No released version was found at the current address.",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "אין חיבור לאינטרנט, או שהגישה ל-GitHub חסומה ברשת שלך. אם הרשת דורשת פרוקסי — אפשר להגדיר אותו ב\"סנכרון לאינטרנט\".",
+  "en": "There is no internet connection, or access to GitHub is blocked on your network. If the network needs a proxy, you can set one in \"Sync to internet\".",
+  "kind": "static",
+  "where": "manual",
+  "context": "0.8.22 UI"
+ },
+ {
+  "he": "השרת החזיר שגיאה {1}.",
+  "en": "The server returned error {1}.",
+  "kind": "pattern",
+  "where": "manual",
+  "context": "0.8.22 UI"
  }
 ]

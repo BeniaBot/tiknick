@@ -2698,7 +2698,16 @@ def suggest_identities(limit=60):
         find = _identity_groups_map(conn)
         dismissed = {(a, b) for a, b in conn.execute(
             "SELECT nick_id_a, nick_id_b FROM identity_dismissed")}
+        # שם המשתמש ראשון, ובכוונה: בפורומים חרדיים אדם נוטה לקחת את אותו
+        # ניק בכל מקום, וזה הסימן הזמין ביותר — טלפון ומייל כמעט אף פעם לא
+        # מגיעים מסריקה, ושם אמיתי מוקלד ידנית. בלעדיו הדיאלוג נראה ריק גם
+        # כשיש עשרות התאמות ברורות.
+        # ההשוואה מנוטרלת מרווחים, קווים תחתונים ומקפים, כי "בני_מין",
+        # "בני מין" ו-"בני-מין" הם אותו ניק בפורומים שונים.
+        uname_norm = ("lower(replace(replace(replace(trim(username),' ',''),"
+                      "'_',''),'-',''))")
         checks = [
+            ("username", "שם משתמש זהה", uname_norm),
             ("phone", "טלפון זהה", _phone_norm_sql("phone")),
             ("email", "מייל זהה", "lower(trim(email))"),
             ("real_name", "שם אמיתי זהה", "trim(real_name)"),
@@ -2725,8 +2734,11 @@ def suggest_identities(limit=60):
                 members = [dict(m) for m in conn.execute(
                     f"SELECT id, username, forum, real_name, full_name, phone, email FROM nicks "
                     f"WHERE id IN ({','.join('?' * len(ids))})", ids)]
+                # לשם משתמש מציגים את הכתיב האמיתי ולא את הצורה המנוטרלת
+                shown = (members[0]["username"] if field == "username" and members
+                         else str(r["k"]))
                 out.append({"reason": reason, "field": field,
-                            "value": str(r["k"]), "members": members})
+                            "value": shown, "members": members})
                 if len(out) >= limit:
                     return out
     return out

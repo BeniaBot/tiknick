@@ -619,16 +619,22 @@ async function openAbout() {
 
       <div class="about-pane" id="about-pane-license" style="display:none">
         <p class="about-text">
-          תוכנה זו ניתנת <b>לשימוש אישי בלבד</b>.
+          תוכנה זו משוחררת ברישיון <b>MIT</b>.
         </p>
         <ul class="about-license-list">
-          <li>✓ מותר להשתמש, להעתיק ולגבות לצורך אישי</li>
+          <li>✓ מותר להשתמש, להעתיק, לשנות, להפיץ ואף למכור — גם מסחרית</li>
+          <li>✓ צריך רק לשמר את הודעת הרישיון וזכויות היוצרים</li>
           <li>✓ הנתונים שלך שייכים לך ונשמרים מקומית בלבד</li>
-          <li>✗ אין להפיץ מחדש למטרות מסחריות ללא רשות</li>
         </ul>
         <p class="about-license-fine">
           התוכנה מסופקת "כמות שהיא" (AS IS) ללא אחריות מכל סוג.
+          נוסח הרישיון המלא בקובץ LICENSE שבמאגר.
         </p>
+        <div style="text-align:center;margin-top:10px">
+          <button class="btn btn-sm btn-ghost"
+                  onclick="api('open_url','https://github.com/${esc(repo)}/blob/main/LICENSE')">
+            📄 נוסח הרישיון המלא</button>
+        </div>
       </div>
 
       <!-- "פותח על ידי" — תמיד מופיע למטה -->
@@ -2434,21 +2440,39 @@ function openIdentityDialog(nickId) {
 // ══ USER LOOKUP — תצוגת משתמש מאוחדת (כל הזהויות המקושרות) ═══════════════
 let _lookupTimer = null;
 
-function openUserLookup() {
+// שלוש לשוניות באותו חלון: חיפוש אדם, מפת הזהויות, וההצעות לקישור. כולן
+// שאלה אחת — מי זה מי — ולכן אין סיבה שיהיו שלושה חלונות (ושתי כרטיסיות
+// בתפריט). המפה וההצעות נטענות רק כשעוברים אליהן: שתיהן שאילתות יקרות.
+function openUserLookup(tab) {
   openModal('🔎 תצוגת משתמש', `
-    <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
-      הקלד שם משתמש או שם אמיתי — התצוגה תרכז את כל המידע על אותו אדם, כולל מכל הזהויות המקושרות אליו בפורומים השונים.
-    </p>
-    <div class="search-wrap" style="max-width:none;margin-bottom:10px">
-      <span class="search-icon">🔍</span>
-      <input type="text" id="lookup-input" placeholder="שם משתמש / שם אמיתי..." autocomplete="off"
-             oninput="onLookupInput(this.value)">
+    <div class="tab-bar" style="display:flex;gap:6px;margin-bottom:14px;
+         border-bottom:1px solid var(--border-soft);flex-wrap:wrap">
+      <button class="tab-btn active" id="idtab-look" onclick="switchIdentityTab('look')">🔎 חיפוש</button>
+      <button class="tab-btn" id="idtab-map" onclick="switchIdentityTab('map')">🗺️ מפת זהויות</button>
+      <button class="tab-btn" id="idtab-sug" onclick="switchIdentityTab('sug')">🔗 הצעות לקישור</button>
     </div>
-    <div id="lookup-results" style="max-height:150px;overflow-y:auto;margin-bottom:6px"></div>
-    <div id="lookup-profile"></div>
+
+    <div id="look-pane">
+      <p style="color:var(--subtext);font-size:12.5px;margin-bottom:10px">
+        הקלד שם משתמש או שם אמיתי — התצוגה תרכז את כל המידע על אותו אדם, כולל מכל הזהויות המקושרות אליו בפורומים השונים.
+      </p>
+      <div class="search-wrap" style="max-width:none;margin-bottom:10px">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="lookup-input" placeholder="שם משתמש / שם אמיתי..." autocomplete="off"
+               oninput="onLookupInput(this.value)">
+      </div>
+      <div id="lookup-results" style="max-height:150px;overflow-y:auto;margin-bottom:6px"></div>
+      <div id="lookup-profile"></div>
+    </div>
+    <div id="idm-pane" style="display:none"></div>
+    <div id="idsug-pane" style="display:none"></div>
   `, [
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
-  ], 'modal-lg');
+  ], 'modal-lg', { id: 'user-lookup' });
+  if (tab && tab !== 'look') {
+    switchIdentityTab(tab);
+    return;
+  }
   setTimeout(() => {
     document.getElementById('lookup-input')?.focus();
     const box = document.getElementById('lookup-results');
@@ -3359,7 +3383,7 @@ async function loadIdentitySuggestions() {
   pane.dataset.loaded = '1';
   pane.innerHTML = '<div style="padding:24px;text-align:center;color:var(--subtext)">מחפש התאמות…</div>';
   const r = await api('suggest_identities', 60);
-  if (_currentModalId !== 'identity-map') return;
+  if (_currentModalId !== 'user-lookup') return;
   const box = document.getElementById('idsug-pane');
   if (!box) return;
   if (!r?.ok) {
@@ -3371,21 +3395,22 @@ async function loadIdentitySuggestions() {
 }
 
 function switchIdentityTab(tab) {
-  const map = document.getElementById('idm-pane');
-  const sug = document.getElementById('idsug-pane');
-  if (!map || !sug) return;
-  const isSug = tab === 'sug';
-  map.style.display = isSug ? 'none' : '';
-  sug.style.display = isSug ? '' : 'none';
-  document.getElementById('idtab-map')?.classList.toggle('active', !isSug);
-  document.getElementById('idtab-sug')?.classList.toggle('active', isSug);
-  if (isSug) loadIdentitySuggestions();
+  const panes = { look: 'look-pane', map: 'idm-pane', sug: 'idsug-pane' };
+  if (!document.getElementById(panes[tab] || '')) return;
+  for (const [key, id] of Object.entries(panes)) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = key === tab ? '' : 'none';
+    document.getElementById('idtab-' + key)?.classList.toggle('active', key === tab);
+  }
+  if (tab === 'map') loadIdentityMap();
+  if (tab === 'sug') loadIdentitySuggestions();
+  if (tab === 'look') setTimeout(() => document.getElementById('lookup-input')?.focus(), 40);
 }
 
 let _idSuggestions = [];
 
 function renderIdentitySuggestions() {
-  if (_currentModalId !== 'identity-map') return;
+  if (_currentModalId !== 'user-lookup') return;
   const body = document.getElementById('idsug-pane');
   if (!body) return;
   if (!_idSuggestions.length) {
@@ -3626,21 +3651,28 @@ async function refreshPrintPreview(nickId) {
 // ══ מפת זהויות ═══════════════════════════════════════════════════════
 let _idMap = null;
 
-async function openIdentityMap(tab) {
-  setStatus('טוען מפת זהויות…');
+// נשארת ככניסה חוקית (קיצור, קוד ישן) — ופותחת את הלשונית בתוך תצוגת המשתמש
+function openIdentityMap(tab) {
+  openUserLookup(tab || 'map');
+}
+
+// טוענת את המפה לתוך הלשונית שלה. פעם אחת לכל פתיחה של החלון.
+async function loadIdentityMap() {
+  const pane = document.getElementById('idm-pane');
+  if (!pane || pane.dataset.loaded === '1') return;
+  pane.dataset.loaded = '1';
+  pane.innerHTML = '<div style="padding:24px;text-align:center;color:var(--subtext)">טוען…</div>';
   const m = await api('get_identity_map');
-  setStatus('');
-  if (!m?.ok) { toast('שגיאה: ' + (m?.error || ''), 'error'); return; }
+  if (_currentModalId !== 'user-lookup') return;
+  const box = document.getElementById('idm-pane');
+  if (!box) return;
+  if (!m?.ok) {
+    box.innerHTML = `<div style="padding:20px;color:var(--danger)">${esc(m?.error || 'שגיאה')}</div>`;
+    return;
+  }
   _idMap = m;
   const forums = [...new Set(m.groups.flatMap(g => g.forums))].sort(HE_COLLATOR.compare);
-  openModal('🗺️ זהויות', `
-    <div class="tab-bar" style="display:flex;gap:6px;margin-bottom:14px;
-         border-bottom:1px solid var(--border-soft)">
-      <button class="tab-btn active" id="idtab-map" onclick="switchIdentityTab('map')">🗺️ מפת זהויות</button>
-      <button class="tab-btn" id="idtab-sug" onclick="switchIdentityTab('sug')">🔗 הצעות לקישור</button>
-    </div>
-    <div id="idsug-pane" style="display:none"></div>
-    <div id="idm-pane">
+  box.innerHTML = `
     <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--subtext);
                 margin-bottom:10px">
       <span><b style="color:var(--accent-2)">${m.total_groups}</b> קבוצות</span>
@@ -3669,12 +3701,8 @@ async function openIdentityMap(tab) {
       <label style="display:flex;gap:5px;align-items:center;font-size:12px;cursor:pointer">
         <input type="checkbox" id="idm-conf" onchange="renderIdentityMap()"> רק עם סתירה</label>
     </div>
-    <div id="idm-body"></div>
-    </div>
-  `, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg',
-     { id: 'identity-map' });
+    <div id="idm-body"></div>`;
   renderIdentityMap();
-  if (tab === 'sug') switchIdentityTab('sug');
 }
 
 // גליף קטן: נקודה לכל חבר על מעגל + מיתרים. SVG בעבודת יד — אין ספרייה בחבילה.
@@ -3775,7 +3803,7 @@ async function idmProfile(gi) {
   if (!g || !host) return;
   if (host.innerHTML) { host.innerHTML = ''; return; }
   const p = await api('get_merged_profile', g.members[0].id);
-  if (_currentModalId !== 'identity-map') return;   // המשתמש כבר החליף חלון
+  if (_currentModalId !== 'user-lookup') return;   // המשתמש כבר החליף חלון
   host.innerHTML = `<div style="margin-top:6px;padding:8px;background:var(--card2);
        border-radius:8px">${p ? renderMergedProfile(p) : 'לא נמצא'}</div>`;
 }
