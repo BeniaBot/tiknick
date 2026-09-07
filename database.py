@@ -716,10 +716,18 @@ def set_forum_io_flags(mapping):
             "INSERT OR REPLACE INTO settings (key, value) VALUES (?,?)",
             [(f"forumio_{name}", "1" if inc else "0") for name, inc in (mapping or {}).items()])
 
+# פורום ושם משתמש אינם "תוכן שאפשר לא לסנכרן" — הם **מפתח הזיהוי** של
+# הרשומה. בלעדיהם import_data מקבל username ריק ומדלג על הכול, או forum ריק
+# ומכניס 90 אלף ניקים לפורום שאינו קיים — בזמן ש-counts בקובץ מדווח מספר מלא
+# והייצוא נראה מוצלח.
+_STRUCTURAL_FIELDS = ("forum", "username")
+
+
 def get_exportable_fields():
     """מחזיר רשימת שדות שמסונכרנים לפי ההגדרות הנוכחיות"""
     sync = get_sync_settings()
-    return [k for k, _, _ in ALL_NICK_FIELDS if sync.get(k, True)]
+    return [k for k, _, _ in ALL_NICK_FIELDS
+            if k in _STRUCTURAL_FIELDS or sync.get(k, True)]
 
 # ── פורומים ─────────────────────────────────────────────────────────
 def get_known_forums():
@@ -1485,8 +1493,11 @@ def restore_trash(batch_id=None, trash_ids=None):
             n = s["nick"]
             if conn.execute("SELECT 1 FROM nicks WHERE forum=? AND username=?",
                             (n["forum"], n["username"])).fetchone():
+                # **לא** נכנס ל-handled: handled הוא מה שנמחק מ-trash_nicks
+                # בסוף, ולכן ניק שדולג היה מאבד את הצילום שלו לתמיד — בזמן
+                # שהממשק אומר "דולג, כבר קיים", כאילו הוא עדיין שמור.
+                # נשאר בסל עד שהמשתמש יפנה את מי שתפס את השם.
                 skipped += 1
-                handled.append(r["id"])
                 continue
             if n["forum"] not in forums:
                 conn.execute("INSERT OR IGNORE INTO forums (name, color, url) VALUES (?,?,'')",
@@ -1543,7 +1554,8 @@ def restore_trash(batch_id=None, trash_ids=None):
                                  (min(a, b), max(a, b)))
         for chunk in _chunks(handled, 400):
             conn.execute(f"DELETE FROM trash_nicks WHERE id IN ({','.join('?' * len(chunk))})", chunk)
-    return {"restored": restored, "skipped": skipped}
+    return {"restored": restored, "skipped": skipped,
+            "still_in_trash": skipped}
 
 def list_trash(limit=200):
     """אצוות מחיקה בסל, מהחדשה לישנה: batch_id, deleted_at, count, names (דוגמית)."""
@@ -3496,6 +3508,12 @@ def preview_import(data, forum_mapping=None, include_contacts=True,
     """
     mapping = forum_mapping or {}
     exported_fields = data.get("exported_fields", get_exportable_fields())
+    # קובץ שנערך ידנית (או שנוצר בגרסה שבה אפשר היה לכבות את המפתח)
+    # מגיע בלי username — וכל רשומה בו הייתה מדולגת בשקט תחת
+    # "בלי שם משתמש", כלומר ייבוא שמדווח 0 בלי להסביר למה.
+    if "username" not in exported_fields:
+        raise ValueError("הקובץ אינו כולל שם משתמש לכל רשומה — "
+                         "אי אפשר לייבא אותו")
     sourced_fields = [f for f in exported_fields
                       if f not in _NON_SOURCED and f in _NICK_FIELDS]
     io_flags = get_forum_io_flags()
@@ -3645,6 +3663,12 @@ def import_data(data, source_info="ייבוא חיצוני", forum_mapping=None,
     # exported_fields מגיע מהקובץ. בלי הצלבה מול הרשימה הלבנה, קובץ ערוך ידנית
     # מזריק שורות field_values בשמות שדות שלא קיימים — הן לא ישפיעו על שום ניק
     # (ההכרעה מסננת ל-_NICK_FIELDS) אבל ינפחו את המאגר בלי שאפשר לראות אותן.
+    # קובץ שנערך ידנית (או שנוצר בגרסה שבה אפשר היה לכבות את המפתח)
+    # מגיע בלי username — וכל רשומה בו הייתה מדולגת בשקט תחת
+    # "בלי שם משתמש", כלומר ייבוא שמדווח 0 בלי להסביר למה.
+    if "username" not in exported_fields:
+        raise ValueError("הקובץ אינו כולל שם משתמש לכל רשומה — "
+                         "אי אפשר לייבא אותו")
     sourced_fields = [f for f in exported_fields
                       if f not in _NON_SOURCED and f in _NICK_FIELDS]
 

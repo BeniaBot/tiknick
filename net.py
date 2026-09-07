@@ -15,6 +15,7 @@ net.py — יציאה אחת לאינטרנט לכל התוכנה.
 ההגדרה נשמרת ב-settings ונטענת בעליית התוכנה, לפני הבקשה היוצאת הראשונה.
 הגדרה שמורה פגומה **לא משתקת את הרשת**: נופלים ל-system ורושמים ליומן.
 """
+import logging
 import socket
 import threading
 import time
@@ -84,19 +85,60 @@ def describe(mode, url=""):
     return "לפי הגדרות המערכת"
 
 
+class _StripCookieOnCrossOrigin(urllib.request.HTTPRedirectHandler):
+    """
+    הכלל "עוגייה של פורום אחד לא נשלחת לפורום אחר" נאכף בכל מסלולי התוכנה —
+    ונשבר בהפניה. `HTTPRedirectHandler.redirect_request` מעתיק **כל** כותרת
+    (חוץ מ-content-length/content-type) אל הבקשה החדשה, ולכן 302 מפורום A
+    לכל מארח אחר נושא איתו את express.sid כמו שהוא. זה לא תרחיש תיאורטי:
+    אלה התקנות קטנות שמתנדבים מתחזקים, ופורום שעבר דומיין עונה בהפניה.
+
+    כאן ההפניה עצמה נשמרת (היא לגיטימית), אבל הכותרת יורדת ברגע שה-origin
+    משתנה. שינוי סכימה בלבד (http→https) על אותו מארח ופורט אינו חציית origin.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+        if _same_origin(req.get_full_url(), newurl):
+            return new
+        for h in list(new.headers):
+            if h.lower() == "cookie":
+                del new.headers[h]
+        for h in list(getattr(new, "unredirected_hdrs", {})):
+            if h.lower() == "cookie":
+                del new.unredirected_hdrs[h]
+        logging.info("Dropped Cookie header on cross-origin redirect to %s",
+                     urllib.parse.urlsplit(newurl).netloc)
+        return new
+
+
+def _same_origin(a, b):
+    pa, pb = urllib.parse.urlsplit(a), urllib.parse.urlsplit(b)
+    if (pa.hostname or "").lower() != (pb.hostname or "").lower():
+        return False
+    dflt = {"http": 80, "https": 443}
+    return (pa.port or dflt.get(pa.scheme, 0)) == (pb.port or dflt.get(pb.scheme, 0))
+
+
 def build_opener(mode, url=""):
     """opener של urllib, או None ל-system (שם urlopen הרגיל כבר נכון)."""
     mode = (mode or MODE_SYSTEM).strip().lower()
+    # מדיניות ההפניה חלה **בכל** מצב, כולל system — קודם system החזיר None
+    # ונפל ל-urlopen הרגיל, כלומר דווקא ברירת המחדל הייתה זו שדלפה.
     if mode == MODE_SYSTEM:
-        return None
+        return urllib.request.build_opener(_StripCookieOnCrossOrigin())
     if mode == MODE_OFF:
         # ProxyHandler ריק = התעלמות מפרוקסי המערכת ומהמשתנים
-        return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        return urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                           _StripCookieOnCrossOrigin())
     if mode != MODE_MANUAL:
         raise ProxyError("מצב רשת לא מוכר: %s" % mode)
     u = normalize_url(url)
     return urllib.request.build_opener(
-        urllib.request.ProxyHandler({"http": u, "https": u}))
+        urllib.request.ProxyHandler({"http": u, "https": u}),
+        _StripCookieOnCrossOrigin())
 
 
 def apply(mode, url=""):
@@ -130,9 +172,9 @@ def urlopen(url, data=None, timeout=_DEFAULT_TIMEOUT):
     """כמו urllib.request.urlopen — אותן שגיאות בדיוק, רק דרך ההגדרה שנבחרה."""
     with _lock:
         opener = _state["opener"]
-    if opener:
-        return opener.open(url, data, timeout)
-    return urllib.request.urlopen(url, data, timeout)
+    if opener is None:                 # לפני apply() בעליית התוכנה
+        opener = build_opener(MODE_SYSTEM)
+    return opener.open(url, data, timeout)
 
 
 def test_connection(mode, url="", target=None, timeout=12):

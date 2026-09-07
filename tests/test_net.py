@@ -66,7 +66,14 @@ def proxies(opener):
             if hasattr(h, "proxies")]
 
 
-ok("system לא בונה opener", net.build_opener("system") is None)
+# מ-0.9: גם system מקבל opener — כדי שמדיניות ההפניה (השמטת Cookie במעבר
+# ל-origin אחר) תחול גם על ברירת המחדל. קודם היא הייתה חלה רק על off/manual,
+# כלומר דווקא המצב שבו כולם נמצאים היה זה שדלף.
+ok("system בונה opener עם מדיניות הפניה",
+   any(isinstance(h, net._StripCookieOnCrossOrigin)
+       for h in net.build_opener("system").handlers))
+ok("system בלי ProxyHandler מפורש",
+   not proxies(net.build_opener("system")))
 # ProxyHandler ריק אינו נכנס בכלל לרשימת ה-handlers (אין לו proxy פעיל אחד),
 # ובמקביל הוא *מוציא* את ProxyHandler ברירת המחדל — וזו בדיוק המשמעות של
 # "ישיר": opener בלי שום טיפול בפרוקסי.
@@ -112,7 +119,10 @@ class _FakeOpener:
 net._state["opener"] = _FakeOpener()
 ok("urlopen משתמש ב-opener", net.urlopen("http://example.invalid/") == "through-opener")
 net.apply("system")
-ok("system חוזר ל-urlopen הרגיל", net._state["opener"] is None)
+ok("system מחזיק opener משלו", net._state["opener"] is not None)
+ok("ומדיניות ההפניה בתוכו",
+   any(isinstance(h, net._StripCookieOnCrossOrigin)
+       for h in net._state["opener"].handlers))
 
 ok("בדיקה בלי יעד מחזירה שגיאה ולא קורסת",
    net.test_connection("system", "", target="")["ok"] is False)

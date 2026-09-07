@@ -80,10 +80,29 @@ def _looks_like_challenge(text):
     return any(m in t for m in _CHALLENGE_MARKS)
 
 
+def _cookie_platform_for(url):
+    """
+    ה-API של NodeBB יושב תחת /api/ ושל Discourse לא. זה מספיק כדי לבחור את
+    שם העוגייה הנכון בלי לגרור את הפלטפורמה דרך כל מסלול קריאה.
+    """
+    try:
+        return "nodebb" if urllib.parse.urlsplit(url).path.startswith("/api/") \
+            else "discourse"
+    except Exception:
+        return "nodebb"
+
+
 def _fetch_json(url, cookie=None):
     """בקשת GET אחת שמחזירה JSON, עם ניסיונות חוזרים וכיבוד Retry-After.
     cookie — מחרוזת עוגייה אופציונלית (למשל 'express.sid=...') לפורומים
     שדורשים התחברות כדי לצפות ברשימת המשתמשים."""
+    # הנרמול כאן ולא בקוראים: check_forum, detect_platform ו-
+    # scrape_single_user לא נרמלו כלל, ולכן ערך שהמשתמש הדביק לפי ההדרכה
+    # ("s%3A...") נשלח בלי "express.sid=" — כותרת Cookie לא חוקית. הפורום
+    # התייחס אלינו כאורח, "בדוק פורום" ענה "דורש התחברות" על עוגייה תקינה,
+    # ו"סנכרן נבחרים" החזיר "לא נמצא" לכל ניק. normalize_cookie אידמפוטנטי,
+    # ולכן scrape_forum שכבר נרמל אינו נפגע.
+    cookie = normalize_cookie(cookie, _cookie_platform_for(url)) if cookie else None
     last_err = None
     for attempt in range(1, MAX_RETRIES + 1):
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
@@ -120,6 +139,14 @@ def _fetch_json(url, cookie=None):
             time.sleep(attempt * 2)
         except urllib.error.URLError as e:
             last_err = ScrapeError(f"בעיית רשת: {e.reason}")
+            time.sleep(attempt * 2)
+        except (TimeoutError, OSError) as e:
+            # תקלה בזמן **קריאת גוף** התשובה אינה URLError אלא OSError גולמי.
+            # קודם היא חמקה מהריטריי וממניין failed_pages כאחת, יצאה מ-
+            # scrape_forum, והפורום כולו סומן כמדולג — עם שורה ביומן הסריקות
+            # שאומרת אפס שינויים על סריקה שדווקא כן הספיקה לעדכן.
+            # (URLError הוא תת-מחלקה של OSError, ולכן הוא נתפס למעלה.)
+            last_err = ScrapeError(f"החיבור נקטע באמצע קבלת התשובה: {e}")
             time.sleep(attempt * 2)
         except json.JSONDecodeError:
             # דף אתגר של Cloudflare חוזר כ-HTML עם קוד 200, וההודעה הקודמת

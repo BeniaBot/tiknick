@@ -1326,6 +1326,38 @@ class API:
                     _update_state["downloaded"] = got
                     _update_state["total"] = total
 
+            # ── ההורדה חייבת להיות שלמה ────────────────────────────────
+            # http.client.HTTPResponse.read(amt) **אינו** מרים IncompleteRead
+            # כשהסוקט נסגר לפני שה-Content-Length הושלם — הוא פשוט מחזיר b"".
+            # כלומר חיבור שנפל באמצע ייצר קובץ חלקי, והפונקציה החזירה ok.
+            # משם: _looks_like_inno_setup עובר (EXE חלקי עדיין מתחיל ב-MZ),
+            # ה-batch משנה את שם ה-EXE העובד ל-.old, מכניס את החלקי, ומוחק
+            # את הישן — כלומר התוכנה נהרסת בגלל ניתוק רשת.
+            if total and got != total:
+                try:
+                    os.remove(new_path)
+                except OSError:
+                    pass
+                logging.error("Truncated update download: %s of %s bytes", got, total)
+                return {"ok": False,
+                        "error": "ההורדה נקטעה באמצע (%s מתוך %s בתים). "
+                                 "הקובץ נמחק ולא הותקן — אפשר לנסות שוב."
+                                 % ("{:,}".format(got), "{:,}".format(total))}
+            # חתימת EXE של Windows. זול, וחוסם קובץ שאינו הרצה בכלל
+            # (דף שגיאה של פרוקסי, למשל, שהוגש עם קוד 200).
+            try:
+                with open(new_path, "rb") as _f:
+                    if _f.read(2) != b"MZ":
+                        raise ValueError("not a Windows executable")
+            except Exception:
+                try:
+                    os.remove(new_path)
+                except OSError:
+                    pass
+                logging.error("Downloaded update is not an EXE: %s", new_path)
+                return {"ok": False,
+                        "error": "הקובץ שהתקבל אינו קובץ הרצה של Windows — העדכון בוטל"}
+
             # שער בטיחות: ודא שהקובץ שהורד תואם לסוג ההתקנה (לפי תוכן, לא לפי שם)
             is_setup = _looks_like_inno_setup(new_path)
             want_setup = _install_type() == "installer"
@@ -1857,8 +1889,14 @@ del "%~f0"
     def get_sync_settings(self):
         return db.get_sync_settings()
     def get_all_nick_fields(self):
+        """
+        לבורר "הגדרות סנכרון". פורום ושם משתמש **אינם** ברשימה: הם מפתח
+        הזיהוי של הרשומה, וכיבוי שלהם ייצר קובץ ייצוא שנראה תקין ומייבא
+        אפס ניקים. ראו _STRUCTURAL_FIELDS ב-database.py.
+        """
         return [{"key": k, "label": l, "default": d}
-                for k, l, d in db.ALL_NICK_FIELDS]
+                for k, l, d in db.ALL_NICK_FIELDS
+                if k not in db._STRUCTURAL_FIELDS]
 
     def set_sync_setting(self, field_key, synced):
         db.set_sync_setting(field_key, bool(synced))
