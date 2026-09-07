@@ -167,11 +167,15 @@ _TPL_EN = {
     "הקרובים אליו": "Closest to them",
     " — הוא פונה אליהם, והם מחזירים בלייקים":
         " — they reach out, and get likes back",
-    "פונה אליהם והם שותקים": "They reach out, the others stay silent",
-    " — מעולם לא קיבל מהם לייק": " — never once received a like from them",
+    "פונה אליהם, ובפוסטים שנסרקו לא הגיע מהם לייק":
+        "They reach out, and in the scanned posts no like came back",
     "מעריצים שקטים": "Silent admirers",
-    " — עושים לו לייקים, והוא לא פונה אליהם":
-        " — they give likes, and never get addressed",
+    " — עושים לו לייקים, ולא נמצא שפנה אליהם":
+        " — they give likes, and no approach was found",
+    "⚠️ ספירת הלייקים הייתה חלקית, ולכן לא מוצגת קבוצת \"לא הגיע מהם לייק\"":
+        "⚠️ The like counts were incomplete, so the \"no like came back\" group is hidden",
+    "הכול מתוך הפוסטים שנסרקו בלבד. אזכור נספר כשהוא מופיע בטקסט (@שם או ציטוט) — תגובה בלי אזכור מפורש אינה נראית לניתוח.":
+        "All of this covers the scanned posts only. A mention counts when it appears in the text (@name or a quote) — a reply with no explicit mention is invisible to the analysis.",
     " פניות · ": " approaches · ",
     " פניות": " approaches",
     " לייקים": " likes",
@@ -682,8 +686,8 @@ const monthCounts={};data.forEach(d=>monthCounts[d.month]=(monthCounts[d.month]|
 new Chart(document.getElementById('chart-monthly'),{type:'line',data:{labels:Object.keys(monthCounts),datasets:[{label:'פוסטים',data:Object.values(monthCounts),borderColor:'#38bdf8',backgroundColor:'rgba(56,189,248,.1)',fill:true,tension:.4}]},options:{responsive:true,maintainAspectRatio:false}});
 const hourlyData=Array(24).fill(0);data.forEach(d=>hourlyData[d.hour]++);
 new Chart(document.getElementById('chart-hourly'),{type:'bar',data:{labels:Array.from({length:24},(_,i)=>i+":00"),datasets:[{label:'פוסטים',data:hourlyData,backgroundColor:'#8b5cf6'}]},options:{responsive:true,maintainAspectRatio:false}});
-const fans={};data.forEach(p=>p.voters.forEach(v=>{if(v.uid!=myUid)fans[v.username]=(fans[v.username]||0)+1}));
-Object.entries(fans).sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(([name,count])=>{document.getElementById('list-fans').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/user/${escAttr(name)}" target="_blank">${esc(name)}</a><span class="badge">${esc(count)}</span></div>`;});
+const fans={},fanSlug={};data.forEach(p=>p.voters.forEach(v=>{if(v.uid!=myUid){fans[v.username]=(fans[v.username]||0)+1;fanSlug[v.username]=v.userslug||String(v.username||'').trim().toLowerCase().replace(/\s+/g,'-');}}));
+Object.entries(fans).sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(([name,count])=>{document.getElementById('list-fans').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/user/${escAttr(fanSlug[name]||name)}" target="_blank">${esc(name)}</a><span class="badge">${esc(count)}</span></div>`;});
 const dayOrder=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 // קיבוץ לפי מספר היום ולא לפי שמו: השם מתורגם בזמן הבנייה בעוד
 // הנתונים נאספו קודם, והשוואת המחרוזות ביניהם החזירה גרף ריק.
@@ -705,45 +709,72 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
 // חוזרים בלי אף לייק = משהו אחר לגמרי.
 (()=>{
   const box=document.getElementById('list-social');
-  const talks={}, likes={};
+  // ── מפתח ההצטלבות ───────────────────────────────────────────────────
+  // באזכור NodeBB מכניס את ה-slug ("@צול-גאה"), וברשימת המצביעים חוזר שם
+  // התצוגה ("צול גאה"). השוואה ישירה ביניהם לא מתאימה אף פעם, והתוצאה
+  // סימטרית ומטעה: כולם נראים "שותקים" וכולם נראים "מעריצים". מנרמלים.
+  const key=n=>String(n||'').toLowerCase().replace(/[\s_.\-]/g,'');
+  const slugOf=n=>String(n||'').trim().toLowerCase().replace(/\s+/g,'-');
+
+  const talks={}, likes={}, shown={}, slug={};
+  const seen=(name, s)=>{
+    const k=key(name);
+    if(!k) return k;
+    // שם התצוגה עדיף על הסלאג להצגה; הסלאג עדיף לקישור
+    if(!shown[k] || (s && /\s/.test(name))) shown[k]=name;
+    if(s) slug[k]=s;
+    else if(!slug[k]) slug[k]=slugOf(name);
+    return k;
+  };
   data.forEach(p=>{
-    (p.mentions||[]).forEach(n=>{talks[n]=(talks[n]||0)+1;});
-    (p.voters||[]).forEach(v=>{if(v.uid!=myUid)likes[v.username]=(likes[v.username]||0)+1;});
+    (p.mentions||[]).forEach(n=>{const k=seen(n); if(k) talks[k]=(talks[k]||0)+1;});
+    (p.voters||[]).forEach(v=>{
+      if(v.uid==myUid) return;
+      const k=seen(v.username, v.userslug);
+      if(k) likes[k]=(likes[k]||0)+1;
+    });
   });
+
+  // ספירת הלייקים היא בקשה נפרדת לכל פוסט. אם חלקה נכשלה, "לא קיבל מהם
+  // לייק" הוא לא ממצא אלא חוסר מידע — ואז לא טוענים אותו.
+  const likesPartial=data.filter(d=>d.votes_ok===false).length>0;
+
   const names=Object.keys(talks);
-  if(!names.length){
+  if(!names.length && !Object.keys(likes).length){
     box.innerHTML=note('לא נמצאו אזכורים או ציטוטים בפוסטים שנסרקו');
     return;
   }
-  const link=n=>`<a href="${esc(baseUrl)}/user/${escAttr(n)}" target="_blank">${esc(n)}</a>`;
-  // התאמת שמות חסרת רגישות לאותיות גדולות — בפורום "David" ו-"david" הם אחד
-  const likeOf={}; Object.keys(likes).forEach(k=>likeOf[k.toLowerCase()]=likes[k]);
-  const got=n=>likeOf[n.toLowerCase()]||0;
+  const link=k=>`<a href="${esc(baseUrl)}/user/${escAttr(slug[k]||k)}" target="_blank">${esc(shown[k]||k)}</a>`;
+  const got=k=>likes[k]||0;
 
-  const mutual=names.filter(n=>got(n)>0)
+  const mutual=names.filter(k=>got(k)>0)
                     .sort((a,b)=>(talks[b]+got(b))-(talks[a]+got(a)));
-  const oneWay=names.filter(n=>got(n)===0&&talks[n]>=3)
+  const oneWay=likesPartial?[]:names.filter(k=>got(k)===0&&talks[k]>=3)
                     .sort((a,b)=>talks[b]-talks[a]);
-  const silentFans=Object.keys(likes)
-        .filter(n=>!names.some(t=>t.toLowerCase()===n.toLowerCase()))
-        .sort((a,b)=>likes[b]-likes[a]);
+  const silentFans=Object.keys(likes).filter(k=>!talks[k])
+                    .sort((a,b)=>likes[b]-likes[a]);
 
   let html='';
   if(mutual.length){
     html+=note('<b>הקרובים אליו</b> — הוא פונה אליהם, והם מחזירים בלייקים');
-    mutual.slice(0,8).forEach(n=>{
-      html+=li(link(n), talks[n]+' פניות · '+got(n)+' לייקים');
+    mutual.slice(0,8).forEach(k=>{
+      html+=li(link(k), talks[k]+' פניות · '+got(k)+' לייקים');
     });
   }
   if(oneWay.length){
-    html+=note('<b>פונה אליהם והם שותקים</b> — מעולם לא קיבל מהם לייק');
-    oneWay.slice(0,6).forEach(n=>{ html+=li(link(n), talks[n]+' פניות'); });
+    // "מעולם" הוא טענה שהמידע לא מחזיק: נסרקו הפוסטים שלו, לא של הפורום.
+    html+=note('<b>פונה אליהם, ובפוסטים שנסרקו לא הגיע מהם לייק</b>');
+    oneWay.slice(0,6).forEach(k=>{ html+=li(link(k), talks[k]+' פניות'); });
   }
   if(silentFans.length){
-    html+=note('<b>מעריצים שקטים</b> — עושים לו לייקים, והוא לא פונה אליהם');
-    silentFans.slice(0,6).forEach(n=>{ html+=li(link(n), likes[n]+' לייקים'); });
+    html+=note('<b>מעריצים שקטים</b> — עושים לו לייקים, ולא נמצא שפנה אליהם');
+    silentFans.slice(0,6).forEach(k=>{ html+=li(link(k), likes[k]+' לייקים'); });
   }
-  box.innerHTML=html||note('לא נמצאו אזכורים או ציטוטים בפוסטים שנסרקו');
+  if(likesPartial) html+=note('⚠️ ספירת הלייקים הייתה חלקית, ולכן לא מוצגת קבוצת "לא הגיע מהם לייק"');
+  // מחרוזת אחת ולא שרשור: translate_template עובד על **התבנית**, ושרשור
+  // מפצל את המשפט לשני ליטרלים שאף אחד מהם אינו מפתח בקטלוג.
+  html+=note('הכול מתוך הפוסטים שנסרקו בלבד. אזכור נספר כשהוא מופיע בטקסט (@שם או ציטוט) — תגובה בלי אזכור מפורש אינה נראית לניתוח.');
+  box.innerHTML=html;
 })();
 
 // 💤 תקופות שקט — מתי הפסיק לכתוב, ולכמה זמן
