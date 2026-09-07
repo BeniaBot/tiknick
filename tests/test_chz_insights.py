@@ -151,90 +151,29 @@ out = render(build(noname), "threads")
 ok("קיבוץ לפי מזהה ולא לפי כותרת", "5 · 100%" in out, out[:300])
 
 
-# ══ 👥 עם מי הוא מדבר ═════════════════════════════════════════════════════
-def v(name, uid=2):
-    return {"uid": uid, "username": name}
+# ══ חילוץ אזכורים — הכרטיס הוסר מ-0.9.0, הפונקציות נשארו ═════════════════
+# הכרטיס "עם מי הוא מדבר" ירד כי החצי שמנחש (מי הוא מזכיר) לא היה מול מה
+# לאמת. החילוץ עצמו נכון ומכוסה, כדי שהחזרה אליו תתחיל מבסיס בדוק.
+ok("הכרטיס אינו בתבנית", "list-social" not in io.open(
+    CZ.__file__, encoding="utf-8").read())
+ok("mentions אינו נשלח לדוח", '"mentions": mentions' not in io.open(
+    CZ.__file__, encoding="utf-8").read())
 
-
-social = [
-    # חבר: הוא פונה אליו והוא מחזיר בלייקים
-    post(1, BASE_TS, 10, 2, 1, "א", mentions=["דוד"], voters=[v("דוד"), v("שרה")]),
-    post(2, BASE_TS + DAY, 10, 1, 2, "ב", mentions=["דוד"], voters=[v("דוד")]),
-    # פונה אליו והוא שותק — שלוש פעמים, אפס לייקים
-    post(3, BASE_TS + 2 * DAY, 10, 0, 3, "ג", mentions=["יריב"]),
-    post(4, BASE_TS + 3 * DAY, 10, 0, 4, "ד", mentions=["יריב"]),
-    post(5, BASE_TS + 4 * DAY, 10, 0, 5, "ה", mentions=["יריב"]),
-    # מעריץ שקט: שרה עושה לייקים, הוא לא מזכיר אותה מעולם
-    post(6, BASE_TS + 5 * DAY, 10, 1, 6, "ו", voters=[v("שרה")]),
-]
-out = render(build(social), "social")
-ok("הקרובים אליו מוצגים", "הקרובים אליו" in out, out[:200])
-ok("דוד שם עם שני הצדדים", "2 פניות · 2 לייקים" in out, out[:400])
-ok("מי שפונה אליהם ולא קיבל לייק",
-   "3 פניות" in out and "לא הגיע מהם לייק" in out, out[:600])
-ok("מעריץ שקט מזוהה", "מעריצים שקטים" in out and "שרה" in out, out[:800])
-ok("יש קישור לפרופיל", "/user/" in out, out[:300])
-ok("הוא עצמו לא ברשימה", "someone" not in out, out[:400])
-
-# בלי אזכורים בכלל — נאמר במפורש, בלי להמציא
-none_ = [post(i, BASE_TS + i * DAY, 10, 1, 800 + i, "x", voters=[v("שרה")])
-         for i in range(3)]
-out = render(build(none_), "social")
-ok("בלי אזכורים — מעריצים בלבד", "מעריצים שקטים" in out or "לא נמצאו אזכורים" in out,
-   out[:300])
-
-# חילוץ האזכורים עצמו — הכלל זהה לזה של שדות התיוג
 ok("אזכור פשוט", CZ._mentions_in("שלום @דוד", "x") == ["דוד"])
 ok("ציטוט של NodeBB", CZ._mentions_in("@משה said in נושא:", "x") == ["משה"])
 ok("מייל אינו אזכור", CZ._mentions_in("beni@gmail.com", "x") == [])
 ok("גם מייל מסובך", CZ._mentions_in("a.b_c%d+e@example.co.il", "x") == [])
-# בעברית ו'/ה' החיבור נדבקות למילה. הכלל "@ פותח מילה" פספס את זה, ולכן
-# הכלל הוא "מה שלפני ה-@ אינו נראה כמו מייל".
 ok("ו' החיבור לפני אזכור", CZ._mentions_in("@דוד ו@שרה גם", "x") == ["דוד", "שרה"])
 ok("גם ה' הידיעה", CZ._mentions_in("ה@מנהל אמר", "x") == ["מנהל"])
 ok("בלי כפילויות", CZ._mentions_in("@דוד וגם @שרה, ושוב @דוד", "x") == ["דוד", "שרה"])
 ok("בלי המשתמש עצמו", CZ._mentions_in("@לומדעס", "לומדעס") == [])
-
-
-# ── 🚨 הבאג שבנימין תפס: הסלאג מול שם התצוגה ─────────────────────────────
-# NodeBB מכניס באזכור את ה-slug ("@צול-גאה") ומחזיר ברשימת המצביעים את שם
-# התצוגה ("צול גאה"). השוואה ישירה ביניהם לא מתאימה אף פעם, והתוצאה סימטרית
-# ומטעה: כל מי שפנה אליו נראה "שותק", וכל מי שעשה לו לייק נראה "לא נפנו אליו".
-slugcase = [
-    post(1, BASE_TS, 10, 1, 1, "א", mentions=["צול-גאה"],
-         voters=[{"uid": 9, "username": "צול גאה", "userslug": "צול-גאה"}]),
-    post(2, BASE_TS + DAY, 10, 1, 2, "ב", mentions=["צול-גאה"],
-         voters=[{"uid": 9, "username": "צול גאה", "userslug": "צול-גאה"}]),
-    post(3, BASE_TS + 2 * DAY, 10, 1, 3, "ג", mentions=["צול-גאה"],
-         voters=[{"uid": 9, "username": "צול גאה", "userslug": "צול-גאה"}]),
-]
-out = render(build(slugcase), "social")
-ok("הסלאג ושם התצוגה התאחדו", "הקרובים אליו" in out, out[:300])
-ok("ולא הוכרז 'לא הגיע מהם לייק'", "לא הגיע מהם לייק" not in out, out[:300])
-ok("ולא הוכרז 'מעריצים שקטים'", "מעריצים שקטים" not in out, out[:300])
-ok("הספירה משני הצדדים נכונה", "3 פניות · 3 לייקים" in out, out[:300])
-ok("מוצג שם התצוגה, לא הסלאג", "צול גאה" in out, out[:300])
-ok("והקישור לפי הסלאג",
-   "%D7%A6%D7%95%D7%9C-%D7%92%D7%90%D7%94" in out or "צול-גאה" in out, out[:300])
-
-# אותיות גדולות/קטנות וקו תחתון — אותו אדם
-mixed = [post(i, BASE_TS + i * DAY, 10, 1, 10 + i, "x", mentions=["David_Cohen"],
-              voters=[{"uid": 8, "username": "david cohen", "userslug": "david-cohen"}])
-         for i in range(3)]
-out = render(build(mixed), "social")
-ok("קו תחתון מול רווח מול אותיות גדולות", "3 פניות · 3 לייקים" in out, out[:300])
-
-# ספירת לייקים חלקית — לא טוענים "לא הגיע מהם לייק"
-partial = [post(i, BASE_TS + i * DAY, 10, 0, 20 + i, "x", mentions=["יריב"],
-                votes_ok=(i > 1)) for i in range(4)]
-out = render(build(partial), "social")
-# האזהרה עצמה מזכירה את שם הקבוצה, ולכן בודקים את **הכותרת** ולא את המחרוזת
-ok("ספירה חלקית מסתירה את הקבוצה השלילית",
-   "<b>פונה אליהם" not in out, out[:400])
-ok("ואומרת למה", "חלקית" in out, out[:400])
-
-# הערת ההיקף תמיד מופיעה
-ok("מוצג היקף הניתוח", "מתוך הפוסטים שנסרקו בלבד" in out, out[-300:])
+ok("@ בתוך כתובת אינו אדם",
+   CZ._mentions_in("ראו https://youtube.com/@Chan וגם @יוסי", "x") == ["יוסי"])
+ok("@everyone אינו אדם", CZ._mentions_in("@everyone שימו לב @דוד", "x") == ["דוד"])
+ok("גוף ציטוט מוסר",
+   CZ._mentions_in(CZ._strip_quotes(
+       "<p>@דוד</p><blockquote><p><a>@sara</a> said in x:</p>"
+       "<p>מסכים עם <a>@moshe</a></p></blockquote>"), "x") == ["דוד", "sara"])
 
 
 # ══ אנגלית ════════════════════════════════════════════════════════════════
@@ -250,6 +189,80 @@ finally:
 
 he = build(posts)
 ok("ובעברית הכול חוזר כשהיה", "תקופות שקט" in he)
+
+# ══ מספר הפוסטים הרשמי, ולא מה שהסריקה הצליחה למשוך ══════════════════════
+# בנימין: "שהדוח יציג את מספר הפוסטים הרשמי מדף הפרופיל ולא מהסריקה שלו, כי
+# יש פוסטים שהסריקה לא מצליחה לגשת אליהם כי אין הרשאה (הם מחוקים)".
+# הנתון כבר היה בדוח (`meta.postcount`) — ה-KPI פשוט לא קרא אותו.
+def kpi(posts, meta=None):
+    """מריץ את הדוח מול DOM מזויף ומחזיר את ערכי מוני הכותרת."""
+    html = CZ._build_html("someone", "https://forum.example", 7, posts, meta)
+    body = html[html.index("const data="):html.rindex("</script>")]
+    js = """
+const boxes = {};
+const mk = () => ({ _h: '', set innerHTML(v){ this._h = v; },
+                    get innerHTML(){ return this._h; }, innerText: '',
+                    title: '', style: {} });
+for (const id of ['list-gaps','list-sharp','list-threads','list-fans','list-best',
+                  'stat-posts','stat-posts-sub','stat-likes','stat-words','stat-time'])
+  boxes[id] = mk();
+globalThis.document = { getElementById: id => boxes[id] || mk() };
+globalThis.Chart = function(){ return {}; };
+Chart.defaults = {};
+%s
+console.log(JSON.stringify({ posts: boxes['stat-posts'].innerText,
+                             sub: boxes['stat-posts-sub'].innerText,
+                             subTitle: boxes['stat-posts-sub'].title,
+                             words: boxes['stat-words'].innerText,
+                             time: boxes['stat-time'].innerText,
+                             likes: boxes['stat-likes'].innerText }));
+""" % body
+    f = os.path.join(tempfile.mkdtemp(), "k.js")
+    io.open(f, "w", encoding="utf-8").write(js)
+    r = subprocess.run(["node", f], capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr[-600:])
+    return json.loads(r.stdout.strip())
+
+
+three = [post(i, BASE_TS + i * DAY, 10, 1, 100, "א") for i in range(1, 4)]
+
+k = kpi(three, {"postcount": 250})
+ok("הכותרת מציגה את המספר הרשמי", k["posts"] == "250", k)
+ok("ושורת המשנה אומרת כמה נמדד",
+   "3" in k["sub"] and "250" in k["sub"], k["sub"])
+ok("ההסבר לפער מוצמד כטולטיפ",
+   "מחוקים" in k["subTitle"] and "הרשאה" in k["subTitle"], k["subTitle"][:80])
+
+# הפער הוא רק כשהוא אמיתי — אחרת שורת המשנה מיותרת ומבלבלת
+k = kpi(three, {"postcount": 3})
+ok("אין פער — אין שורת משנה", k["posts"] == "3" and k["sub"] == "", k)
+
+# פורום שלא מחזיר postcount בכלל: נופלים לאחור למה שנסרק, בלי להציג 0
+k = kpi(three, {"postcount": 0})
+ok("בלי postcount נופלים למה שנסרק", k["posts"] == "3" and k["sub"] == "", k)
+k = kpi(three)
+ok("וגם בלי meta כלל", k["posts"] == "3" and k["sub"] == "", k)
+
+# סריקה שהחזירה **יותר** ממה שהפרופיל מצהיר (המונה של הפורום מתעדכן באיחור)
+# לא אמורה להקטין את המספר שהמשתמש רואה.
+k = kpi(three, {"postcount": 2})
+ok("מונה מיושן בפרופיל לא מקטין את התוצאה",
+   k["posts"] == "3" and k["sub"] == "", k)
+
+# הדבר החשוב: **שאר הדוח ממשיך לעבוד על מה שנסרק בלבד.** ממוצע לייקים על
+# מכנה שכולל פוסטים שאיש לא מדד היה מספר שקרי.
+# נבדק בהתנהגות ולא בטקסט: המונים הנגזרים חייבים לצאת זהים בדיוק, בין אם
+# הפרופיל מצהיר 3 פוסטים ובין אם 999.
+k_small = kpi(three, {"postcount": 3})
+k_big   = kpi(three, {"postcount": 999})
+ok("המספר הרשמי לא נגע בשאר החישובים",
+   k_small["words"] == k_big["words"] and k_small["time"] == k_big["time"]
+   and k_small["likes"] == k_big["likes"],
+   (k_small, k_big))
+ok("והוא כן שינה את הכותרת", k_big["posts"] == "999" and k_small["posts"] == "3",
+   (k_small["posts"], k_big["posts"]))
 
 print()
 if fails:

@@ -183,6 +183,9 @@ _TPL_EN = {
         "No breaks were found in the scanned posts (the scan is partial)",
     " פוסטים לא נכללו — ספירת הלייקים שלהם נכשלה":
         " posts were excluded — their like counts failed",
+    "נסרקו ": "scanned ",
+    "הפער הוא פוסטים שהסריקה אינה יכולה לקרוא: מחוקים, או בקטגוריות שדורשות הרשאה. כל שאר הנתונים בדוח מחושבים מהפוסטים שנסרקו.":
+        "The gap is posts the scan cannot read: deleted, or in categories that require permission. Everything else in this report is computed from the posts that were scanned.",
     "ספירת הלייקים נכשלה בכל הפוסטים שנסרקו":
         "The like counts failed for every scanned post",
     "ספירת הלייקים נכשלה ב-": "Like counting failed for ",
@@ -284,6 +287,19 @@ _LOOKS_LIKE_DOMAIN = re.compile(r"\.[a-z]{2,}$", re.I)
 MAX_MENTIONS_PER_POST = 8
 
 
+# ── "עם מי הוא מדבר" — הוסר מ-0.9.0, והקוד נשמר לגרסה הבאה ───────────────
+# הרעיון נכון: להצליב את מי שהמשתמש פונה אליו מול מי שעושה לו לייקים. חצי
+# ממנו ודאי — `voters` מגיע כרשימה מפורשת. החצי השני, "את מי הוא מזכיר",
+# נחלץ מתוך ה-HTML המרונדר של הפוסט, **ושם התחיל לנחש**:
+#
+#   • גרסה ראשונה השוותה slug מול שם תצוגה ולא התאימה אף שם. בנימין תפס.
+#   • גרסה שנייה הסירה גופי ציטוט — וייתכן שדווקא מחקה את הפניות האמיתיות,
+#     כי בפורומים האלה עונים בציטוט ולא ב-@.
+#
+# שתי טעויות באותו מקום, ושתיהן נבעו מאותו דבר: אין כאן דגימה של HTML
+# אמיתי מהפורום, רק הנחות עליו. הפונקציות והבדיקות נשארות; הכרטיס יחזור
+# כשיהיה מול מה לאמת אותו.
+
 _BLOCKQUOTE_RX = re.compile(r"<blockquote[^>]*>.*?</blockquote>", re.I | re.S)
 # כותרת הציטוט של NodeBB ("@שם said in ...") היא כן פנייה שלו — היא נשמרת.
 _QUOTE_HEAD_RX = re.compile(
@@ -353,11 +369,8 @@ def _fetch_detail(base, cookie, post, me=""):
         raw = post.get("content", "") or ""
         clean = re.sub(r"<[^<]+?>", "", raw)
         words = len(clean.split())
-        # האזכורים נחלצים מ**גוף הפוסט בלבד**, בלי מה שמצוטט בתוכו: טקסט
-        # מצוטט הוא מה שמישהו *אחר* כתב, וכל מי שהוא הזכיר שם נזקף בטעות
-        # למשתמש הנבדק — ומשם ישר לרשימה "פונה אליהם ולא הגיע מהם לייק",
-        # עם אנשים שמעולם לא היה איתם קשר.
-        mentions = _mentions_in(_strip_quotes(raw), me)
+        # _mentions_in/_strip_quotes נשארים בקוד ומכוסים בבדיקות, אבל אינם
+        # נקראים: הכרטיס "עם מי הוא מדבר" הוסר מ-0.9.0. ראו ההערה מעליהם.
         upvoters = []
         with _vote_lock:
             give_up = _vote_fails["n"] >= _VOTE_FAIL_GIVEUP
@@ -390,7 +403,6 @@ def _fetch_detail(base, cookie, post, me=""):
             "likes": len(upvoters),
             "voters": upvoters,
             "votes_ok": votes_ok,
-            "mentions": mentions,
             "words": words,
         }
     except Exception:
@@ -717,6 +729,7 @@ body{background:var(--bg);color:var(--text-main);font-family:'Assistant',Arial,s
 .col-3{grid-column:span 3}.col-4{grid-column:span 4}.col-6{grid-column:span 6}.col-8{grid-column:span 8}.col-12{grid-column:span 12}
 .kpi-title{color:var(--text-dim);font-size:.9rem;font-weight:600;margin-bottom:8px}
 .kpi-value{font-size:2.2rem;font-weight:800;color:#fff}
+.kpi-sub{color:var(--text-dim);font-size:.78rem;margin-top:4px;min-height:1em}
 h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 .list-container{max-height:300px;overflow-y:auto}
 .list-item{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:1px solid #334155}
@@ -734,7 +747,7 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 <p style="color:var(--text-dim);margin-top:10px">ניתוח נתונים מעמיק של פעילות המשתמש</p>
 </div>
 <div class="grid">
-<div class="card col-3"><div class="kpi-title">סה"כ פוסטים</div><div class="kpi-value" id="stat-posts">0</div></div>
+<div class="card col-3"><div class="kpi-title">סה"כ פוסטים</div><div class="kpi-value" id="stat-posts">0</div><div class="kpi-sub" id="stat-posts-sub"></div></div>
 <div class="card col-3"><div class="kpi-title">לייקים שהתקבלו</div><div class="kpi-value" id="stat-likes" style="color:#10b981">0</div></div>
 <div class="card col-3"><div class="kpi-title">מילים שנכתבו</div><div class="kpi-value" id="stat-words">0</div></div>
 <div class="card col-3"><div class="kpi-title">זמן קריאה כולל</div><div class="kpi-value" id="stat-time" style="color:#f59e0b">0</div></div>
@@ -745,7 +758,6 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 <div class="card col-4"><h3>📏 אורך תוכן</h3><div class="chart-box"><canvas id="chart-length"></canvas></div></div>
 <div class="card col-6"><h3>⭐ הפוסטים המוצלחים ביותר</h3><div class="list-container" id="list-best"></div></div>
 <div class="card col-6"><h3>🔍 קשר בין אורך פוסט לפופולריות</h3><div class="chart-box"><canvas id="chart-scatter"></canvas></div></div>
-<div class="card col-12"><h3>👥 עם מי הוא מדבר</h3><div class="list-container" id="list-social"></div></div>
 <div class="card col-6"><h3>💤 תקופות שקט</h3><div class="list-container" id="list-gaps"></div></div>
 <div class="card col-6"><h3>🔥 מתי הוא הכי חד</h3><div class="list-container" id="list-sharp"></div></div>
 <div class="card col-12"><h3>💬 כמה הוא נשאר בשרשור</h3><div class="list-container" id="list-threads"></div></div>
@@ -766,7 +778,21 @@ const measured=data.filter(d=>d.votes_ok!==false);
 const likesUnknown=data.length-measured.length;
 const totalLikes=measured.reduce((a,b)=>a+b.likes,0);
 const totalWords=data.reduce((a,b)=>a+b.words,0);
-document.getElementById('stat-posts').innerText=data.length.toLocaleString();
+// מספר הפוסטים הרשמי מדף הפרופיל, ולא מה שהסריקה הצליחה למשוך. פוסט מחוק,
+// או כזה שיושב בקטגוריה שדורשת הרשאה, פשוט אינו חוזר מה-API — ולכן הספירה
+// שלנו נמוכה מזו שהפורום מציג, וזה מה שבנימין ראה. הכותרת אומרת עכשיו את
+// המספר הרשמי, ושורת המשנה אומרת כמה מתוכו באמת נמדד.
+// **שאר הדוח ממשיך לעבוד על `data` בלבד**: ממוצע לייקים או מילים על מכנה
+// שכולל פוסטים שאיש לא קרא היה מספר שקרי.
+const scannedPosts=data.length;
+const officialPosts=meta.postcount||0;
+document.getElementById('stat-posts').innerText =
+  (officialPosts>scannedPosts?officialPosts:scannedPosts).toLocaleString();
+const psub=document.getElementById('stat-posts-sub');
+if(psub && officialPosts>scannedPosts){
+  psub.innerText='‏'+'נסרקו '+scannedPosts.toLocaleString()+' מתוך '+officialPosts.toLocaleString();
+  psub.title='הפער הוא פוסטים שהסריקה אינה יכולה לקרוא: מחוקים, או בקטגוריות שדורשות הרשאה. כל שאר הנתונים בדוח מחושבים מהפוסטים שנסרקו.';
+}
 document.getElementById('stat-likes').innerText =
   likesUnknown===data.length ? '—' : totalLikes.toLocaleString()
     + (likesUnknown ? ' +' : '');
@@ -808,84 +834,6 @@ new Chart(document.getElementById('chart-scatter'),{type:'scatter',data:{dataset
 const li=(a,b)=>`<div class="list-item"><span>${a}</span><span class="badge">${b}</span></div>`;
 const note=t=>`<div class="list-item" style="opacity:.75">${t}</div>`;
 const dayFmt=ts=>new Date(ts).toLocaleDateString();
-
-// 👥 עם מי הוא מדבר — הצלבה של שני צדדים שכבר ירדו ולא דיברו זה עם זה:
-// את מי הוא מזכיר או מצטט (מתוך תוכן הפוסטים), מול מי עושה לו לייקים.
-// ההצלבה היא הסיפור: הדדיות = חבר. לייקים בלי אזכור = מעריץ. אזכורים
-// חוזרים בלי אף לייק = משהו אחר לגמרי.
-(()=>{
-  const box=document.getElementById('list-social');
-  // ── מפתח ההצטלבות ───────────────────────────────────────────────────
-  // באזכור NodeBB מכניס את ה-slug ("@צול-גאה"), וברשימת המצביעים חוזר שם
-  // התצוגה ("צול גאה"). השוואה ישירה ביניהם לא מתאימה אף פעם, והתוצאה
-  // סימטרית ומטעה: כולם נראים "שותקים" וכולם נראים "מעריצים". מנרמלים.
-  // כלל הסלאג של NodeBB: רווח הופך למקף. **רק** זה — הסרת מקפים לגמרי
-  // איחדה שני חשבונות נפרדים (david-cohen ו-davidcohen) לשורה אחת שמציגה
-  // שם של אחד ומקשרת לפרופיל של השני.
-  const key=n=>String(n||'').trim().toLowerCase().replace(/[\s_]+/g,'-');
-  const slugOf=n=>String(n||'').trim().toLowerCase().replace(/\s+/g,'-');
-
-  const talks={}, likes={}, shown={}, slug={};
-  const seen=(name, s)=>{
-    const k=key(name);
-    if(!k) return k;
-    // שם התצוגה עדיף על הסלאג להצגה; הסלאג עדיף לקישור
-    if(!shown[k] || (s && /\s/.test(name))) shown[k]=name;
-    if(s) slug[k]=s;
-    else if(!slug[k]) slug[k]=slugOf(name);
-    return k;
-  };
-  data.forEach(p=>{
-    (p.mentions||[]).forEach(n=>{const k=seen(n); if(k) talks[k]=(talks[k]||0)+1;});
-    (p.voters||[]).forEach(v=>{
-      if(v.uid==myUid) return;
-      // שמות מהפורום חוזרים מקודדים ל-HTML (הלקח מ-0.8.21) — כאן זה לא נעשה
-      const k=seen(_U(v.username), v.userslug);
-      if(k) likes[k]=(likes[k]||0)+1;
-    });
-  });
-
-  // ספירת הלייקים היא בקשה נפרדת לכל פוסט. אם חלקה נכשלה, "לא קיבל מהם
-  // לייק" הוא לא ממצא אלא חוסר מידע — ואז לא טוענים אותו.
-  const likesPartial=data.filter(d=>d.votes_ok===false).length>0;
-
-  const names=Object.keys(talks);
-  if(!names.length && !Object.keys(likes).length){
-    box.innerHTML=note('לא נמצאו אזכורים או ציטוטים בפוסטים שנסרקו');
-    return;
-  }
-  const link=k=>`<a href="${esc(baseUrl)}/user/${escAttr(slug[k]||k)}" target="_blank">${esc(shown[k]||k)}</a>`;
-  const got=k=>likes[k]||0;
-
-  const mutual=names.filter(k=>got(k)>0)
-                    .sort((a,b)=>(talks[b]+got(b))-(talks[a]+got(a)));
-  const oneWay=likesPartial?[]:names.filter(k=>got(k)===0&&talks[k]>=3)
-                    .sort((a,b)=>talks[b]-talks[a]);
-  const silentFans=Object.keys(likes).filter(k=>!talks[k])
-                    .sort((a,b)=>likes[b]-likes[a]);
-
-  let html='';
-  if(mutual.length){
-    html+=note('<b>הקרובים אליו</b> — הוא פונה אליהם, והם מחזירים בלייקים');
-    mutual.slice(0,8).forEach(k=>{
-      html+=li(link(k), talks[k]+' פניות · '+got(k)+' לייקים');
-    });
-  }
-  if(oneWay.length){
-    // "מעולם" הוא טענה שהמידע לא מחזיק: נסרקו הפוסטים שלו, לא של הפורום.
-    html+=note('<b>פונה אליהם, ובפוסטים שנסרקו לא הגיע מהם לייק</b>');
-    oneWay.slice(0,6).forEach(k=>{ html+=li(link(k), talks[k]+' פניות'); });
-  }
-  if(silentFans.length){
-    html+=note('<b>מעריצים שקטים</b> — עושים לו לייקים, ולא נמצא שפנה אליהם');
-    silentFans.slice(0,6).forEach(k=>{ html+=li(link(k), likes[k]+' לייקים'); });
-  }
-  if(likesPartial) html+=note('⚠️ ספירת הלייקים הייתה חלקית, ולכן לא מוצגת קבוצת "לא הגיע מהם לייק"');
-  // מחרוזת אחת ולא שרשור: translate_template עובד על **התבנית**, ושרשור
-  // מפצל את המשפט לשני ליטרלים שאף אחד מהם אינו מפתח בקטלוג.
-  html+=note('הכול מתוך הפוסטים שנסרקו בלבד. אזכור נספר כשהוא מופיע בטקסט (@שם או ציטוט) — תגובה בלי אזכור מפורש אינה נראית לניתוח.');
-  box.innerHTML=html;
-})();
 
 // 💤 תקופות שקט — מתי הפסיק לכתוב, ולכמה זמן
 (()=>{
