@@ -732,6 +732,9 @@ def _migrate():
             conn.execute("ALTER TABLE forums ADD COLUMN profile_pattern TEXT DEFAULT ''")
         if "platform" not in fcols:
             conn.execute("ALTER TABLE forums ADD COLUMN platform TEXT DEFAULT 'nodebb'")
+        # forum_uid נוסף ב-_migrate למעלה, ולכן גם האינדקס עליו יושב כאן
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_nicks_forum_uid "
+                     "ON nicks(forum, forum_uid)")
         # ניקוי חד-פעמי: העברת 'uid:...' שנשמר בעבר ב-extra_info אל forum_uid
         try:
             done = conn.execute(
@@ -1379,9 +1382,25 @@ def merge_scraped_users(forum, users, source_label="סריקה", run_id=None):
         for chunk in _chunks(names, 400):
             ph = ",".join("?" * len(chunk))
             for r in conn.execute(
-                    f"SELECT id, username, scraped_email FROM nicks "
+                    f"SELECT id, username, forum_uid, scraped_email FROM nicks "
                     f"WHERE forum=? AND username IN ({ph})", [forum] + list(chunk)):
                 existing_rows[r["username"]] = r
+
+        # ── התאמה לפי מזהה הפורום ────────────────────────────────────────
+        # `forum_uid` הוא המזהה הפנימי והקבוע של המשתמש בפורום. הוא נאסף
+        # בכל סריקה מאז ומעולם ומעולם לא נקרא. שאילתה אחת לכל מנה — אותה
+        # עלות כמו שליפת השמות, ובזכותה הסריקה מזהה אדם ששינה את שמו
+        # במקום ליצור לו ניק חדש ולנטוש את התיק הישן.
+        uids = [str(m.get("forum_uid") or "") for _, m in users]
+        uids = [u for u in uids if u]
+        by_uid = {}
+        for chunk in _chunks(uids, 400):
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                    f"SELECT id, username, forum_uid, scraped_email FROM nicks "
+                    f"WHERE forum=? AND forum_uid != '' AND forum_uid IN ({ph})",
+                    [forum] + list(chunk)):
+                by_uid[r["forum_uid"]] = r
 
         old_by_nick = {}
         for chunk in _chunks([r["id"] for r in existing_rows.values()], 400):
@@ -1397,7 +1416,58 @@ def merge_scraped_users(forum, users, source_label="סריקה", run_id=None):
                 v = scraped.get(f, "")
                 if v not in (None, ""):
                     new_vals[f] = v
-            row = existing_rows.get(username)
+            uid = str(scraped.get("forum_uid") or "")
+            row = by_uid.get(uid) if uid else None
+            renamed_from = None
+
+            if row is not None and row["username"] != username:
+                # ── אותו מזהה, שם אחר: האדם שינה את הניק שלו בפורום ──────
+                # בלי זה נוצר ניק חדש לגמרי, והתיק שנבנה על האדם הזה נשאר
+                # על השורה הישנה שקופאת לנצח. מעדכנים את השם במקום.
+                clash = conn.execute(
+                    "SELECT id FROM nicks WHERE forum=? AND username=? AND id!=?",
+                    (forum, username, row["id"])).fetchone()
+                if clash:
+                    # השם החדש כבר תפוס בפורום הזה על ידי שורה אחרת —
+                    # לא נוגעים, ומדווחים. מיזוג אוטומטי כאן היה מאחד שני
+                    # אנשים לשורה אחת.
+                    if run_id:
+                        conn.execute(
+                            "INSERT INTO scan_changes (run_id, nick_id, forum, username,"
+                            " kind, field_name, old_value, new_value)"
+                            " VALUES (?,?,?,?,'rename_blocked','username',?,?)",
+                            (run_id, row["id"], forum, row["username"],
+                             row["username"], username))
+                    stats["unchanged"] += 1
+                    continue
+                renamed_from = row["username"]
+                conn.execute("UPDATE nicks SET username=?, updated_at=datetime('now') "
+                             "WHERE id=?", (username, row["id"]))
+                existing_rows.pop(renamed_from, None)
+                if run_id:
+                    conn.execute(
+                        "INSERT INTO scan_changes (run_id, nick_id, forum, username,"
+                        " kind, field_name, old_value, new_value)"
+                        " VALUES (?,?,?,?,'renamed','username',?,?)",
+                        (run_id, row["id"], forum, username, renamed_from, username))
+
+            if row is None:
+                row = existing_rows.get(username)
+                # ── אותו שם, מזהה אחר: מישהו **אחר** לקח את הניק ─────────
+                # הצד המסוכן. מיזוג כאן היה רושם את הנתונים של אדם זר לתוך
+                # התיק שאתה מנהל על האדם המקורי. לא ממזגים, ומדווחים —
+                # ההחלטה מה לעשות היא של המשתמש.
+                if (row is not None and uid and row["forum_uid"]
+                        and row["forum_uid"] != uid):
+                    if run_id:
+                        conn.execute(
+                            "INSERT INTO scan_changes (run_id, nick_id, forum, username,"
+                            " kind, field_name, old_value, new_value)"
+                            " VALUES (?,?,?,?,'taken_over','forum_uid',?,?)",
+                            (run_id, row["id"], forum, username,
+                             row["forum_uid"], uid))
+                    stats["unchanged"] += 1
+                    continue
 
             if row is None:
                 cur = conn.execute(

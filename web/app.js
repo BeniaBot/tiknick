@@ -3946,13 +3946,38 @@ async function openScanChanges(runId, back) {
   const truncated = ch.length >= LIMIT;
   const label = k => (COLS.find(c => c.key === k)?.label) || k;
   const isNew = c => c.kind === 'new';
-  const news = ch.filter(isNew), changes = ch.filter(c => !isNew(c));
+  // שינוי שם והשתלטות על שם הם אירועי **זהות**, לא שינויי שדה — הם מוצגים
+  // בנפרד ולמעלה, כי הם משנים על מי התיק מדבר.
+  const idKinds = new Set(['renamed', 'taken_over', 'rename_blocked']);
+  const idEvents = ch.filter(c => idKinds.has(c.kind));
+  const news = ch.filter(isNew);
+  const changes = ch.filter(c => !isNew(c) && !idKinds.has(c.kind));
   const bans = changes.filter(c => c.field_name === 'status' && c.new_value === 'מורחק');
+  const idHtml = idEvents.length ? `
+    <div class="section-hdr">🔀 שינויי זהות בפורום (${idEvents.length})</div>
+    ${idEvents.slice(0, 200).map(c => c.kind === 'renamed'
+      ? `<div style="display:flex;gap:8px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--border-soft)">
+           <span title="אותו משתמש בפורום, שם חדש">🔀</span>
+           <span style="flex:1">שינה את שמו:
+             <bdi style="color:var(--subtext)">${esc(c.old_value)}</bdi>
+             ← <bdi><b>${esc(c.new_value)}</b></bdi></span></div>`
+      : c.kind === 'taken_over'
+      ? `<div style="display:flex;gap:8px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--border-soft);background:rgba(244,84,76,.07)">
+           <span title="השם נשאר, אבל מאחוריו משתמש אחר">⚠️</span>
+           <span style="flex:1"><b><bdi>${esc(c.username)}</bdi></b> —
+             השם הזה שייך עכשיו למשתמש <b>אחר</b> בפורום.
+             לא עודכן כלום, כדי שלא יירשם מידע זר על מי שאתה עוקב אחריו.</span></div>`
+      : `<div style="display:flex;gap:8px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--border-soft)">
+           <span>✋</span>
+           <span style="flex:1"><bdi>${esc(c.old_value)}</bdi> שינה את שמו ל-<bdi>${esc(c.new_value)}</bdi>,
+             אבל השם הזה כבר תפוס בפורום — לא שונה כלום.</span></div>`
+    ).join('')}` : '';
   const html = `
     ${truncated ? `<div style="padding:8px 12px;background:var(--card2);border-radius:8px;margin-bottom:10px;font-size:12.5px;color:var(--subtext)">
       מוצגים ${LIMIT} השינויים הראשונים בלבד</div>` : ''}
     ${bans.length ? `<div style="padding:10px 12px;background:rgba(244,84,76,.10);border-radius:8px;margin-bottom:12px;font-size:13px">
       🚫 <b>${bans.length}</b> ניקים סומנו כמורחקים בסריקה זו</div>` : ''}
+    ${idHtml}
     ${news.length ? `<div class="section-hdr">ניקים חדשים (${news.length})</div>
       <div style="display:flex;flex-wrap:wrap;gap:6px">${news.slice(0, 200).map(c =>
         `<span style="background:var(--card2);border-radius:999px;padding:3px 10px;font-size:12px">${esc(c.username)}</span>`).join('')}</div>` : ''}
