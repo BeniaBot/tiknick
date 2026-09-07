@@ -2416,8 +2416,28 @@ del "%~f0"
             return {"ok": False, "error": str(e)}
         db.set_setting(net.SETTING_MODE, state["mode"])
         db.set_setting(net.SETTING_URL, state["url"])
+        # מה שנלמד תקף להגדרה הקודמת בלבד — כתובת פרוקסי חדשה, או מעבר
+        # למצב אחר, מבטלים אותו.
+        net.forget_routes()
         logging.info("Network: %s", state["description"])
-        return dict(state, ok=True)
+        return dict(state, ok=True, routes={})
+
+    def get_net_routes(self):
+        """מה התוכנה למדה על כל פורום במצב \"פרוקסי רק כשנכשל\"."""
+        by_origin = net.routes_snapshot()
+        out = []
+        for f in db.get_forums():
+            url = (f.get("url") or "").strip()
+            if not url:
+                continue
+            o = net._origin_of(url)
+            if o in by_origin:
+                out.append({"name": f["name"], "route": by_origin[o]})
+        return out
+
+    def forget_net_routes(self):
+        net.forget_routes()
+        return {"ok": True}
 
     def test_net_settings(self, mode="system", url="", target=""):
         """בודק בלי להחיל, כדי שסריקה שרצה ברקע לא תיפגע מכתובת שגויה."""
@@ -2529,6 +2549,9 @@ if __name__ == "__main__":
             i18n.set_lang(db.get_setting("display_lang", "he"))
             # חייב לחול לפני הבקשה היוצאת הראשונה — התזמון ובדיקת
             # העדכון יוצאים לדרך שניות אחרי העלייה.
+            # זיכרון הניתוב (איזה פורום דורש פרוקסי) שורד סגירה של התוכנה.
+            # בלעדיו כל הפעלה משלמת ניסיון ישיר כושל לכל פורום חסום.
+            net.set_route_store(db.get_setting, db.set_setting)
             _net = net.apply_from_settings(db.get_setting)
             if not _net.get("ok"):
                 logging.warning("Saved network settings ignored: %s", _net.get("error"))

@@ -5023,6 +5023,8 @@ const SCRAPABLE_PLATFORMS = new Set(['nodebb', 'discourse']);
 async function openNetSettings(back) {
   const st = await api('get_net_settings') || { mode: 'system', url: '', forums: [] };
   const mode = st.mode || 'system';
+  // מה שהתוכנה למדה במצב "פרוקסי כשנכשל" — לכל פורום בנפרד
+  const routes = (mode === 'fallback' && await api('get_net_routes')) || [];
   const targets = st.forums || [];
   const seg = (val, label) =>
     `<button class="${mode === val ? 'active' : ''}" data-netmode="${val}"
@@ -5037,15 +5039,19 @@ async function openNetSettings(back) {
 
     <div class="section-hdr">מצב</div>
     <div class="segmented" id="net-modes">
-      ${seg('system', 'לפי המערכת')}${seg('off', 'ישיר')}${seg('manual', 'פרוקסי')}
+      ${seg('system', 'לפי המערכת')}${seg('off', 'ישיר')}${seg('manual', 'פרוקסי')}${
+        seg('fallback', 'פרוקסי כשנכשל')}
     </div>
     <div style="font-size:11.5px;color:var(--subtext);margin-top:7px;line-height:1.6">
       <b>לפי המערכת</b> — ברירת המחדל, בדיוק ההתנהגות שהייתה עד היום.
       <b>ישיר</b> — התעלמות מפרוקסי שהוגדר ב-Windows.
-      <b>פרוקסי</b> — כתובת מפורשת.
+      <b>פרוקסי</b> — כתובת מפורשת, לכל בקשה.
+      <b>פרוקסי כשנכשל</b> — מנסה ישירות, ורק אם החיבור נכשל עובר דרך הפרוקסי.
+      ההחלטה נזכרת <b>לכל פורום בנפרד</b>, כך שפורום שנגיש ישירות לא משלם על
+      הפרוקסי — ופורום חסום לא משלם על ניסיון כושל בכל פעם.
     </div>
 
-    <div id="net-manual" style="display:${mode === 'manual' ? '' : 'none'};margin-top:14px">
+    <div id="net-manual" style="display:${(mode === 'manual' || mode === 'fallback') ? '' : 'none'};margin-top:14px">
       <label class="form-label">כתובת הפרוקסי</label>
       <input id="net-url" class="form-input" style="width:100%" dir="ltr"
              placeholder="http://1.2.3.4:8080" value="${esc(st.url || '')}">
@@ -5056,6 +5062,23 @@ async function openNetSettings(back) {
         פרוקסי שדורש סיסמה נכתב <span dir="ltr">http://user:pass@host:port</span> —
         והסיסמה נשמרת במאגר כטקסט גלוי, בדיוק כמו העוגיות.
       </div>
+    </div>
+
+    <div id="net-routes" style="display:${mode === 'fallback' ? '' : 'none'};margin-top:14px">
+      <div class="section-hdr">מה נלמד עד כה</div>
+      ${routes.length ? `
+        <div style="display:flex;flex-wrap:wrap;gap:6px;font-size:12px">
+          ${routes.map(r => `<span data-no-i18n style="background:var(--card2);border-radius:999px;padding:3px 10px">
+            ${r.route === 'proxy' ? '🛡️' : '➡️'} ${esc(r.name)}</span>`).join('')}
+        </div>
+        <div style="font-size:11.5px;color:var(--subtext);margin-top:7px;line-height:1.6">
+          ➡️ נגיש ישירות · 🛡️ עובר דרך הפרוקסי. הזיכרון מתחדש כל 6 שעות,
+          וגם מתאפס כשמשנים את הגדרות הרשת.
+          <button class="btn btn-ghost btn-sm" style="margin-top:6px"
+                  onclick="forgetNetRoutes()">↺ שכח ולמד מחדש</button>
+        </div>`
+      : `<div style="font-size:12.5px;color:var(--subtext)">
+          עדיין לא נלמד כלום — זה נקבע בסריקה הבאה, לכל פורום בנפרד.</div>`}
     </div>
 
     ${targets.length ? `
@@ -5089,11 +5112,19 @@ async function openNetSettings(back) {
   ], 'modal-sm', { id: 'net-settings' });
 }
 
+async function forgetNetRoutes() {
+  await api('forget_net_routes');
+  toast('הזיכרון אופס — ייקבע מחדש בסריקה הבאה', 'success');
+  openNetSettings();
+}
+
 function pickNetMode(val, btn) {
   btn.parentElement.querySelectorAll('button').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   const box = document.getElementById('net-manual');
-  if (box) box.style.display = val === 'manual' ? '' : 'none';
+  if (box) box.style.display = (val === 'manual' || val === 'fallback') ? '' : 'none';
+  const rt = document.getElementById('net-routes');
+  if (rt) rt.style.display = val === 'fallback' ? '' : 'none';
 }
 
 async function doNetTest() {
