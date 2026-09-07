@@ -1,6 +1,7 @@
 """
 database.py - ניהול מסד נתונים SQLite לניקטרקר
 """
+import re
 import sqlite3
 import json
 import os
@@ -467,6 +468,7 @@ def init_db():
     _backfill_sources()
     _decode_entities_once()
     _repair_status_enum_once()
+    _clean_last_seen_noise_once()
     # סל המחזור נשמר 30 יום; היסטוריה ויומן סריקות — שנה (אחרת גדלים בלי גבול)
     try:
         empty_trash(30)
@@ -2385,6 +2387,63 @@ def _repair_status_enum_once():
     with get_connection() as conn:
         conn.execute("INSERT OR REPLACE INTO settings (key,value) "
                      "VALUES ('status_enum_repaired','1')")
+
+
+# ── "נראה לאחרונה" שנשפך ל"פרטים נוספים" ─────────────────────────────────
+# מ-0.8.5 יש ל-last_seen שדה משלו, אבל scraper._map_user המשיך לכתוב אותו
+# **גם** כטקסט חופשי לתוך extra_info — שורה שנשארה מהתקופה שלפני כן. התוצאה
+# היא ש"פרטים נוספים" של כמעט כל ניק סרוק התמלא ב"נראה לאחרונה: 2026-09-01",
+# שדה שכבר מוצג בעמודה משלו. בנימין דיווח על זה אחרי סריקה.
+#
+# הסורק תוקן, אבל מה שכבר נכתב יישאר עד שכל פורום ייסרק מחדש — ולכן ניקוי
+# חד-פעמי: מסיר את המקטע הזה בלבד, ומשאיר את שאר ה"פרטים נוספים" כמו שהם.
+_LAST_SEEN_BIT = re.compile(r"\s*·?\s*נראה לאחרונה:\s*[0-9]{4}-[0-9]{2}-[0-9]{2}")
+
+
+def _clean_last_seen_noise_once():
+    with get_connection() as conn:
+        if conn.execute("SELECT value FROM settings "
+                        "WHERE key='last_seen_noise_cleaned'").fetchone():
+            return
+    fixed = 0
+    # שתי טבלאות, שתי טרנזקציות. בבלוק אחד כישלון בטבלה השנייה גורר אחורה
+    # גם את הראשונה — כלומר שגיאה בצד הפחות חשוב מבטלת את התיקון שהמשתמש
+    # רואה בפועל.
+    try:
+        with get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, extra_info FROM nicks "
+                "WHERE extra_info LIKE '%נראה לאחרונה:%'").fetchall()
+            for r in rows:
+                cleaned = _LAST_SEEN_BIT.sub("", r["extra_info"] or "").strip(" ·")
+                conn.execute("UPDATE nicks SET extra_info=? WHERE id=?",
+                             (cleaned, r["id"]))
+                fixed += 1
+    except Exception:
+        logging.exception("last_seen noise cleanup failed (nicks)")
+        return                      # בלי דגל — ננסה שוב בהפעלה הבאה
+    try:
+        with get_connection() as conn:
+            # `id` ולא `rowid`: ל-field_values יש מפתח ראשי מפורש, ו-sqlite3.Row
+            # חושף רק את שמות העמודות שהוחזרו בפועל.
+            # UPDATE רגיל ולא OR REPLACE — המפתח הייחודי הוא
+            # (nick_id, field_name, source_id), ו-value אינו בו, כך שאין התנגשות.
+            fv = conn.execute(
+                "SELECT id, value FROM field_values "
+                "WHERE field_name='extra_info' AND value LIKE '%נראה לאחרונה:%'"
+            ).fetchall()
+            for r in fv:
+                cleaned = _LAST_SEEN_BIT.sub("", r["value"] or "").strip(" ·")
+                conn.execute("UPDATE field_values SET value=? WHERE id=?",
+                             (cleaned, r["id"]))
+    except Exception:
+        logging.exception("last_seen noise cleanup failed (field_values)")
+        return
+    if fixed:
+        logging.info("Removed the duplicated last-seen text from %s nicks", fixed)
+    with get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key,value) "
+                     "VALUES ('last_seen_noise_cleaned','1')")
 
 
 def _decode_entities_once():

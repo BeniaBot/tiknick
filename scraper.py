@@ -357,8 +357,10 @@ def _map_user(u):
     if sig:      extra_bits.append(f"חתימה: {str(sig)[:300]}")
     pv = u.get("profileviews")
     if pv:       extra_bits.append(f"צפיות בפרופיל: {pv}")
-    if last_online:
-        extra_bits.append(f"נראה לאחרונה: {last_online}")
+    # "נראה לאחרונה" **לא** נכנס לכאן. מ-0.8.5 יש לו שדה משלו (last_seen)
+    # עם עמודה, סינון וייצוא — והשורה הזו נשארה מהתקופה שלפני כן, כך שהערך
+    # נכתב פעמיים: פעם בשדה שלו, ופעם כטקסט חופשי בתוך "פרטים נוספים".
+    # התוצאה היא ש"פרטים נוספים" של כמעט כל ניק סרוק התמלא ברעש הזה.
     extra_info = (" · ".join(extra_bits))[:2000]
 
     return {
