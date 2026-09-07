@@ -1587,6 +1587,13 @@ def reset_all():
         conn.execute("DELETE FROM shelved_values")
         conn.execute("DELETE FROM import_sources")
         conn.execute("DELETE FROM trash_nicks")   # "מחיקה לגמרי" חייבת לרוקן גם את הסל
+        # לשלוש הטבלאות האלה אין FK ל-nicks, ולכן הן שרדו כל איפוס. הן אינן
+        # מטא-נתונים: scan_changes מחזיקה שם משתמש, פורום, וערך ישן מול חדש
+        # לכל שינוי משמעותי שסריקה אי-פעם רשמה — הרחקות, מיילים, שמות אמיתיים.
+        # מי שלוחץ "מחק את כל הניקים לגמרי" מתכוון גם לזה.
+        conn.execute("DELETE FROM scan_changes")
+        conn.execute("DELETE FROM scan_runs")
+        conn.execute("DELETE FROM identity_dismissed")
         # מחק את כל המקורות פרט ל"אני", ואפס את "אני" לברירת מחדל
         conn.execute("DELETE FROM sources WHERE id != 1")
         conn.execute("UPDATE sources SET trust=10, absolute=0, notes='' WHERE id=1")
@@ -2274,8 +2281,15 @@ def find_duplicate_nicks():
             members = [dict(m) for m in conn.execute(
                 "SELECT id, username, forum, updated_at FROM nicks WHERE id IN (%s) ORDER BY id"
                 % ",".join("?" * len(ids)), ids)]
+            # הקיבוץ כאן מנוטרל אותיות גדולות ורווחים, אבל merge_scraped_users
+            # ו-import_data מחפשים ב-username **מדויק**. אם השומר מחזיק כתיב
+            # אחר מזה שהפורום מחזיר, הסריקה הבאה לא תמצא אותו ותיצור מחדש את
+            # הכפול שהרגע מוזג — והכלי לעולם לא מתכנס. לכן נבחר גם הכתיב
+            # שיאומץ: זה של החבר שעודכן אחרון, כלומר מה שהפורום החזיר לאחרונה.
+            newest = max(members, key=lambda m: (m.get("updated_at") or "", m["id"]))
             out.append({"forum": r["forum"], "keep": ids[0], "drop": ids[1:],
-                        "members": members})
+                        "members": members,
+                        "adopt_username": newest["username"]})
     return out
 
 
@@ -2336,6 +2350,17 @@ def merge_duplicate_nicks():
                     pass
         # מחיקה דרך סל המחזור — הפיך
         delete_nicks(drops)
+        # אימוץ הכתיב הטרי — ראו ההערה ב-find_duplicate_nicks. חייב לרוץ
+        # **אחרי** המחיקה, אחרת ה-UNIQUE של (forum, username) מתנגש בכפול
+        # שעוד לא ירד.
+        adopt = g.get("adopt_username")
+        if adopt:
+            with get_connection() as conn:
+                cur = conn.execute("SELECT username FROM nicks WHERE id=?",
+                                   (keep,)).fetchone()
+                if cur and cur[0] != adopt:
+                    conn.execute("UPDATE nicks SET username=? WHERE id=?",
+                                 (adopt, keep))
         for f in _NICK_FIELDS:
             try:
                 resolve_field(keep, f)
@@ -3194,26 +3219,45 @@ def force_field_value(nick_id, field_name, value):
 
 def force_scraped_values(nick_id, mapped):
     """
-    "סנכרן נבחרים": רושם את כל הערכים הסרוקים תחת מקור הסריקה וכותב אותם
-    ישירות ל-cache (המשתמש בחר במפורש → הסרוק מנצח, בלי הכרעת אמינות).
-    הכול בחיבור אחד. מחזיר כמה שדות נכתבו.
+    "סנכרן נבחרים": המשתמש ביקש במפורש את הערך של הפורום, ולכן הוא נרשם גם
+    תחת מקור הסריקה **וגם** תחת "אני" — ואז מוכרע כרגיל.
+
+    קודם הערך נכתב ישירות ל-`nicks`. זו בדיוק משפחת הבאגים שתוקנה ב-0.8.6:
+    `nicks` הוא cache, והאמת ב-`field_values`. אם מקור אמין יותר החזיק ערך
+    אחר (מקור "אני" הוא trust 10 מול 9 של הסריקה), הטבלה הציגה את הסרוק בזמן
+    שהמנוע עדיין החזיק את הישן — פאנל "מידע לפי מקור" סתר את השורה, וההכרעה
+    הבאה החזירה את הישן בשקט.
+
+    ובנוסף: הסורק מקודד "לא מורחק" כערך **חסר**, ולכן סטטוס היה השדה היחיד
+    שהרענון המפורש לא יכול היה לעדכן — הרחקה שבוטלה נשארה על המסך לנצח, וגם
+    לא ניתן היה לתקן אותה ידנית (סטטוס מסריקה אבסולוטי). כאן נאכף אותו כלל
+    שכבר קיים ב-merge_scraped_users.
     """
     nid = int(nick_id)
+    mapped = dict(mapped or {})
     with get_connection() as conn:
         sid = get_scrape_source(conn)["id"]
-        sets, vals = [], []
-        for field, val in (mapped or {}).items():
+        if not mapped.get("status"):
+            prev = conn.execute(
+                "SELECT value FROM field_values "
+                "WHERE nick_id=? AND field_name='status' AND source_id=?",
+                (nid, sid)).fetchone()
+            if prev and (prev[0] or "").strip() == "מורחק":
+                mapped["status"] = "פעיל"      # ההרחקה בוטלה בפורום
+        touched = []
+        for field, val in mapped.items():
             if val in (None, ""):
                 continue
-            if field not in _NON_SOURCED:
-                _upsert_field_value(conn, nid, field, val, sid)
-            if field in _NICK_FIELDS and field not in ("forum", "username"):
-                sets.append(f"{field}=?"); vals.append(val)
-        if sets:
-            conn.execute(
-                f"UPDATE nicks SET {', '.join(sets)}, updated_at=datetime('now') WHERE id=?",
-                vals + [nid])
-        return len(sets)
+            if field in _NON_SOURCED or field not in _NICK_FIELDS:
+                continue
+            _upsert_field_value(conn, nid, field, val, sid)
+            # הבחירה המפורשת נרשמת גם כשלי — כך היא מנצחת בהכרעה במקום
+            # להיכתב מסביבה, והפאנל, השורה והסריקה הבאה מסכימים ביניהם.
+            _upsert_field_value(conn, nid, field, val, 1)
+            touched.append(field)
+        if touched:
+            _resolve_fields_conn(conn, nid, sorted(set(touched)))
+        return len(touched)
 
 def apply_import_conflict(nick_id, field, value, source_id, accept):
     """
@@ -3225,13 +3269,16 @@ def apply_import_conflict(nick_id, field, value, source_id, accept):
     if not accept:
         return True
     nid = int(nick_id)
-    record_field_value(nid, field, value, int(source_id))
-    # בחירה ידנית גוברת — כתוב ישירות ל-cache כדי שיוצג
-    if field in _NICK_FIELDS and field not in ("forum", "username"):
-        with get_connection() as conn:
-            conn.execute(
-                f"UPDATE nicks SET {field}=?, updated_at=datetime('now') WHERE id=?",
-                (value, nid))
+    if field in _NON_SOURCED or field not in _NICK_FIELDS:
+        return True
+    with get_connection() as conn:
+        # הערך נרשם גם תחת מקור הייבוא (כדי שהפאנל יראה מאיפה הוא הגיע)
+        # וגם תחת "אני" — כי זו הייתה **בחירה** של המשתמש, בדיוק כמו
+        # pick_field_value. קודם הוא נרשם רק תחת הייבוא ואז נדחף ל-cache
+        # ביד: הפאנל סימן מיד את הערך *האחר* כמנצח, וההכרעה הבאה החזירה אותו.
+        _upsert_field_value(conn, nid, field, value, int(source_id))
+        _upsert_field_value(conn, nid, field, value, 1)
+        _resolve_fields_conn(conn, nid, [field])
     return True
 
 def apply_import_conflicts(items, accept):
@@ -3242,19 +3289,22 @@ def apply_import_conflicts(items, accept):
     if not accept:
         return 0
     n = 0
+    by_nick = {}
     with get_connection() as conn:
         for it in (items or []):
             field = it.get("field")
             val = it.get("new_value")
             if field in _NON_SOURCED or val in (None, ""):
                 continue
+            if field not in _NICK_FIELDS:
+                continue
             nid = int(it.get("nick_id"))
             _upsert_field_value(conn, nid, field, val, int(it.get("source_id")))
-            if field in _NICK_FIELDS and field not in ("forum", "username"):
-                conn.execute(
-                    f"UPDATE nicks SET {field}=?, updated_at=datetime('now') WHERE id=?",
-                    (val, nid))
+            _upsert_field_value(conn, nid, field, val, 1)   # ראו apply_import_conflict
+            by_nick.setdefault(nid, []).append(field)
             n += 1
+        for nid, fields in by_nick.items():
+            _resolve_fields_conn(conn, nid, sorted(set(fields)), history=False)
     return n
 
 # ── גיבוי ושחזור מלאים של קובץ ה-DB ──────────────────────────────────
