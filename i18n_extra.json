@@ -831,5 +831,110 @@
   "kind": "pattern",
   "where": "manual",
   "context": "0.8.22 UI"
+ },
+ {
+  "he": "שגיאת רשת: {1}",
+  "en": "Network error: {1}",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "לא ניתן למצוא משתמש: {1}",
+  "en": "Could not find the user: {1}",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "שגיאה: {1}",
+  "en": "Error: {1}",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "{1}נדרשת עוגייה תקינה (שגיאת הרשאה)",
+  "en": "{1}a valid cookie is required (authorization error)",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "{1}שגיאת רשת: {2}",
+  "en": "{1}network error: {2}",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "{1}לא ניתן למצוא משתמש: {2}",
+  "en": "{1}could not find the user: {2}",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "{1}לא נמצאו פוסטים",
+  "en": "{1}no posts found",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "נדרשת עוגייה / הרשאה",
+  "en": "A cookie / permission is required",
+  "kind": "static",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "הפורום לא החזיר את הפוסטים ({1})",
+  "en": "The forum did not return the posts ({1})",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "ההורדה נקטעה באמצע ({1} מתוך {2} בתים). הקובץ נמחק ולא הותקן — אפשר לנסות שוב.",
+  "en": "The download was cut short ({1} of {2} bytes). The file was deleted and not installed — you can try again.",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "הקובץ שהתקבל אינו קובץ הרצה של Windows — העדכון בוטל",
+  "en": "The file received is not a Windows executable — the update was cancelled",
+  "kind": "static",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "הקובץ אינו כולל שם משתמש לכל רשומה — אי אפשר לייבא אותו",
+  "en": "The file has no username on each record — it cannot be imported",
+  "kind": "static",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "כתובת הפרוקסי נכתבת עם http:// (גם פרוקסי שמעביר תעבורת https). SOCKS אינו נתמך.",
+  "en": "The proxy address is written with http:// (even a proxy that carries https traffic). SOCKS is not supported.",
+  "kind": "static",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "החיבור נקטע באמצע קבלת התשובה: {1}",
+  "en": "The connection was cut while receiving the response: {1}",
+  "kind": "pattern",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "האיפוס לא בוצע",
+  "en": "The reset did not run",
+  "kind": "static",
+  "where": "python",
+  "context": "0.9 audit — SEAM-5"
  }
 ]

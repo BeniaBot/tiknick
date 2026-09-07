@@ -2569,13 +2569,38 @@ def export_data(mode="all", ids=None):
     id_set = {int(i) for i in ids} if ids is not None else None
     keep = {}       # nick_id -> the record already in `records` (לצירוף אנשי קשר)
     id_key = {}     # nick_id -> (forum, username)  — לזהויות
-    with get_connection() as conn:
-        rows = conn.execute(_EXPORT_QUERY).fetchall()
+    # הסינון יורד ל-SQL. קודם השאילתה משכה **את כל** טבלת הניקים עם `n.*` —
+    # כולל avatar_image, העמודה שכל שאר שאילתות הרשימה מוציאות במכוון (ראו
+    # _list_cols_sql) — ורק אחר כך סיננה בפייתון. כלומר "ייצא את הניקים
+    # שנבחרו" עבור שלוש שורות שילם את מחיר 90 אלף השורות ואת כל תמונות
+    # הפרופיל שבהן.
+    cols = ", ".join("n." + c for c in _NICK_FIELDS if c in exportable or c == "id")
+    if "n.id" not in cols.split(", "):
+        cols = "n.id, " + cols
+    where, params = [], []
+    excluded = [name for name, inc in io_flags.items() if not inc]
+    if excluded:
+        where.append("n.forum NOT IN (%s)" % ",".join("?" * len(excluded)))
+        params.extend(excluded)
     records = []
+    rows = []
+    with get_connection() as conn:
+        id_batches = ([sorted(id_set)[i:i + 400] for i in range(0, len(id_set), 400)]
+                      if id_set is not None else [None])
+        for batch in id_batches:
+            w = list(where)
+            p = list(params)
+            if batch is not None:
+                w.append("n.id IN (%s)" % ",".join("?" * len(batch)))
+                p.extend(batch)
+            sql = ("SELECT %s, CASE WHEN %s THEN 1 ELSE 0 END as _has_info, "
+                   "CASE WHEN %s THEN 1 ELSE 0 END as _my_info FROM nicks n"
+                   % (cols, _HAS_INFO_SQL, _MY_INFO_SQL))
+            if w:
+                sql += " WHERE " + " AND ".join(w)
+            rows.extend(conn.execute(sql, p).fetchall())
     for r in rows:
         d = dict(r)
-        if id_set is not None and d["id"] not in id_set:
-            continue
         # דלג על פורומים שהוחרגו בהגדרות (סעיף 2)
         if io_flags.get(d.get("forum", ""), True) is False:
             continue
