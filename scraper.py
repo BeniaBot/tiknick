@@ -14,6 +14,7 @@ scraper.py — סורק פורומי NodeBB עבור Tik-Nick.
 """
 
 import json
+import logging
 import time
 import urllib.request
 import urllib.parse
@@ -587,8 +588,16 @@ def _scrape_discourse(forum_name, base, db, cookie, progress_cb,
 
     # עימוד 0-בסיס; ממשיכים עד עמוד ריק (total_pages משמש רק להערכת ההתקדמות)
     page = 1
+    seen_sig = None
     while items0:
+        if page > HARD_PAGE_CAP:
+            # שלוש מארבע לולאות העימוד מוגנות; זו לא הייתה. שרת שמתעלם מ-
+            # ?page= (פרוקסי מוטעה, או Discourse מאחורי מטמון) גרם ללולאה
+            # שמושכת וממזגת את אותו עמוד לנצח, בקצב בקשה כל PAGE_DELAY_SEC.
+            stats["limited"] = True
+            break
         if max_pages and page >= max_pages:
+            stats["limited"] = True
             break
         if cancel_flag is not None and cancel_flag.is_set():
             stats["cancelled"] = True
@@ -609,6 +618,15 @@ def _scrape_discourse(forum_name, base, db, cookie, progress_cb,
         items = data.get("directory_items", []) if isinstance(data, dict) else []
         if not items:
             break
+        # שרת שמתעלם מ-?page= מחזיר שוב ושוב את אותם משתמשים. HARD_PAGE_CAP
+        # לבדו היה עוצר אחרי 4000 בקשות מיותרות לפורום של מתנדבים; חתימת
+        # העמוד עוצרת כבר בשנייה.
+        sig = tuple(sorted(str(i.get("user", {}).get("username", "")) for i in items))
+        if sig and sig == seen_sig:
+            logging.warning("Discourse paging is not advancing at page %s — stopping", page)
+            stats["limited"] = True
+            break
+        seen_sig = sig
         handle_items(items)
         page += 1
         stats["pages"] = page

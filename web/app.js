@@ -5571,10 +5571,12 @@ function startChazonishnikMonitor() {
       if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (mine) closeModal(); return; }
       if (p.html) {
         _lastReport.chz = { html: p.html, count: p.count };
-        const msg = scanSummary('נותחו', p.count, p.postcount, p.partial, p.stopped_early, p.limited);
+        const msg = scanSummary('נותחו', p.count, p.postcount, p.partial, p.stopped_early,
+                                p.limited, p.likes_incomplete);
         if (mine || !isModalOpen()) {
           showChazonishnikReport(p.html, p.count);
-          toast(msg, p.partial ? 'error' : 'success', { ms: p.partial ? 9000 : 4000 });
+          toast(msg, (p.partial || p.likes_incomplete) ? 'error' : 'success',
+                { ms: (p.partial || p.likes_incomplete) ? 9000 : 4000 });
         } else {
           // אל תגנוב את המסך מעבודה פתוחה — הדוח נשמר וזמין לפתיחה
           toast('📊 הדוח מוכן — פתח דרך Chazonishnik · ' + msg, p.partial ? 'error' : 'success');
@@ -5586,14 +5588,18 @@ function startChazonishnikMonitor() {
 }
 
 // דיווח כן על היקף הסריקה: כמה נסרק מתוך כמה, ולמה חסר
-function scanSummary(verb, done, postcount, partial, stoppedEarly, limited) {
+function scanSummary(verb, done, postcount, partial, stoppedEarly, limited, likesIncomplete) {
   const d = (done || 0).toLocaleString();
-  if (!postcount) return `${verb} ${d} פוסטים ✓`;
+  // ספירת הלייקים היא בקשה נפרדת לכל פוסט. כשהיא נכשלת הדוח מציג 0 לייקים
+  // כאילו כך באמת קרה — וזה ה-KPI הראשי שלו. אומרים את זה במפורש.
+  const likes = likesIncomplete
+    ? ` · ⚠️ ספירת הלייקים חלקית (${likesIncomplete.toLocaleString()} בקשות נכשלו)` : '';
+  if (!postcount) return `${verb} ${d} פוסטים ✓` + likes;
   const base = `${verb} ${d} מתוך ${postcount.toLocaleString()} פוסטים`;
-  if (limited) return base + ' (לפי ההגבלה שהגדרת)';
-  if (stoppedEarly) return base + ' — נעצר בגלל תקלת רשת, הדוח חלקי';
-  if (partial) return base + ' — השאר בפורומים שדורשים התחברות (הוסף עוגייה)';
-  return base + ' ✓';
+  if (limited) return base + ' (לפי ההגבלה שהגדרת)' + likes;
+  if (stoppedEarly) return base + ' — נעצר בגלל תקלת רשת, הדוח חלקי' + likes;
+  if (partial) return base + ' — השאר בפורומים שדורשים התחברות (הוסף עוגייה)' + likes;
+  return base + (likes || ' ✓');
 }
 
 function isModalOpen() {

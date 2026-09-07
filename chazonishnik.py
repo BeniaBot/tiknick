@@ -9,6 +9,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.request
 import urllib.parse
@@ -115,8 +116,16 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=N
             # וגם רושמים ליומן: בלי זה המשתמש רואה "הדוח חלקי" ואי אפשר
             # לענות לו למה — היומן שקט לגמרי.
             logging.warning("Chazonishnik: page %s of %s failed: %s", page, slug, e)
-            if stats is not None and page > 1:
-                stats["stopped_early"] = True
+            if stats is not None:
+                if page > 1:
+                    stats["stopped_early"] = True
+                else:
+                    # _fetch_user כבר הצליח והחזיר postcount — כלומר אנחנו
+                    # *יודעים* שהמשתמש קיים ופעיל. בלי הסימון הזה כשל ברשת
+                    # בעמוד הראשון דווח כ"לא נמצאו פוסטים (או שהמשתמש לא
+                    # פעיל / העוגייה לא תקינה)" — אבחנה שגויה ששולחת את
+                    # המשתמש לחפש עוגייה שאין בה שום בעיה.
+                    stats["first_page_error"] = str(e)
             break
         posts = data.get("posts", []) if isinstance(data, dict) else []
         if not posts:
@@ -185,6 +194,26 @@ def _days():
     return _DAYS_EN if i18n.lang() == "en" else _DAYS_HE
 
 
+# כל ספירת לייק בדוח מגיעה מבקשה אחת לפוסט. כשל שם נבלע בשקט, הפוסט נרשם עם
+# likes=0, והמשתמש קיבל דוח שה-KPI הראשי שלו ("לייקים שהתקבלו") ופאנל
+# "מקורות לייקים" כולו שקריים — מתחת לסיכום ירוק "נותחו N מתוך N פוסטים ✓".
+# עכשיו סופרים את הכישלונות, מדווחים עליהם, ואחרי סף מפסיקים לנסות: לירות
+# עוד שלושה ריטריי לכל פוסט מול שרת שמגביל קצב זה בדיוק מה שלא עושים כאן.
+_VOTE_FAIL_GIVEUP = 10
+_vote_lock = threading.Lock()
+_vote_fails = {"n": 0}
+
+
+def _reset_vote_stats():
+    with _vote_lock:
+        _vote_fails["n"] = 0
+
+
+def _vote_failures():
+    with _vote_lock:
+        return _vote_fails["n"]
+
+
 def _fetch_detail(base, cookie, post):
     try:
         time.sleep(DETAIL_DELAY)   # נימוס: 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
@@ -192,11 +221,20 @@ def _fetch_detail(base, cookie, post):
         clean = re.sub(r"<[^<]+?>", "", post.get("content", "") or "")
         words = len(clean.split())
         upvoters = []
-        try:
-            v = _get_json(f"{base}/api/v3/posts/{pid}/voters", cookie=cookie, timeout=10)
-            upvoters = (v.get("response", {}) or {}).get("upvoters", []) or []
-        except Exception:
-            upvoters = []
+        with _vote_lock:
+            give_up = _vote_fails["n"] >= _VOTE_FAIL_GIVEUP
+        votes_ok = False
+        if not give_up:
+            try:
+                v = _get_json(f"{base}/api/v3/posts/{pid}/voters", cookie=cookie, timeout=10)
+                upvoters = (v.get("response", {}) or {}).get("upvoters", []) or []
+                votes_ok = True
+            except Exception as e:
+                with _vote_lock:
+                    _vote_fails["n"] += 1
+                    first = _vote_fails["n"] == 1
+                if first:
+                    logging.warning("Chazonishnik: voters fetch failed for pid %s: %s", pid, e)
         ts = post.get("timestamp") or 0
         dt = datetime.fromtimestamp(ts / 1000) if ts else datetime.now()
         return {
@@ -212,6 +250,7 @@ def _fetch_detail(base, cookie, post):
             "month": dt.strftime("%Y-%m"),
             "likes": len(upvoters),
             "voters": upvoters,
+            "votes_ok": votes_ok,
             "words": words,
         }
     except Exception:
@@ -236,6 +275,7 @@ def _collect(username, cookie, base, progress=None, cancel_flag=None,
     except Exception as e:
         return None, None, None, {"error": f"{label}לא ניתן למצוא משתמש: {e}"}
 
+    _reset_vote_stats()
     raw = _scan_posts(base, slug, cookie, progress=progress,
                       cancel_flag=cancel_flag, max_posts=max_posts, stats=scan_stats)
     if cancel_flag is not None and cancel_flag.is_set():
@@ -264,6 +304,9 @@ def _collect(username, cookie, base, progress=None, cancel_flag=None,
     meta = {
         "postcount": postcount, "limited": limited,
         "stopped_early": scan_stats["stopped_early"],
+        # ספירת הלייקים מגיעה מבקשה נפרדת לכל פוסט. כשל שם החזיר 0 בשקט
+        # ודוח ירוק ששיקר בדיוק ב-KPI הראשי שלו.
+        "likes_incomplete": _vote_failures(),
         "partial": scan_stats["stopped_early"] or (
             bool(postcount) and len(raw) < postcount * 0.95 and not limited),
     }
@@ -379,11 +422,16 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     except Exception as e:
         return {"ok": False, "error": f"לא ניתן למצוא משתמש: {e}"}
 
+    _reset_vote_stats()
     raw_posts = _scan_posts(base, slug, cookie, progress=progress,
                             cancel_flag=cancel_flag, max_posts=max_posts, stats=scan_stats)
     if cancel_flag is not None and cancel_flag.is_set():
         return {"ok": False, "cancelled": True, "error": "בוטל"}
     if not raw_posts:
+        if scan_stats.get("first_page_error"):
+            return {"ok": False,
+                    "error": "הפורום לא החזיר את הפוסטים ("
+                             + str(scan_stats["first_page_error"]) + ")"}
         return {"ok": False, "error": "לא נמצאו פוסטים (או שהמשתמש לא פעיל / העוגייה לא תקינה)"}
 
     processed = []
@@ -420,6 +468,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
         bool(postcount) and len(raw_posts) < postcount * 0.95 and not limited)
     return {"ok": True, "html": html, "path": path, "posts": len(processed),
             "postcount": postcount, "partial": partial, "limited": limited,
+            "likes_incomplete": _vote_failures(),
             "stopped_early": scan_stats["stopped_early"]}
 
 

@@ -688,20 +688,22 @@ class API:
             "added": 0, "updated": 0, "unchanged": 0,
             "forum": forum_name, "cancelled": False, "run_id": None, "auto": False,
             "user_skipped": False, "aborted": False,
+            # ריצה שנגמרת לפני הקריאה הראשונה ל-progress (פורום שלא עונה, או
+            # "עצור" מיידי) ירשה את מונה הכישלונות של הריצה הקודמת ודיווחה
+            # "הסתיימה חלקית — N עמודים נכשלו" על סריקה שלא ניסתה עמוד אחד.
+            "failed_pages": 0, "limited": False,
             # אפס מצב רב-פורומי שנותר מ'סרוק הכל'/'סנכרן נבחרים' קודמים
             "all_mode": False, "selected_mode": False,
             "forum_index": 0, "forum_total": 0, "skipped": [],
         })
 
         def _progress(p):
-            _scrape_state.update({
-                "page": p.get("page", 0),
-                "total_pages": p.get("total_pages", 0),
-                "added": p.get("added", 0),
-                "updated": p.get("updated", 0),
-                "unchanged": p.get("unchanged", 0),
-                "failed_pages": p.get("failed_pages", 0),
-            })
+            # מיזוג ולא רשימה לבנה: כל דגל שהסורק מוסיף (limited, aborted,
+            # skipped, pages) הגיע עד לכאן ונזרק בשקט, וההודעה למשתמש נפלה
+            # חזרה ל"הסריקה הושלמה" על ריצה שנקטעה.
+            _scrape_state.update({k: v for k, v in (p or {}).items()
+                                  if k not in ("running", "done", "error",
+                                               "forum", "run_id", "auto")})
 
         def _run():
             try:
@@ -1149,6 +1151,9 @@ class API:
                     _chz_state["partial"] = result.get("partial", False)
                     _chz_state["stopped_early"] = result.get("stopped_early", False)
                     _chz_state["limited"] = result.get("limited", False)
+                    # כמה בקשות "מי עשה לייק" נכשלו. בלי זה הדוח מציג 0
+                    # לייקים כאילו כך באמת קרה — ראו chazonishnik._fetch_detail.
+                    _chz_state["likes_incomplete"] = result.get("likes_incomplete", 0)
                 else:
                     _chz_state["error"] = result.get("error")
             except Exception as e:
