@@ -50,7 +50,13 @@ def _targets(ver):
     iss = _read("installer.iss")
     iss = re.sub(r'#define AppVersion "[^"]*"',
                  '#define AppVersion "%s"' % ver, iss)
-    return {"version_info.txt": vi, "installer.iss": iss}
+
+    # תג הגרסה ב-README הוא הדבר הראשון שרואים בעמוד המאגר, והוא סטה לאחור
+    # בשמונה גרסאות בלי שאיש שם לב — בדיוק כמו installer.iss לפניו.
+    rd = _read("README.md")
+    rd = re.sub(r'badge/%s-[0-9.]+-' % re.escape('גרסה'),
+                'badge/%s-%s-' % ('גרסה', ver), rd)
+    return {"version_info.txt": vi, "installer.iss": iss, "README.md": rd}
 
 
 def check():

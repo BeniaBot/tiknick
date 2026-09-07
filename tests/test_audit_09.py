@@ -187,6 +187,11 @@ ok("UPD-4: installer.iss ו-version_info.txt מסונכרנים ל-APP_VERSION",
 ok("UPD-4: הגרסה שנקראת היא זו שבקוד",
    sync_version.app_version() == M.APP_VERSION, sync_version.app_version())
 ok("UPD-4: הבנייה מסנכרנת לבד", "sync_version.py" in _read("build.bat"))
+# תג הגרסה ב-README סטה שמונה גרסאות אחורה בלי שאיש שם לב — אותה משפחה
+# בדיוק כמו installer.iss, ולכן הוא נכנס לאותו סנכרון ולאותה בדיקה.
+ok("UPD-4: גם התג ב-README מסונכרן",
+   ("badge/" + "גרסה" + "-" + M.APP_VERSION + "-") in _read("README.md"),
+   [l for l in _read("README.md").splitlines() if "badge/" in l][:1])
 
 
 # ══ הגיליון להדפסה: תוויות ו-enum מתורגמים, ערכי משתמש לא ═══════════════
