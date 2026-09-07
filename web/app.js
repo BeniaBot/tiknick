@@ -600,7 +600,7 @@ async function openAbout() {
             <img src="cfopuser.png" alt="cfopuser" style="width:100%;height:100%;object-fit:cover">
           </div>
           <div class="credit-body">
-            <div class="credit-role">רעיון ופיתוח Chazonishnik</div>
+            <div class="credit-role">רעיון ופיתוח הגרסה המקורית של Chazonishnik</div>
             <a class="credit-name-link" onclick="api('open_url','https://mitmachim.top/user/cfopuser')">cfopuser</a>
           </div>
         </div>

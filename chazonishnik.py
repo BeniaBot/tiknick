@@ -159,6 +159,33 @@ _LOCAL_EN = {"תגובה": "Reply"}
 # "מול" או "פי " היו נדרסים בכל מקום בתוכנה — אבל בתבניות האלה הם חד-משמעיים.
 _TPL_EN = {
     "פוסטים": "Posts",
+    # שלושת המקטעים החדשים. הטקסטים חיים בתוך ה-<script>, ולכן הם אינם
+    # מפתחות בקטלוג המשותף — הם מתורגמים כאן, בתבנית של המודול הזה בלבד.
+    "💤 תקופות שקט": "💤 Periods of silence",
+    "🔥 מתי הוא הכי חד": "🔥 When they are at their sharpest",
+    "💬 כמה הוא נשאר בשרשור": "💬 How long they stay in a thread",
+    " — מאז ": " — since ",
+    "אין מספיק פוסטים כדי למדוד שתיקות":
+        "Not enough posts to measure periods of silence",
+    "לא היו הפסקות של חודש ומעלה — כתיבה רציפה":
+        "No breaks of a month or more — continuous posting",
+    "שותק כרגע": "Currently silent",
+    " ימים": " days",
+    "ספירת הלייקים הייתה חלקית בסריקה הזו, ולכן המקטע הזה מושבת":
+        "The like counts were incomplete in this scan, so this section is disabled",
+    "אין מספיק פוסטים בשעה מסוימת כדי להשוות":
+        "Not enough posts in any single hour to compare",
+    "השעה המוצלחת שלו": "Their best hour",
+    "הכי פחות — ": "Weakest — ",
+    "הממוצע הכללי שלו": "Their overall average",
+    " לייקים לפוסט": " likes per post",
+    "שרשורים שבהם כתב פעם אחת ועבר הלאה":
+        "Threads where they posted once and moved on",
+    "שרשורים עם 2–4 הודעות שלו": "Threads with 2-4 of their posts",
+    "שרשורים שבהם נשאר (5 ומעלה)": "Threads they stayed in (5 or more)",
+    'סה"כ שרשורים שהשתתף בהם': "Total threads they took part in",
+    " הודעות": " posts",
+    "אין נתונים": "No data",
     "דק'": "min",
     "קצר": "Short", "בינוני": "Medium", "ארוך": "Long",
     'const dayOrder=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];':
@@ -240,6 +267,7 @@ def _fetch_detail(base, cookie, post):
         return {
             "pid": pid,
             "title": _unesc((post.get("topic", {}) or {}).get("title", "")) or _t("תגובה"),
+            "tid": (post.get("topic") or {}).get("tid"),
             "ts": ts,
             "date": dt.strftime("%Y-%m-%d"),
             "hour": dt.hour,
@@ -577,6 +605,9 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 <div class="card col-4"><h3>📏 אורך תוכן</h3><div class="chart-box"><canvas id="chart-length"></canvas></div></div>
 <div class="card col-6"><h3>⭐ הפוסטים המוצלחים ביותר</h3><div class="list-container" id="list-best"></div></div>
 <div class="card col-6"><h3>🔍 קשר בין אורך פוסט לפופולריות</h3><div class="chart-box"><canvas id="chart-scatter"></canvas></div></div>
+<div class="card col-6"><h3>💤 תקופות שקט</h3><div class="list-container" id="list-gaps"></div></div>
+<div class="card col-6"><h3>🔥 מתי הוא הכי חד</h3><div class="list-container" id="list-sharp"></div></div>
+<div class="card col-12"><h3>💬 כמה הוא נשאר בשרשור</h3><div class="list-container" id="list-threads"></div></div>
 </div>
 </div>
 <script>
@@ -607,6 +638,90 @@ const lens={'קצר':0,'בינוני':0,'ארוך':0};data.forEach(d=>{if(d.word
 new Chart(document.getElementById('chart-length'),{type:'doughnut',data:{labels:Object.keys(lens),datasets:[{data:Object.values(lens),backgroundColor:['#ef4444','#3b82f6','#10b981'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'70%'}});
 [...data].sort((a,b)=>b.likes-a.likes).slice(0,10).forEach(p=>{document.getElementById('list-best').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/post/${encodeURIComponent(p.pid)}" target="_blank" style="max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</a><span class="badge">+${esc(p.likes)}</span></div>`;});
 new Chart(document.getElementById('chart-scatter'),{type:'scatter',data:{datasets:[{label:'פוסטים',data:data.map(d=>({x:d.words,y:d.likes})),backgroundColor:'#38bdf888'}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{type:'logarithmic',title:{display:true,text:'כמות מילים'}},y:{title:{display:true,text:'לייקים'}}}}});
+// ── שלושה מקטעים שמחושבים מהנתונים שכבר כאן, בלי אף בקשה נוספת ───────────
+const li=(a,b)=>`<div class="list-item"><span>${a}</span><span class="badge">${b}</span></div>`;
+const note=t=>`<div class="list-item" style="opacity:.75">${t}</div>`;
+const dayFmt=ts=>new Date(ts).toLocaleDateString();
+
+// 💤 תקופות שקט — מתי הפסיק לכתוב, ולכמה זמן
+(()=>{
+  const box=document.getElementById('list-gaps');
+  const ts=data.map(d=>d.ts).filter(Boolean).sort((a,b)=>a-b);
+  if(ts.length<2){box.innerHTML=note('אין מספיק פוסטים כדי למדוד שתיקות');return;}
+  const DAY=86400000, MIN_GAP=30;
+  const gaps=[];
+  for(let i=1;i<ts.length;i++){
+    const d=Math.floor((ts[i]-ts[i-1])/DAY);
+    if(d>=MIN_GAP) gaps.push({from:ts[i-1],to:ts[i],days:d});
+  }
+  const quiet=Math.floor((Date.now()-ts[ts.length-1])/DAY);
+  let html='';
+  if(quiet>=MIN_GAP) html+=li('<b>שותק כרגע</b> — מאז '+esc(dayFmt(ts[ts.length-1])), quiet+' ימים');
+  gaps.sort((a,b)=>b.days-a.days).slice(0,6).forEach(g=>{
+    html+=li(esc(dayFmt(g.from))+' ← '+esc(dayFmt(g.to)), g.days+' ימים');
+  });
+  // הפסקה של פחות מחודש אינה "שתיקה" — זה פשוט שבוע עמוס
+  box.innerHTML=html||note('לא היו הפסקות של חודש ומעלה — כתיבה רציפה');
+})();
+
+// 🔥 מתי הוא הכי חד — לייקים לפוסט לפי שעה, לא כמות פוסטים
+(()=>{
+  const box=document.getElementById('list-sharp');
+  // ספירת הלייקים מגיעה מבקשה נפרדת לכל פוסט. אם חלקן נכשלו, ממוצע
+  // הלייקים משקר — ואז עדיף לא להציג מספר מאשר להציג מספר שגוי.
+  const bad=data.filter(d=>d.votes_ok===false).length;
+  if(bad>data.length*0.1){
+    box.innerHTML=note('ספירת הלייקים הייתה חלקית בסריקה הזו, ולכן המקטע הזה מושבת');
+    return;
+  }
+  // פחות מזה — רעש, לא ממצא
+  const MIN_SAMPLE=5;
+  const sum=Array(24).fill(0), cnt=Array(24).fill(0);
+  data.forEach(d=>{sum[d.hour]+=d.likes;cnt[d.hour]++;});
+  const rows=[];
+  for(let h=0;h<24;h++) if(cnt[h]>=MIN_SAMPLE) rows.push({h,avg:sum[h]/cnt[h],n:cnt[h]});
+  if(rows.length<2){box.innerHTML=note('אין מספיק פוסטים בשעה מסוימת כדי להשוות');return;}
+  const overall=data.reduce((a,b)=>a+b.likes,0)/data.length;
+  rows.sort((a,b)=>b.avg-a.avg);
+  const best=rows[0], worst=rows[rows.length-1];
+  const pad=h=>String(h).padStart(2,'0')+':00';
+  let html=li('<b>השעה המוצלחת שלו</b> — '+pad(best.h)+' <span style="opacity:.7">('+best.n+' פוסטים)</span>',
+              best.avg.toFixed(1)+' לייקים לפוסט');
+  html+=li('הכי פחות — '+pad(worst.h)+' <span style="opacity:.7">('+worst.n+' פוסטים)</span>',
+           worst.avg.toFixed(1));
+  html+=li('הממוצע הכללי שלו', overall.toFixed(1));
+  rows.slice(0,5).forEach(r=>{if(r!==best) html+=li(pad(r.h),r.avg.toFixed(1));});
+  box.innerHTML=html;
+})();
+
+// 💬 כמה הוא נשאר בשרשור — מגיב פעם אחת ועובר הלאה, או נשאר עד הסוף
+(()=>{
+  const box=document.getElementById('list-threads');
+  const by={};
+  // קיבוץ לפי מזהה השרשור. כותרת אינה מפתח: פוסט בלי כותרת מקבל את המילה
+  // "תגובה", וקיבוץ לפיה היה מאחד את כולם לשרשור מזויף אחד.
+  data.forEach(d=>{
+    const k=(d.tid!=null?'t'+d.tid:'x'+d.title);
+    (by[k]=by[k]||{n:0,title:d.title,tid:d.tid}).n++;
+  });
+  const list=Object.values(by);
+  if(!list.length){box.innerHTML=note('אין נתונים');return;}
+  const one=list.filter(t=>t.n===1).length;
+  const few=list.filter(t=>t.n>=2&&t.n<=4).length;
+  const many=list.filter(t=>t.n>=5).length;
+  const pct=n=>Math.round(n*100/list.length)+'%';
+  let html=li('שרשורים שבהם כתב פעם אחת ועבר הלאה', one+' · '+pct(one));
+  html+=li('שרשורים עם 2–4 הודעות שלו', few+' · '+pct(few));
+  html+=li('שרשורים שבהם נשאר (5 ומעלה)', many+' · '+pct(many));
+  html+=li('<b>סה"כ שרשורים שהשתתף בהם</b>', list.length.toLocaleString());
+  list.sort((a,b)=>b.n-a.n).slice(0,5).forEach(t=>{
+    const label=t.tid!=null
+      ? `<a href="${esc(baseUrl)}/topic/${escAttr(t.tid)}" target="_blank">${esc(t.title)}</a>`
+      : esc(t.title);
+    html+=li(label, t.n+' הודעות');
+  });
+  box.innerHTML=html;
+})();
 </script>
 </body>
 </html>"""
