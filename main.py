@@ -1013,6 +1013,36 @@ class API:
         i18n.set_lang("he")
         return {"ok": True}
 
+    def has_mail_client(self):
+        """
+        האם רשום ב-Windows מטפל ל-mailto?
+
+        @tsoolgee תיקן נכון: `mailto:` מגיע ל-ShellExecute, ובלי תוכנת דואר
+        מוגדרת הלחיצה פשוט לא עושה כלום. אבל הפתרון שלו קיבע Gmail בתוך
+        מסלול המוצר, והקהל כאן חרדי — חלק גדול ממנו מאחורי סינון שחוסם את
+        mail.google.com, וזה גם לקח את היכולת ממי שכן הגדיר תוכנת דואר.
+        לכן: בודקים, ומחליטים לפי המצב בפועל.
+        """
+        try:
+            import winreg
+        except ImportError:
+            return {"ok": True, "has": False}
+        for root, path in ((winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\Shell\Associations"
+                            r"\UrlAssociations\mailto\UserChoice"),
+                           (winreg.HKEY_CLASSES_ROOT, r"mailto\shell\open\command")):
+            try:
+                with winreg.OpenKey(root, path) as k:
+                    val, _ = winreg.QueryValueEx(
+                        k, "ProgId" if "UserChoice" in path else "")
+                    v = str(val or "").strip()
+                    # "ProgId" ריק, או ברירת מחדל שאינה מטפל אמיתי
+                    if v and v.lower() not in ("", "none"):
+                        return {"ok": True, "has": True, "handler": v[:120]}
+            except OSError:
+                continue
+        return {"ok": True, "has": False}
+
     def open_url(self, url):
         """פתח URL בדפדפן ברירת המחדל של המערכת"""
         if not url:
@@ -2356,13 +2386,27 @@ del "%~f0"
         return dict(net.current(), forums=self._net_test_targets())
 
     def _net_test_targets(self):
-        """כתובות אמיתיות לבדיקה — הפורומים שהמשתמש עצמו הגדיר."""
+        """
+        כתובות לבדיקה — **כל** הפורומים שהמשתמש הגדיר.
+
+        קודם הרשימה נחתכה ב-`out[:12]` בשקט. יש 24 פורומים מוכרים בתוכנה,
+        וכל מה שמעבר ל-12 פשוט לא הופיע — למשתמש זה נראה כאילו התוכנה לא
+        מכירה את הפורום שלו. ופורום בלי כתובת נעלם בלי סיבה בכלל.
+        עכשיו הכול מופיע: מי שאין לו כתובת מוצג מושבת ועם ההסבר.
+        הסדר לפי הסריקה האחרונה — מה שנוגעים בו הכי הרבה, ראשון.
+        """
+        last = db.get_last_scrapes() or {}
         out = []
         for f in db.get_forums():
+            name = f["name"]
             url = (f.get("url") or "").strip()
-            if url:
-                out.append({"name": f["name"], "url": url})
-        return out[:12]
+            out.append({"name": name, "url": url,
+                        "last": last.get(name) or "",
+                        "why": "" if url else "לא הוגדרה כתובת לפורום הזה"})
+        out.sort(key=lambda t: (not t["url"], t["last"] or "", t["name"]),
+                 reverse=False)
+        out.sort(key=lambda t: (t["url"] == "", -(len(t["last"] or ""))))
+        return out
 
     def set_net_settings(self, mode="system", url=""):
         """מחיל ושומר. הגדרה פסולה נדחית — הקיימת ממשיכה לעבוד."""

@@ -584,46 +584,122 @@ def _phone_norm_sql(col):
     return (f"REPLACE(REPLACE(REPLACE(REPLACE(REPLACE({col},'-',''),' ',''),"
             f"'(',''),')',''),'+','')")
 
-def _search_where(search, match_expr, fuzzy=False):
+# ── LIKE בטוח ────────────────────────────────────────────────────────────
+# שני באגים שקיימים ב"מכיל" מאז ומעולם, ושניהם מחמירים כשמוסיפים "לא מכיל":
+#
+#   1. `%` ו-`_` הם **ג'וקרים** ב-LIKE. נמדד: חיפוש "50%" החזיר גם ניק
+#      שכתוב אצלו "500 שקל", כי הג'וקר בלע את הכול אחרי 50.
+#   2. `NOT LIKE` על NULL מחזיר **NULL**, לא TRUE — כלומר ניק שהשדה שלו NULL
+#      נשמט מ"לא מכיל X", למרות שברור שהוא לא מכיל אותו.
+#
+# הפתרון בשני המקומות: COALESCE לצד אחד, בריחה + ESCAPE לצד השני.
+def _like_escape(term):
+    """מנטרל ג'וקרים בערך שהמשתמש הקליד, כדי שהחיפוש ימצא את מה שהוא כתב."""
+    return (str(term or "")
+            .replace("\\", "\\\\")
+            .replace("%", "\\%")
+            .replace("_", "\\_"))
+
+
+def _like_clause(col, negate=False):
+    """הצורה היחידה שבה מותר להשוות טקסט חופשי לעמודה."""
+    return "COALESCE(%s,'') %sLIKE ? ESCAPE '\\'" % (col, "NOT " if negate else "")
+
+
+def split_search_terms(search):
     """
-    תנאי החיפוש המהיר המשולב — מחזיר (where_sql, params):
-      • עמודות הניק דרך FTS (או LIKE כשאין FTS5),
-      • טלפונים/מיילים נוספים (nick_contacts) — בעבר היו בלתי נראים לחיפוש,
-      • התאמת טלפון מנורמל: '050-123-4567' נמצא גם כ-'0501234567' וגם כ-'972501234567'.
+    מפריד את מחרוזת החיפוש למה שצריך להימצא ולמה שצריך **לא** להימצא.
+
+        "כהן -מורחק"  →  (["כהן"], ["מורחק"])
+
+    מקף בתחילת מילה הוא סימן בטוח: שם עברי עם מקף ("בני-מין") נכתב כמילה
+    אחת ואינו פותח במקף. מקף בודד או מקף בסוף אינם החרגה.
+    """
+    pos, neg = [], []
+    for tok in str(search or "").split():
+        if len(tok) > 1 and tok[0] == "-":
+            neg.append(tok[1:])
+        else:
+            pos.append(tok)
+    return pos, neg
+
+
+def _matches_term_sql(term):
+    """
+    (sql, params) — "הניק הזה היה נמצא אילו חיפשת את term".
+    זו אותה בדיקה שהחיפוש החיובי עושה: עמודות הניק, אנשי קשר, וטלפון מנורמל.
     """
     parts, params = [], []
-    if match_expr and FTS_AVAILABLE:
-        parts.append("n.id IN (SELECT rowid FROM nicks_fts WHERE nicks_fts MATCH ?)")
-        params.append(match_expr)
-    else:
-        s = f"%{search}%"
-        parts.append("(" + " OR ".join(f"n.{c} LIKE ?" for c in _SEARCH_COLS) + ")")
-        params.extend([s] * len(_SEARCH_COLS))
-    if fuzzy:
-        # חיפוש תת-מחרוזת: FTS מוצא רק תחילת מילה, ולכן "כהן" לא מצא "משהכהן".
-        # מופעל רק כשהחיפוש הרגיל כמעט לא החזיר תוצאות (סריקה מלאה — יקר).
-        s = f"%{search.strip()}%"
-        parts.append("(" + " OR ".join(f"n.{c} LIKE ?" for c in _SEARCH_COLS) + ")")
-        params.extend([s] * len(_SEARCH_COLS))
-    parts.append("n.id IN (SELECT nick_id FROM nick_contacts WHERE value LIKE ?)")
-    params.append(f"%{search}%")
-    digits = _digits(search)
-    if len(digits) >= 5 and len(digits) >= len(search.strip()) - 4:
+    esc = "%" + _like_escape(term) + "%"
+    for c in _SEARCH_COLS:
+        parts.append(_like_clause("n." + c))
+        params.append(esc)
+    parts.append("n.id IN (SELECT nick_id FROM nick_contacts WHERE "
+                 + _like_clause("value") + ")")
+    params.append(esc)
+    digits = _digits(term)
+    if len(digits) >= 5:
         variants = {digits}
         if digits.startswith("0"):
             variants.add("972" + digits[1:])
         elif digits.startswith("972"):
             variants.add("0" + digits[3:])
         for d in variants:
-            parts.append(f"{_phone_norm_sql('n.phone')} LIKE ?")
-            parts.append(f"n.id IN (SELECT nick_id FROM nick_contacts WHERE "
-                         f"{_phone_norm_sql('value')} LIKE ?)")
-            params.extend([f"%{d}%", f"%{d}%"])
-    return "WHERE " + " OR ".join(parts), params
+            parts.append("%s LIKE ?" % _phone_norm_sql("n.phone"))
+            parts.append("n.id IN (SELECT nick_id FROM nick_contacts WHERE "
+                         "%s LIKE ?)" % _phone_norm_sql("value"))
+            params.extend(["%" + d + "%", "%" + d + "%"])
+    return "(" + " OR ".join(parts) + ")", params
+
+
+def _search_where(search, match_expr, fuzzy=False):
+    """
+    תנאי החיפוש המהיר המשולב — מחזיר (where_sql, params):
+      • עמודות הניק דרך FTS (או LIKE כשאין FTS5),
+      • טלפונים/מיילים נוספים (nick_contacts),
+      • התאמת טלפון מנורמל: '050-123-4567' נמצא גם כ-'0501234567' וגם כ-'972…',
+      • **והחרגות**: מונח שנכתב עם מקף מוביל ("-מורחק") מסלק כל ניק שהיה
+        נמצא אילו חיפשת אותו. אותה בדיקה בדיוק, רק הפוכה — אחרת היה נוצר מצב
+        שבו 0501234567 מוצא ניק, ו--0501234567 לא מסתיר אותו.
+    """
+    pos_terms, neg_terms = split_search_terms(search)
+    positive = " ".join(pos_terms)
+
+    parts, params = [], []
+    if positive:
+        if match_expr and FTS_AVAILABLE:
+            parts.append("n.id IN (SELECT rowid FROM nicks_fts WHERE nicks_fts MATCH ?)")
+            params.append(match_expr)
+        else:
+            for c in _SEARCH_COLS:
+                parts.append(_like_clause("n." + c))
+                params.append("%" + _like_escape(positive) + "%")
+        if fuzzy:
+            # חיפוש תת-מחרוזת: FTS מוצא רק תחילת מילה, ולכן "כהן" לא מצא
+            # "משהכהן". מופעל רק כשהחיפוש הרגיל כמעט לא החזיר תוצאות.
+            for c in _SEARCH_COLS:
+                parts.append(_like_clause("n." + c))
+                params.append("%" + _like_escape(positive) + "%")
+        sub, sub_params = _matches_term_sql(positive)
+        parts.append(sub)
+        params.extend(sub_params)
+        where = "WHERE (" + " OR ".join(parts) + ")"
+    else:
+        # חיפוש שכולו החרגות ("-מורחק") — הבסיס הוא כל הניקים
+        where = "WHERE 1=1"
+
+    for term in neg_terms:
+        sub, sub_params = _matches_term_sql(term)
+        where += " AND NOT " + sub
+        params.extend(sub_params)
+    return where, params
 
 def _fts_match_query(search):
-    """הופך מחרוזת חיפוש חופשית לביטוי MATCH בטוח (כל מילה כ-prefix, AND בין מילים)"""
-    tokens = [t for t in search.strip().split() if t]
+    """הופך מחרוזת חיפוש חופשית לביטוי MATCH בטוח (כל מילה כ-prefix, AND בין מילים).
+    מונחי החרגה ("-מורחק") אינם נכנסים ל-MATCH — הם מטופלים כתנאי NOT נפרד,
+    כדי שההחרגה תכסה גם אנשי קשר וטלפון מנורמל ולא רק את עמודות ה-FTS."""
+    tokens, _neg = split_search_terms(search)
+    tokens = [t for t in tokens if t]
     if not tokens:
         return None
     parts = []
@@ -1029,7 +1105,7 @@ _FILTERABLE_KEYS = {k for k, _ in FILTERABLE_FIELDS}
 def filter_nicks(field, op="contains", value=""):
     """
     מסנן ניקים לפי שדה בודד.
-    op: 'contains' | 'equals' | 'empty' | 'not_empty' | 'starts'
+    op: 'contains' | 'not_contains' | 'equals' | 'empty' | 'not_empty' | 'starts'
     מחזיר רשימת שורות (עם אותם דגלים מחושבים כמו הרשימה הראשית).
     """
     if field not in _FILTERABLE_KEYS:
@@ -1050,9 +1126,15 @@ def filter_nicks(field, op="contains", value=""):
         elif op == "equals":
             where = f"WHERE n.{field}=?"; params = [value]
         elif op == "starts":
-            where = f"WHERE n.{field} LIKE ?"; params = [f"{value}%"]
+            where = "WHERE " + _like_clause(f"n.{field}")
+            params = [_like_escape(value) + "%"]
+        elif op == "not_contains":
+            # שדה ריק **כן** עונה על "לא מכיל" — ראו _like_clause
+            where = "WHERE " + _like_clause(f"n.{field}", negate=True)
+            params = ["%" + _like_escape(value) + "%"]
         else:  # contains
-            where = f"WHERE n.{field} LIKE ?"; params = [f"%{value}%"]
+            where = "WHERE " + _like_clause(f"n.{field}")
+            params = ["%" + _like_escape(value) + "%"]
         rows = conn.execute(
             f"SELECT {_list_cols_sql()} {computed} FROM nicks n {where} "
             f"ORDER BY n.{field}", params).fetchall()
@@ -1084,9 +1166,13 @@ def filter_nicks_multi(conditions):
         elif op == "equals":
             clauses.append(f"n.{f}=?"); params.append(val)
         elif op == "starts":
-            clauses.append(f"n.{f} LIKE ?"); params.append(f"{val}%")
+            clauses.append(_like_clause(f"n.{f}")); params.append(_like_escape(val) + "%")
+        elif op == "not_contains":
+            clauses.append(_like_clause(f"n.{f}", negate=True))
+            params.append("%" + _like_escape(val) + "%")
         else:
-            clauses.append(f"n.{f} LIKE ?"); params.append(f"%{val}%")
+            clauses.append(_like_clause(f"n.{f}"))
+            params.append("%" + _like_escape(val) + "%")
     where = "WHERE " + " AND ".join(clauses)
     order = conds[0]["field"]
     with get_connection() as conn:

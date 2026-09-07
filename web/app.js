@@ -1188,8 +1188,15 @@ function contactMenu(type, value) {
     add('💬 וואטסאפ', 'btn-primary', () => api('open_url', waLink(v)));
     add('📞 חיוג', 'btn-ghost', () => api('open_url', 'tel:' + v.replace(/[^\d+]/g, '')));
   } else {
-    add('📧 שלח מייל', 'btn-primary', () => api('open_url',
-      'https://mail.google.com/mail/?view=cm&fs=1&to=' + encodeURIComponent(v)));
+    // תוכנת דואר מוגדרת → פותחים אותה, כמו שתמיד היה. אין → הדפדפן, במקום
+    // לחיצה שלא עושה כלום. הבדיקה עצמה היא מ-PR #4 של @tsoolgee; ההכללה כאן
+    // היא כדי לא לקבע ספק אחד לכל המשתמשים.
+    add('📧 שלח מייל', 'btn-primary', async () => {
+      const m = await api('has_mail_client');
+      if (m && m.has) { api('open_url', 'mailto:' + v); return; }
+      api('open_url', 'https://mail.google.com/mail/?view=cm&fs=1&to='
+                      + encodeURIComponent(v));
+    });
   }
   add('📋 העתק', 'btn-ghost', async () => {
     const r = await api('copy_to_clipboard', v);
@@ -2973,6 +2980,7 @@ function addFilterRow() {
     <select class="form-select flt-field" style="width:auto;min-width:120px">${_fieldOptions()}</select>
     <select class="form-select flt-op" style="width:auto" onchange="onFilterOpChange(this);applyFieldFilter()">
       <option value="contains">מכיל</option>
+      <option value="not_contains">לא מכיל</option>
       <option value="equals">שווה בדיוק</option>
       <option value="starts">מתחיל ב-</option>
       <option value="not_empty">לא ריק</option>
@@ -5029,7 +5037,8 @@ async function openNetSettings(back) {
       <div class="section-hdr">בדיקה</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <select id="net-target" class="form-select" style="flex:1;min-width:150px">
-          ${targets.map(t => `<option value="${esc(t.url)}">${esc(t.name)}</option>`).join('')}
+          ${targets.map(t => `<option value="${esc(t.url)}" ${t.url ? '' : 'disabled'}>${
+              esc(t.name)}${t.url ? '' : ' — ' + esc(t.why || 'ללא כתובת')}</option>`).join('')}
         </select>
         <button class="btn btn-sm btn-ghost" onclick="doNetTest()">בדוק חיבור</button>
       </div>
