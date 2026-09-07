@@ -13,6 +13,7 @@ import time
 import i18n
 import net
 import html
+import re
 import logging
 
 _LOCAL_EN = {"תגובה": "Reply", "מתוך": "of"}
@@ -191,6 +192,19 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
             "limited": limited}
 
 
+def _fill(template, values):
+    """
+    מעבר החלפה **יחיד** על מצייני המקום.
+
+    שרשרת .replace סורקת מחדש טקסט שכבר הוזרק, ולכן כותרת פוסט מהפורום שמכילה
+    __BASE_URL__ נבלעה והרסה את ה-<script> כולו — דוח שנראה שלם עם 0 פוסטים,
+    בלי שום הודעת שגיאה (ה-iframe מוגן ואין בו קונסולה). זהו אותו דפוס שכבר
+    נהוג ב-profile_sheet.build_sheet.
+    """
+    return re.sub(r"__([A-Z_]+)__", lambda m: values.get(m.group(1), m.group(0)),
+                  template)
+
+
 def _build_html(slug, disliked, checked, up, down, rep, postcount=0):
     _link = i18n.t("למעבר לפוסט 🌐")
     if disliked:
@@ -213,16 +227,16 @@ def _build_html(slug, disliked, checked, up, down, rep, postcount=0):
                       + i18n.t("🎉 לא נמצאו פוסטים עם דיסלייקים כלל.")
                       + '</div>')
 
-    return i18n.translate_template(_TEMPLATE, _TPL_EN) \
-        .replace("__SLUG__", _esc(slug)) \
-        .replace("__SCANNOTE__",
-                 (" " + _t("מתוך") + " {:,}".format(postcount)) if postcount else "") \
-        .replace("__CHECKED__", f"{checked:,}") \
-        .replace("__UP__", str(up)) \
-        .replace("__DOWN__", str(down)) \
-        .replace("__REP__", str(rep)) \
-        .replace("__DISCOUNT__", str(len(disliked))) \
-        .replace("__POSTS__", posts_html)
+    return _fill(i18n.translate_template(_TEMPLATE, _TPL_EN), {
+        "SLUG": _esc(slug),
+        "SCANNOTE": (" " + _t("מתוך") + " {:,}".format(postcount)) if postcount else "",
+        "CHECKED": f"{checked:,}",
+        "UP": str(up),
+        "DOWN": str(down),
+        "REP": str(rep),
+        "DISCOUNT": str(len(disliked)),
+        "POSTS": posts_html,
+    })
 
 
 def _unesc(v):

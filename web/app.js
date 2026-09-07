@@ -1025,7 +1025,7 @@ function onTableScroll() {
 // אחרי כל רינדור מושכים רק את התמונות של השורות שבאמת מוצגות, ומטמינים.
 function applyAvatar(el, dataUrl) {
   el.dataset.avatarDone = '1';
-  const safe = safeUrl(dataUrl);            // רק data:image או http(s)
+  const safe = safeAvatar(dataUrl);         // תמונה מקומית בלבד
   if (!safe || /["'()\\]/.test(safe.slice(0, 32))) return;
   if (el.tagName === 'IMG') el.src = safe;
   else el.style.backgroundImage = `url("${safe.replace(/["\\]/g, '')}")`;
@@ -1795,7 +1795,7 @@ async function openNickDialog(nickId = null) {
         <label class="form-label">סטטוס</label>
         <select class="form-select" id="f-status">
           ${['פעיל','מורחק','מושעה','לא ידוע'].map(s =>
-            `<option ${nick?.status===s?'selected':''}>${s}</option>`).join('')}
+            `<option value="${s}" ${nick?.status===s?'selected':''}>${s}</option>`).join('')}
         </select>
       </div>
       <div class="form-group">
@@ -1833,7 +1833,7 @@ async function openNickDialog(nickId = null) {
       <div class="avatar-upload" id="avatar-upload-box">
         <div class="avatar-preview" id="avatar-preview">
           ${nick?.avatar_image
-            ? `<img src="${esc(nick.avatar_image)}" alt="">`
+            ? `<img src="${esc(safeAvatar(nick.avatar_image))}" alt="">`
             : `<span class="avatar-initial" style="background:${esc(safeColor(nick?.nick_color))}">${esc((nick?.username||'?').charAt(0).toUpperCase())}</span>`}
         </div>
         <div class="avatar-controls">
@@ -1845,7 +1845,7 @@ async function openNickDialog(nickId = null) {
                   onclick="removeAvatar()"
                   style="display:${nick?.avatar_image?'inline-flex':'none'}">🗑️ הסר</button>
         </div>
-        <input type="hidden" id="f-avatar_image" value="${nick?.avatar_image||''}">
+        <input type="hidden" id="f-avatar_image" value="${esc(safeAvatar(nick?.avatar_image))}">
       </div>
 
       <div class="color-picker-box">
@@ -2581,7 +2581,7 @@ function renderMergedProfile(p) {
   const avatarBg = esc(safeColor(primary.nick_color,
                        S.forumColors[primary.forum] || 'var(--accent)'));
   const avatarHtml = primary.avatar_image
-    ? `<img src="${esc(primary.avatar_image)}" style="width:100%;height:100%;object-fit:cover">`
+    ? `<img src="${esc(safeAvatar(primary.avatar_image))}" style="width:100%;height:100%;object-fit:cover">`
     : `<span style="width:100%;height:100%;display:grid;place-items:center;font-size:22px;font-weight:800;color:${fgOn(avatarBg)};background:${avatarBg}">${initial}</span>`;
 
   // צ'יפים לכל זהות (עם פתיחת פרופיל)
@@ -6184,4 +6184,13 @@ function safeColor(v, fallback = 'var(--accent)') {
 function safeUrl(u) {
   const s = String(u ?? '').trim();
   return /^(https?:\/\/|data:image\/)/i.test(s) ? s : '';
+}
+
+// avatar_image היא תמונה שהמשתמש העלה בעצמו, ולכן **תמיד** data:image.
+// כתובת מרוחקת שם אינה מקרה לגיטימי — היא יכולה להגיע רק מקובץ ייבוא, ואז
+// כל פתיחה של הניק מודיעה למי שכתב את הקובץ שהסתכלת עליו. safeUrl מתיר
+// http(s) כי הוא משרת גם avatar_url; כאן צריך שער צר יותר.
+function safeAvatar(u) {
+  const s = String(u ?? '').trim();
+  return /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=\s]*$/i.test(s) ? s : '';
 }

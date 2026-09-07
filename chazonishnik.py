@@ -352,11 +352,12 @@ def _build_compare_html(base_url, a, b):
         "base": base_url,
     }
     # התבנית מתורגמת *לפני* הזרקת הנתונים — כך התרגום לא נוגע בתוכן מהפורום
-    return i18n.translate_template(COMPARE_TEMPLATE, _CMP_EN)\
-        .replace("__CHARTJS__", _chartjs_tag()) \
-        .replace("__A__", _esc(a["slug"])) \
-        .replace("__B__", _esc(b["slug"])) \
-        .replace("__JSON_DATA__", _json_for_script(payload))
+    return _fill(i18n.translate_template(COMPARE_TEMPLATE, _CMP_EN), {
+        "CHARTJS": _chartjs_tag(),
+        "A": _esc(a["slug"]),
+        "B": _esc(b["slug"]),
+        "JSON_DATA": _json_for_script(payload),
+    })
 
 
 def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_path=None,
@@ -459,13 +460,27 @@ def _json_for_script(obj):
             .replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026"))
 
 
+def _fill(template, values):
+    """
+    מעבר החלפה **יחיד** על מצייני המקום.
+
+    שרשרת .replace סורקת מחדש טקסט שכבר הוזרק, ולכן כותרת פוסט מהפורום שמכילה
+    __BASE_URL__ נבלעה והרסה את ה-<script> כולו — דוח שנראה שלם עם 0 פוסטים,
+    בלי שום הודעת שגיאה (ה-iframe מוגן ואין בו קונסולה). זהו אותו דפוס שכבר
+    נהוג ב-profile_sheet.build_sheet.
+    """
+    return re.sub(r"__([A-Z_]+)__", lambda m: values.get(m.group(1), m.group(0)),
+                  template)
+
+
 def _build_html(user_slug, base_url, my_uid, posts_data):
-    return i18n.translate_template(HTML_TEMPLATE, _TPL_EN)\
-        .replace("__CHARTJS__", _chartjs_tag()) \
-        .replace("__USER__", _esc(user_slug)) \
-        .replace("__JSON_DATA__", _json_for_script(posts_data)) \
-        .replace("__MY_UID__", _json_for_script(my_uid)) \
-        .replace("__BASE_URL__", _json_for_script(base_url))
+    return _fill(i18n.translate_template(HTML_TEMPLATE, _TPL_EN), {
+        "CHARTJS": _chartjs_tag(),
+        "USER": _esc(user_slug),
+        "JSON_DATA": _json_for_script(posts_data),
+        "MY_UID": _json_for_script(my_uid),
+        "BASE_URL": _json_for_script(base_url),
+    })
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>

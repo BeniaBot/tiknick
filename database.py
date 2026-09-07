@@ -466,6 +466,7 @@ def init_db():
     _init_fts()
     _backfill_sources()
     _decode_entities_once()
+    _repair_status_enum_once()
     # סל המחזור נשמר 30 יום; היסטוריה ויומן סריקות — שנה (אחרת גדלים בלי גבול)
     try:
         empty_trash(30)
@@ -1386,6 +1387,8 @@ def update_nick(nick_id, data):
     upd_fields = [f for f in _NICK_FIELDS if f != "source" and f in data]
     if not upd_fields:
         return
+    if "status" in data:            # enum של התוכנה — ראו _canon_status
+        data = dict(data, status=_canon_status(data["status"]))
     set_clause = ", ".join([f"{f}=?" for f in upd_fields]) + ", updated_at=datetime('now')"
     vals = [data.get(f, '') for f in upd_fields] + [nick_id]
     with get_connection() as conn:
@@ -2159,6 +2162,56 @@ def fix_encoded_values():
     return {"nicks": changed_nicks, "field_values": changed_vals}
 
 
+# ── הסטטוס הוא enum של התוכנה, לא טקסט חופשי ─────────────────────────────
+# העברית היא הצורה הקנונית: כל בדיקת הרחקה במאגר, בסטטיסטיקות, בגיליון
+# ההדפסה ובממשק היא השוואה למחרוזת "מורחק". באנגלית ה-<option> איבד את ערכו
+# בתרגום ונשמר "Banned" — נראה תקין למשתמש, אבל הניק הפסיק להיספר כמורחק
+# בכל מקום. כאן נסגר גם הצד השני: ערך שאינו קנוני מומר, ולא נכתב כמו שהוא.
+_STATUS_CANON = {
+    "active": "פעיל", "banned": "מורחק", "suspended": "מושעה",
+    "unknown": "לא ידוע", "": "",
+}
+
+
+def _canon_status(value):
+    v = ("" if value is None else str(value)).strip()
+    if not v or v in ("פעיל", "מורחק", "מושעה", "לא ידוע"):
+        return v
+    return _STATUS_CANON.get(v.lower(), v)
+
+
+def _repair_status_enum_once():
+    """
+    מתקן מאגר שכבר נפגע. מי שעבד באנגלית ושמר סטטוס מחזיק עכשיו "Banned"
+    בטבלה — כלומר מורחק שאינו נספר. חד-פעמי, מסומן בדגל, וזול.
+    """
+    with get_connection() as conn:
+        if conn.execute("SELECT value FROM settings "
+                        "WHERE key='status_enum_repaired'").fetchone():
+            return
+    fixed = 0
+    try:
+        with get_connection() as conn:
+            for en, he in _STATUS_CANON.items():
+                if not en or not he:
+                    continue
+                fixed += conn.execute(
+                    "UPDATE nicks SET status=? WHERE lower(trim(status))=?",
+                    (he, en)).rowcount
+                conn.execute(
+                    "UPDATE OR REPLACE field_values SET value=? "
+                    "WHERE field_name='status' AND lower(trim(value))=?",
+                    (he, en))
+    except Exception:
+        logging.exception("Status enum repair failed")
+        return                      # בלי דגל — ננסה שוב בהפעלה הבאה
+    if fixed:
+        logging.info("Repaired %s nicks whose status was stored in English", fixed)
+    with get_connection() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key,value) "
+                     "VALUES ('status_enum_repaired','1')")
+
+
 def _decode_entities_once():
     """
     עד 0.8.20 הסורק שמר את מה ש-NodeBB החזיר בדיוק כפי שהוא, ו-NodeBB מחזיר
@@ -2630,7 +2683,9 @@ def _upsert_field_value(conn, nick_id, field_name, value, source_id):
         VALUES (?,?,?,?)
         ON CONFLICT(nick_id, field_name, source_id)
         DO UPDATE SET value=excluded.value, created_at=datetime('now')
-    """, (nick_id, field_name, str(value), source_id))
+    """, (nick_id, field_name,
+          _canon_status(value) if field_name == "status" else str(value),
+          source_id))
 
 def _winner_for(field_name, frows):
     """הערך המנצח לשדה מתוך רשומות (value, created_at, kind, trust, absolute).
