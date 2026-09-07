@@ -1184,39 +1184,26 @@ function contactMenu(type, value) {
     b.onclick = () => { ov.remove(); if (fn) fn(); };
     foot.appendChild(b);
   };
+  // כישלון של open_url נבלע בשקט עד 0.9 — לחיצה שלא עושה כלום ולא אומרת
+  // כלום. משותף לשני הענפים, ולכן מוגדר מעליהם.
+  const openAndReport = async (url, what) => {
+    const r = await api('open_url', url);
+    if (!r || !r.ok) toast((r && r.error) || ('לא ניתן לפתוח ' + what), 'error');
+  };
   if (type === 'phone') {
-    const openAndReport = async (url, what) => {
-      const r = await api('open_url', url);
-      if (!r || !r.ok) toast((r && r.error) || ('לא ניתן לפתוח ' + what), 'error');
-    };
     add('💬 וואטסאפ', 'btn-primary', () => openAndReport(waLink(v), 'וואטסאפ'));
     // tel: על מחשב בלי אפליקציית טלפון הוא בדיוק אותה לחיצה שותקת
     add('📞 חיוג', 'btn-ghost', () =>
       openAndReport('tel:' + v.replace(/[^\d+]/g, ''), 'את החייגן'));
   } else {
-    // הכפתור הזה כבר "לא עשה כלום" פעמיים, משתי סיבות שונות: פעם כי לא
-    // הייתה תוכנת דואר, ופעם כי הייתה **רשומה** תוכנה שכבר לא מותקנת
-    // (AppX של אפליקציית הדואר שהוסרה מ-Windows 11). Windows לא יודע לענות
-    // על זה בוודאות, ולכן לא מנחשים: מציגים את שתי הדרכים, ומדווחים כשמשהו
-    // נכשל במקום לשתוק.
-    const openAndReport = async (url, what) => {
-      const r = await api('open_url', url);
-      if (!r || !r.ok) toast((r && r.error) || ('לא ניתן לפתוח ' + what), 'error');
-    };
-    add('🌐 מייל בדפדפן', 'btn-primary', () =>
+    // דרך אחת בלבד, והיא הדפדפן. `mailto:` נשען על תוכנת דואר מותקנת, וזה
+    // פשוט לא המצב במחשבים האלה: הכפתור "לא עשה כלום" פעמיים — פעם כשלא
+    // הייתה תוכנה, ופעם כשהייתה **רשומה** תוכנה שכבר לא מותקנת (ה-AppX של
+    // אפליקציית הדואר שהוסרה מ-Windows 11). התיקון המקורי של @tsoolgee
+    // ב-PR #4 היה הנכון מלכתחילה; ההכללה שהוספתי מעליו הייתה מיותרת.
+    add('📧 שלח מייל', 'btn-primary', () =>
       openAndReport('https://mail.google.com/mail/?view=cm&fs=1&to='
                     + encodeURIComponent(v), 'את הדפדפן'));
-    api('has_mail_client').then(m => {
-      if (!m || !m.has) return;          // אין מטפל רשום — אין מה להציע
-      const b = document.createElement('button');
-      b.className = 'btn btn-ghost';
-      b.textContent = m.verified ? '📧 תוכנת הדואר' : '📧 תוכנת הדואר (לא אומתה)';
-      if (!m.verified) b.title =
-        'רשום מטפל ל-mailto, אבל לא ניתן לאמת שהתוכנה מותקנת. '
-        + 'אם הלחיצה לא עושה כלום — השתמש בדפדפן.';
-      b.onclick = () => { ov.remove(); openAndReport('mailto:' + v, 'את תוכנת הדואר'); };
-      foot.insertBefore(b, foot.firstChild);
-    });
   }
   add('📋 העתק', 'btn-ghost', async () => {
     const r = await api('copy_to_clipboard', v);
