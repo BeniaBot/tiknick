@@ -936,5 +936,19 @@
   "kind": "static",
   "where": "python",
   "context": "0.9 audit — SEAM-5"
+ },
+ {
+  "he": "⚠️ {1} פוסטים לא נכללו — ספירת הלייקים שלהם נכשלה",
+  "en": "⚠️ {1} posts were excluded — their like counts failed",
+  "kind": "pattern",
+  "where": "chazonishnik",
+  "context": "0.9 audit"
+ },
+ {
+  "he": "לא נמצאו הפסקות בפוסטים שנסרקו (הסריקה חלקית)",
+  "en": "No breaks were found in the scanned posts (the scan is partial)",
+  "kind": "static",
+  "where": "chazonishnik",
+  "context": "0.9 audit"
  }
 ]

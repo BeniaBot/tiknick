@@ -179,6 +179,21 @@ _TPL_EN = {
     " פניות · ": " approaches · ",
     " פניות": " approaches",
     " לייקים": " likes",
+    "לא נמצאו הפסקות בפוסטים שנסרקו (הסריקה חלקית)":
+        "No breaks were found in the scanned posts (the scan is partial)",
+    " פוסטים לא נכללו — ספירת הלייקים שלהם נכשלה":
+        " posts were excluded — their like counts failed",
+    "ספירת הלייקים נכשלה בכל הפוסטים שנסרקו":
+        "The like counts failed for every scanned post",
+    "ספירת הלייקים נכשלה ב-": "Like counting failed for ",
+    " מתוך ": " of ",
+    " פוסטים": " posts",
+    "ספירת הלייקים נכשלה — אי אפשר לדעת מי אהב את הפוסטים":
+        "Like counting failed — there is no way to know who liked the posts",
+    "לא התקבלו לייקים על הפוסטים שנסרקו":
+        "No likes were received on the scanned posts",
+    "ספירת הלייקים נכשלה — אי אפשר לדרג פוסטים":
+        "Like counting failed — posts cannot be ranked",
     "💤 תקופות שקט": "💤 Periods of silence",
     "🔥 מתי הוא הכי חד": "🔥 When they are at their sharpest",
     "💬 כמה הוא נשאר בשרשור": "💬 How long they stay in a thread",
@@ -261,8 +276,36 @@ _MENTION_RX = re.compile(
 # \u05d4\u05d7\u05d9\u05d1\u05d5\u05e8 \u05e0\u05d3\u05d1\u05e7\u05ea \u05dc\u05de\u05d9\u05dc\u05d4 \u2014 "\u05d5@\u05e9\u05e8\u05d4" \u05d4\u05d5\u05d0 \u05d0\u05d6\u05db\u05d5\u05e8 \u05dc\u05d2\u05de\u05e8\u05d9 \u05ea\u05e7\u05d9\u05df, \u05d5\u05d4\u05db\u05dc\u05dc \u05d4\u05de\u05d7\u05de\u05d9\u05e8 \u05e4\u05e1\u05e4\u05e1 \u05d0\u05d5\u05ea\u05d5.
 # \u05de\u05d4 \u05e9\u05db\u05df \u05d7\u05d9\u05d9\u05d1 \u05dc\u05d4\u05d9\u05e4\u05e1\u05dc \u05d4\u05d5\u05d0 `beni@gmail.com`, \u05d5\u05e9\u05dd \u05dc\u05e4\u05e0\u05d9 \u05d4-@ \u05ea\u05de\u05d9\u05d3 \u05d9\u05e9 \u05ea\u05d5 \u05dc\u05d8\u05d9\u05e0\u05d9.
 _EMAILISH_BEFORE = re.compile(r"[0-9A-Za-z._%+-]")
+# קטע כתובת שנמשך עד ה-@ בלי רווח — youtube.com/@handle וכדומה
+_URLISH_BEFORE = re.compile(r"(?:https?://|www\.)\S*$", re.I)
+# שמות שאינם אדם
+_NOT_A_PERSON = {"everyone", "here", "all", "channel", "כולם"}
 _LOOKS_LIKE_DOMAIN = re.compile(r"\.[a-z]{2,}$", re.I)
 MAX_MENTIONS_PER_POST = 8
+
+
+_BLOCKQUOTE_RX = re.compile(r"<blockquote[^>]*>.*?</blockquote>", re.I | re.S)
+# כותרת הציטוט של NodeBB ("@שם said in ...") היא כן פנייה שלו — היא נשמרת.
+_QUOTE_HEAD_RX = re.compile(
+    r"<blockquote[^>]*>(?P<head>.{0,200}?)(?:</p>|</blockquote>)", re.I | re.S)
+
+
+def _strip_quotes(raw_html):
+    """
+    מסיר את **גוף** הציטוטים ומשאיר רק את שורת הכותרת שלהם.
+
+    ציטוט הוא טקסט שאדם אחר כתב. כל @ שבתוכו שייך לו, לא למשתמש הנבדק —
+    ובלי ההפרדה הזו אנשים שמעולם לא היה איתם קשר נספרו כ"פניות" שלו, ומשם
+    נחתו ברשימה "פונה אליהם ולא הגיע מהם לייק". מה שכן נשמר היא השורה
+    "@פלוני said in ..." שמכניס NodeBB, כי היא אכן מציינת את מי הוא ציטט.
+    גם צורת המרקדאון (שורה שמתחילה ב->) מטופלת.
+    """
+    s = raw_html or ""
+    heads = [m.group("head") for m in _QUOTE_HEAD_RX.finditer(s)]
+    s = _BLOCKQUOTE_RX.sub(" ", s)
+    lines = [ln for ln in s.split(chr(10))
+             if not ln.lstrip().startswith(">") and not ln.lstrip().startswith("&gt;")]
+    return chr(10).join(lines) + " " + " ".join(heads)
 
 
 def _mentions_in(text, me=""):
@@ -275,10 +318,17 @@ def _mentions_in(text, me=""):
         # התו שלפני ה-@ הוא מה שמכריע: אות לטינית או ספרה = כתובת מייל.
         if i > 0 and _EMAILISH_BEFORE.match(txt[i - 1]):
             continue
+        # @ בתוך כתובת אינטרנט אינו חבר בפורום. קישור ליוטיוב או ל-X הפך
+        # את ה-handle שם ל"אדם שהוא פונה אליו", ומשם לרשימה השלילית.
+        before = txt[max(0, i - 90):i]
+        if _URLISH_BEFORE.search(before):
+            continue
         name = m.group(1).rstrip("._-")
         if not name or _LOOKS_LIKE_DOMAIN.search(name):
             continue
         if name.lower() == low_me or name in out:
+            continue
+        if name.lower() in _NOT_A_PERSON:
             continue
         out.append(name)
         if len(out) >= MAX_MENTIONS_PER_POST:
@@ -300,11 +350,14 @@ def _fetch_detail(base, cookie, post, me=""):
     try:
         time.sleep(DETAIL_DELAY)   # נימוס: 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
         pid = post["pid"]
-        clean = re.sub(r"<[^<]+?>", "", post.get("content", "") or "")
+        raw = post.get("content", "") or ""
+        clean = re.sub(r"<[^<]+?>", "", raw)
         words = len(clean.split())
-        # החילוץ על הטקסט הנקי: NodeBB עוטף אזכור בעוגן, והפשטת התגיות
-        # משאירה בדיוק "@שם".
-        mentions = _mentions_in(clean, me)
+        # האזכורים נחלצים מ**גוף הפוסט בלבד**, בלי מה שמצוטט בתוכו: טקסט
+        # מצוטט הוא מה שמישהו *אחר* כתב, וכל מי שהוא הזכיר שם נזקף בטעות
+        # למשתמש הנבדק — ומשם ישר לרשימה "פונה אליהם ולא הגיע מהם לייק",
+        # עם אנשים שמעולם לא היה איתם קשר.
+        mentions = _mentions_in(_strip_quotes(raw), me)
         upvoters = []
         with _vote_lock:
             give_up = _vote_fails["n"] >= _VOTE_FAIL_GIVEUP
@@ -539,7 +592,15 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
                 processed.append(r)
 
     processed.sort(key=lambda x: x["ts"])
-    html = _build_html(slug, base, my_uid, processed)
+    _limited = bool(max_posts and len(raw_posts) >= max_posts)
+    html = _build_html(slug, base, my_uid, processed, {
+        "limited": _limited,
+        "stopped_early": scan_stats["stopped_early"],
+        "partial": scan_stats["stopped_early"] or (
+            bool(postcount) and len(raw_posts) < postcount * 0.95 and not _limited),
+        "postcount": postcount,
+        "likes_incomplete": _vote_failures(),
+    })
 
     path = None
     if save_path:
@@ -609,13 +670,33 @@ def _fill(template, values):
                   template)
 
 
-def _build_html(user_slug, base_url, my_uid, posts_data):
+def _build_html(user_slug, base_url, my_uid, posts_data, meta=None):
+    """
+    meta נכנס לדוח כדי שהכרטיסים יידעו **על מה** הם מדברים.
+
+    בלעדיו הדוח הסיק מסקנות מוחלטות מתוך חלון חלקי: "כתיבה רציפה" למי ששתק
+    שנתיים (הסריקה מוגבלת מחזירה את הפוסטים החדשים בלבד), ו"0 לייקים"
+    ככותרת ענקית כשספירת הלייקים בכלל נכשלה. שני מקרים שבהם הדוח נראה
+    מושלם ואומר דבר שקרי.
+    """
+    m = dict(meta or {})
     return _fill(i18n.translate_template(HTML_TEMPLATE, _TPL_EN), {
         "CHARTJS": _chartjs_tag(),
         "USER": _esc(user_slug),
         "JSON_DATA": _json_for_script(posts_data),
         "MY_UID": _json_for_script(my_uid),
         "BASE_URL": _json_for_script(base_url),
+        # זמן הסריקה קפוא בקובץ. בלעדיו "שותק כרגע" נמדד מול שעון הקורא,
+        # וקובץ שנפתח חצי שנה אחרי הסריקה המציא שתיקה שלא הייתה.
+        "SCANNED_AT": _json_for_script(
+            datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
+        "META": _json_for_script({
+            "limited": bool(m.get("limited")),
+            "stopped_early": bool(m.get("stopped_early")),
+            "partial": bool(m.get("partial")),
+            "postcount": int(m.get("postcount") or 0),
+            "likes_incomplete": int(m.get("likes_incomplete") or 0),
+        }),
     })
 
 
@@ -671,14 +752,31 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 </div>
 </div>
 <script>
-const data=__JSON_DATA__;const myUid=__MY_UID__;const baseUrl=__BASE_URL__;
+const data=__JSON_DATA__;const myUid=__MY_UID__;const baseUrl=__BASE_URL__;const scannedAt=__SCANNED_AT__;const meta=__META__;
 // כל טקסט מהפורום עובר בריחה לפני הזרקה ל-innerHTML
+// טקסט מהפורום חוזר מקודד ל-HTML (הלקח מ-0.8.21), ושמות המצביעים לא
+// פוענחו. מפענח קטן וקבוע, בלי DOM — הדוח נשמר לקובץ ונפתח בכל מקום.
+const _ENT={quot:'"',amp:'&',lt:'<',gt:'>',apos:"'",nbsp:' ','#39':"'",'#34':'"'};
+const _U=s=>String(s==null?'':s).replace(/&(#?[a-z0-9]+);/gi,(m,k)=>_ENT[k]!==undefined?_ENT[k]:m);
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const escAttr=s=>encodeURIComponent(String(s==null?'':s));
-const totalLikes=data.reduce((a,b)=>a+b.likes,0);
+// פוסט שספירת הלייקים שלו נכשלה אינו "אפס לייקים" — הוא **לא נמדד**.
+// כל חישוב שנוגע בלייקים עובד מכאן ואילך על הקבוצה המדודה בלבד.
+const measured=data.filter(d=>d.votes_ok!==false);
+const likesUnknown=data.length-measured.length;
+const totalLikes=measured.reduce((a,b)=>a+b.likes,0);
 const totalWords=data.reduce((a,b)=>a+b.words,0);
 document.getElementById('stat-posts').innerText=data.length.toLocaleString();
-document.getElementById('stat-likes').innerText=totalLikes.toLocaleString();
+document.getElementById('stat-likes').innerText =
+  likesUnknown===data.length ? '—' : totalLikes.toLocaleString()
+    + (likesUnknown ? ' +' : '');
+if(likesUnknown){
+  const el=document.getElementById('stat-likes');
+  el.title = likesUnknown===data.length
+    ? 'ספירת הלייקים נכשלה בכל הפוסטים שנסרקו'
+    : ('ספירת הלייקים נכשלה ב-'+likesUnknown+' מתוך '+data.length+' פוסטים');
+  el.style.fontSize='1.6rem';
+}
 document.getElementById('stat-words').innerText=totalWords.toLocaleString();
 document.getElementById('stat-time').innerText=Math.ceil(totalWords/200)+" דק'";
 Chart.defaults.color='#94a3b8';
@@ -686,8 +784,14 @@ const monthCounts={};data.forEach(d=>monthCounts[d.month]=(monthCounts[d.month]|
 new Chart(document.getElementById('chart-monthly'),{type:'line',data:{labels:Object.keys(monthCounts),datasets:[{label:'פוסטים',data:Object.values(monthCounts),borderColor:'#38bdf8',backgroundColor:'rgba(56,189,248,.1)',fill:true,tension:.4}]},options:{responsive:true,maintainAspectRatio:false}});
 const hourlyData=Array(24).fill(0);data.forEach(d=>hourlyData[d.hour]++);
 new Chart(document.getElementById('chart-hourly'),{type:'bar',data:{labels:Array.from({length:24},(_,i)=>i+":00"),datasets:[{label:'פוסטים',data:hourlyData,backgroundColor:'#8b5cf6'}]},options:{responsive:true,maintainAspectRatio:false}});
-const fans={},fanSlug={};data.forEach(p=>p.voters.forEach(v=>{if(v.uid!=myUid){fans[v.username]=(fans[v.username]||0)+1;fanSlug[v.username]=v.userslug||String(v.username||'').trim().toLowerCase().replace(/\s+/g,'-');}}));
+const fans={},fanSlug={};measured.forEach(p=>p.voters.forEach(v=>{if(v.uid!=myUid){fans[v.username]=(fans[v.username]||0)+1;fanSlug[v.username]=v.userslug||String(v.username||'').trim().toLowerCase().replace(/\s+/g,'-');}}));
 Object.entries(fans).sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(([name,count])=>{document.getElementById('list-fans').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/user/${escAttr(fanSlug[name]||name)}" target="_blank">${esc(name)}</a><span class="badge">${esc(count)}</span></div>`;});
+// כרטיס ריק נקרא כ"אף אחד לא אהב אותו" — טענה על אדם. כשהספירה נכשלה
+// אומרים זאת במפורש, וכשהיא הצליחה והוא באמת לא קיבל לייקים — גם כן.
+if(!Object.keys(fans).length){document.getElementById('list-fans').innerHTML=
+  '<div class="list-item" style="opacity:.75">'+(likesUnknown
+    ? 'ספירת הלייקים נכשלה — אי אפשר לדעת מי אהב את הפוסטים'
+    : 'לא התקבלו לייקים על הפוסטים שנסרקו')+'</div>';}
 const dayOrder=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 // קיבוץ לפי מספר היום ולא לפי שמו: השם מתורגם בזמן הבנייה בעוד
 // הנתונים נאספו קודם, והשוואת המחרוזות ביניהם החזירה גרף ריק.
@@ -697,6 +801,8 @@ new Chart(document.getElementById('chart-weekly'),{type:'radar',data:{labels:day
 const lens={'קצר':0,'בינוני':0,'ארוך':0};data.forEach(d=>{if(d.words<20)lens['קצר']++;else if(d.words<100)lens['בינוני']++;else lens['ארוך']++;});
 new Chart(document.getElementById('chart-length'),{type:'doughnut',data:{labels:Object.keys(lens),datasets:[{data:Object.values(lens),backgroundColor:['#ef4444','#3b82f6','#10b981'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'70%'}});
 [...data].sort((a,b)=>b.likes-a.likes).slice(0,10).forEach(p=>{document.getElementById('list-best').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/post/${encodeURIComponent(p.pid)}" target="_blank" style="max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</a><span class="badge">+${esc(p.likes)}</span></div>`;});
+if(likesUnknown===data.length){document.getElementById('list-best').innerHTML=
+  '<div class="list-item" style="opacity:.75">ספירת הלייקים נכשלה — אי אפשר לדרג פוסטים</div>';}
 new Chart(document.getElementById('chart-scatter'),{type:'scatter',data:{datasets:[{label:'פוסטים',data:data.map(d=>({x:d.words,y:d.likes})),backgroundColor:'#38bdf888'}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{type:'logarithmic',title:{display:true,text:'כמות מילים'}},y:{title:{display:true,text:'לייקים'}}}}});
 // ── שלושה מקטעים שמחושבים מהנתונים שכבר כאן, בלי אף בקשה נוספת ───────────
 const li=(a,b)=>`<div class="list-item"><span>${a}</span><span class="badge">${b}</span></div>`;
@@ -713,7 +819,10 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   // באזכור NodeBB מכניס את ה-slug ("@צול-גאה"), וברשימת המצביעים חוזר שם
   // התצוגה ("צול גאה"). השוואה ישירה ביניהם לא מתאימה אף פעם, והתוצאה
   // סימטרית ומטעה: כולם נראים "שותקים" וכולם נראים "מעריצים". מנרמלים.
-  const key=n=>String(n||'').toLowerCase().replace(/[\s_.\-]/g,'');
+  // כלל הסלאג של NodeBB: רווח הופך למקף. **רק** זה — הסרת מקפים לגמרי
+  // איחדה שני חשבונות נפרדים (david-cohen ו-davidcohen) לשורה אחת שמציגה
+  // שם של אחד ומקשרת לפרופיל של השני.
+  const key=n=>String(n||'').trim().toLowerCase().replace(/[\s_]+/g,'-');
   const slugOf=n=>String(n||'').trim().toLowerCase().replace(/\s+/g,'-');
 
   const talks={}, likes={}, shown={}, slug={};
@@ -730,7 +839,8 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     (p.mentions||[]).forEach(n=>{const k=seen(n); if(k) talks[k]=(talks[k]||0)+1;});
     (p.voters||[]).forEach(v=>{
       if(v.uid==myUid) return;
-      const k=seen(v.username, v.userslug);
+      // שמות מהפורום חוזרים מקודדים ל-HTML (הלקח מ-0.8.21) — כאן זה לא נעשה
+      const k=seen(_U(v.username), v.userslug);
       if(k) likes[k]=(likes[k]||0)+1;
     });
   });
@@ -788,14 +898,21 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     const d=Math.floor((ts[i]-ts[i-1])/DAY);
     if(d>=MIN_GAP) gaps.push({from:ts[i-1],to:ts[i],days:d});
   }
-  const quiet=Math.floor((Date.now()-ts[ts.length-1])/DAY);
+  // מול **זמן הסריקה** ולא מול שעון הקורא: אותו קובץ בדיוק אמר 'כתיבה
+  // רציפה' ביום הסריקה, ו'שותק 240 ימים' כשנפתח מאוחר יותר.
+  const scanTs=Date.parse(scannedAt)||Date.now();
+  const quiet=Math.floor((scanTs-ts[ts.length-1])/DAY);
   let html='';
   if(quiet>=MIN_GAP) html+=li('<b>שותק כרגע</b> — מאז '+esc(dayFmt(ts[ts.length-1])), quiet+' ימים');
   gaps.sort((a,b)=>b.days-a.days).slice(0,6).forEach(g=>{
     html+=li(esc(dayFmt(g.from))+' ← '+esc(dayFmt(g.to)), g.days+' ימים');
   });
   // הפסקה של פחות מחודש אינה "שתיקה" — זה פשוט שבוע עמוס
-  box.innerHTML=html||note('לא היו הפסקות של חודש ומעלה — כתיבה רציפה');
+  // סריקה מוגבלת מחזירה את הפוסטים החדשים בלבד, ולכן היעדר הפסקות בחלון
+  // הזה אינו עדות לכתיבה רציפה. אמירה מוחלטת רק כשנסרק הכול.
+  const whole=!meta.limited&&!meta.stopped_early&&!meta.partial;
+  box.innerHTML=html||note(whole?'לא היו הפסקות של חודש ומעלה — כתיבה רציפה'
+                               :'לא נמצאו הפסקות בפוסטים שנסרקו (הסריקה חלקית)');
 })();
 
 // 🔥 מתי הוא הכי חד — לייקים לפוסט לפי שעה, לא כמות פוסטים
@@ -803,19 +920,23 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   const box=document.getElementById('list-sharp');
   // ספירת הלייקים מגיעה מבקשה נפרדת לכל פוסט. אם חלקן נכשלו, ממוצע
   // הלייקים משקר — ואז עדיף לא להציג מספר מאשר להציג מספר שגוי.
-  const bad=data.filter(d=>d.votes_ok===false).length;
-  if(bad>data.length*0.1){
-    box.innerHTML=note('ספירת הלייקים הייתה חלקית בסריקה הזו, ולכן המקטע הזה מושבת');
+  // כל פוסט שלא נמדד יוצא מהחישוב, ולא נספר כאפס. הסף הישן (10%) נתן
+  // לכשלים בודדים להיכנס לממוצע ולהפוך 'שעה חלשה' לממצא מומצא.
+  // פוסט שלא נמדד יוצא מהחישוב ואינו נספר כאפס. הסף הישן (10%) נתן
+  // לכשלים בודדים להיכנס לממוצע ולהפוך שעה שלמה ל"חלשה" בלי שנמדדה.
+  const bad=data.length-measured.length;
+  if(measured.length<10){
+    box.innerHTML=note(bad?'ספירת הלייקים הייתה חלקית בסריקה הזו, ולכן המקטע הזה מושבת'
+                          :'אין מספיק פוסטים בשעה מסוימת כדי להשוות');
     return;
   }
-  // פחות מזה — רעש, לא ממצא
   const MIN_SAMPLE=5;
   const sum=Array(24).fill(0), cnt=Array(24).fill(0);
-  data.forEach(d=>{sum[d.hour]+=d.likes;cnt[d.hour]++;});
+  measured.forEach(d=>{sum[d.hour]+=d.likes;cnt[d.hour]++;});
   const rows=[];
   for(let h=0;h<24;h++) if(cnt[h]>=MIN_SAMPLE) rows.push({h,avg:sum[h]/cnt[h],n:cnt[h]});
   if(rows.length<2){box.innerHTML=note('אין מספיק פוסטים בשעה מסוימת כדי להשוות');return;}
-  const overall=data.reduce((a,b)=>a+b.likes,0)/data.length;
+  const overall=totalLikes/measured.length;
   rows.sort((a,b)=>b.avg-a.avg);
   const best=rows[0], worst=rows[rows.length-1];
   const pad=h=>String(h).padStart(2,'0')+':00';
@@ -825,6 +946,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
            worst.avg.toFixed(1));
   html+=li('הממוצע הכללי שלו', overall.toFixed(1));
   rows.slice(0,5).forEach(r=>{if(r!==best) html+=li(pad(r.h),r.avg.toFixed(1));});
+  if(bad) html+=note('⚠️ '+bad+' פוסטים לא נכללו — ספירת הלייקים שלהם נכשלה');
   box.innerHTML=html;
 })();
 

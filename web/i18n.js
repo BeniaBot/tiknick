@@ -1,5 +1,5 @@
 // ═══ נוצר אוטומטית ע"י tools/build_i18n.py — אין לערוך ביד ═══
-// 937 מחרוזות קבועות, 238 תבניות.
+// 938 מחרוזות קבועות, 239 תבניות.
 const I18N_EN = {
   "כל מידע משויך למקור (\"אב\"). בכל שדה — הערך מהמקור בעל האמינות הגבוהה מוצג. שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד. \"אבסולוטי\" (רק ל\"אני\") = תמיד מנצח. את התנהגות הסריקה מנהלים בלשונית \"התנגשויות\".": "Every piece of information belongs to a source (a \"parent\"). For each field, the value from the highest-trust source is shown. Changing trust or deleting a source affects the data immediately. \"Absolute\" (for \"Me\" only) = always wins. Scrape behavior is managed on the \"Conflicts\" tab.",
   "Stinknik סורק את כל הפוסטים של משתמש ומציג את כל הפוסטים שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק \"שנוי במחלוקת\", כלומר רק פוסטים עם יותר דיסים מלייקים).": "Stinknik scans all of a user's posts and shows every post that received downvotes — including the ones the forum hides (the forum only shows \"controversial\" posts, meaning posts with more downvotes than upvotes).",
@@ -107,6 +107,7 @@ const I18N_EN = {
   "Stinknik סורק את כל הפוסטים של משתמש ומציג את": "Stinknik scans all of a user's posts and shows",
   "גיבוי ושחזור, סל מחזור, תקינות, יומנים ואיפוס": "Backup and restore, recycle bin, health, logs and reset",
   "כמה עמודי משתמשים לסרוק לכל היותר (ריק = הכל)": "Maximum number of member pages to scrape (empty = all)",
+  "לא נמצאו הפסקות בפוסטים שנסרקו (הסריקה חלקית)": "No breaks were found in the scanned posts (the scan is partial)",
   "— השאר בפורומים שדורשים התחברות (הוסף עוגייה)": "— the rest are on forums that require a login (add a cookie)",
   "🔧 דרך חלופית: ידנית דרך כלי מפתחים (למתקדמים)": "🔧 Alternative: manually via developer tools (advanced)",
   "ברשימה שתופיע, מצא את השורה בשם express.sid.": "In the list that appears, find the row named express.sid.",
@@ -983,6 +984,7 @@ const I18N_EN_PAT = [
   ["^הגיבוי\\ אינו\\ נטען\\ בגרסה\\ הזו\\ \\(([\\s\\S]*?)\\)\\ —\\ לא\\ בוצע\\ שחזור\\.$", "This backup does not load in this version ($1) — nothing was restored."],
   ["^([\\s\\S]*?):\\ נסרקו\\ רק\\ הפוסטים\\ האחרונים\\ לפי\\ ההגבלה\\ שהגדרת\\.$", "$1: only the most recent posts were scanned, per the limit you set."],
   ["^([\\s\\S]*?):\\ הסריקה\\ נעצרה\\ בגלל\\ תקלת\\ רשת\\ —\\ הנתונים\\ חלקיים\\.$", "$1: the scan stopped because of a network error — the data is incomplete."],
+  ["^⚠️\\ ([\\s\\S]*?)\\ פוסטים\\ לא\\ נכללו\\ —\\ ספירת\\ הלייקים\\ שלהם\\ נכשלה$", "⚠️ $1 posts were excluded — their like counts failed"],
   ["^ניסינו\\ לעדכן\\ ל\\-v([\\s\\S]*?),\\ אבל\\ התוכנה\\ עלתה\\ שוב\\ ב\\-v([\\s\\S]*?)\\.$", "We tried to update to v$1, but the app started again on v$2."],
   ["^לסנכרן\\ ([\\s\\S]*?)\\ ניקים\\ מהאינטרנט\\?\\ הערך\\ מהאינטרנט\\ יגבר\\.$", "Sync $1 nicks from the internet? The online value will win."],
   ["^·\\ ([\\s\\S]*?)\\ שורות\\ מפורומים\\ שכיבית\\ בהגדרות\\ \\(([\\s\\S]*?)\\)\\ יידלגו$", "· $1 rows from forums you disabled in settings ($2) will be skipped"],

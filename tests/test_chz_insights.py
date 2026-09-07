@@ -55,7 +55,8 @@ def render(html, section):
     js = """
 const boxes = {};
 const mk = () => ({ _h: '', set innerHTML(v){ this._h = v; },
-                    get innerHTML(){ return this._h; }, innerText: '' });
+                    get innerHTML(){ return this._h; }, innerText: '',
+                    title: '', style: {} });
 for (const id of ['list-gaps','list-sharp','list-threads','list-social','list-fans','list-best',
                   'stat-posts','stat-likes','stat-words','stat-time'])
   boxes[id] = mk();
