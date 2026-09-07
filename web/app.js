@@ -5556,56 +5556,71 @@ async function stopScrape() {
 // (הוסר: "פותר התנגשויות גלובלי" — הסריקה עברה למנוע המקורות ואינה מייצרת
 //  עוד רשומות nick_conflicts; התנגשויות legacy עדיין נצפות ונסגרות בדיאלוג הניק.)
 
+// דיאלוגי ההפעלה של שני הכלים פרשו את **כל** ההסבר לפני שהמשתמש עשה צעד
+// אחד — כולל הדרכת העוגייה בת שישה שלבים, פתוחה לרעננה. בנימין דיווח:
+// "כל הטקסט מונח לפני המשתמש ופתוח מיד הכל, והמשתמש הטכנופובי מתבלבל ולא
+// מבין איך להשתמש בפיצ'ר". לכן: המסלול הרגיל הוא פורום + שם + כפתור, וכל
+// השאר יושב מקופל. **הקיפול ויזואלי בלבד** — השדות נשארים ב-DOM ונקראים
+// כרגיל, ולכן `runChazonishnik` לא השתנה.
 async function openChazonishnik() {
   const forums = await api('get_scrapable_forums') || [];
+  const known  = await api('get_known_forums') || [];
+  const loginOf = {};
+  known.forEach(k => { loginOf[k.name] = !!k.needs_login; });
   // Chazonishnik מסתמך על נתיבי הפוסטים של NodeBB בלבד
   const opts = forums.filter(f => (f.url || '').trim() && (f.platform || 'nodebb') === 'nodebb')
-    .map(f => `<option value="${esc(f.url)}" ${/mitmachim/.test(f.url) ? 'selected' : ''}>${esc(f.name)}</option>`)
+    .map(f => `<option value="${esc(f.url)}" data-login="${loginOf[f.name] ? '1' : '0'}"` +
+              `${/mitmachim/.test(f.url) ? ' selected' : ''}>${esc(f.name)}</option>`)
     .join('');
   openModal('📖 Chazonishnik — ניתוח פעילות משתמש', `
     <div style="font-size:13.5px;line-height:1.7">
-      <div style="padding:12px 14px;background:var(--card2);border-radius:10px;margin-bottom:14px">
-        <b>מה זה עושה?</b> Chazonishnik שולף את היסטוריית הפוסטים של משתמש בפורום ומייצר
-        דוח אינטראקטיבי: כמות פוסטים, לייקים, מילים, שעות וימי פעילות, מעריצים מובילים,
-        והפוסטים המוצלחים ביותר.
+      <div style="color:var(--subtext);font-size:12.5px;margin-bottom:16px">
+        מפיק דוח על משתמש בפורום: כמה כתב, מתי, מי עושה לו לייקים ומה הצליח לו.
       </div>
 
-      <div class="form-group" style="margin-bottom:14px">
+      <div class="form-group" style="margin-bottom:12px">
         <label class="form-label">פורום</label>
         <select id="chz-forum" class="form-select" onchange="chzPrefillCookie()">${opts || '<option value="https://mitmachim.top">מתמחים טופ</option>'}</select>
       </div>
 
-      <div style="margin-bottom:14px">
-        <b>🍪 עוגיית התחברות (express.sid)</b>
-        <div style="color:var(--subtext);font-size:12.5px;margin-top:4px">
-          בפורומים שמסתירים היסטוריית פוסטים מאורחים (למשל מתמחים טופ) נדרשת "עוגיית"
-          התחברות אישית שלך — מחרוזת ארוכה שמתחילה ב-<code>s%3A</code>. בפורום ציבורי
-          אפשר להשאיר ריק. כך משיגים אותה:
-        </div>
-      </div>
-
-      ${cookieHelpHtml()}
-
-      <div class="form-group" style="margin-bottom:10px">
+      <div class="form-group" style="margin-bottom:12px">
         <label class="form-label">שם משתמש לניתוח</label>
         <input id="chz-user" class="form-input" placeholder="שם המשתמש בפורום (למשל: בנימין)">
       </div>
-      <div class="form-group" style="margin-bottom:10px">
-        <label class="form-label">משתמש שני
-          <span style="font-size:10px;opacity:.6">(אופציונלי — מילוי יפיק דוח השוואה)</span></label>
-        <input id="chz-user2" class="form-input" placeholder="השאר ריק לניתוח של משתמש אחד">
-        <div style="font-size:11px;color:var(--subtext);margin-top:4px">
-          שתי הסריקות רצות בזו אחר זו ולא במקביל — כדי לא להכפיל את העומס על הפורום.
+
+      <div id="chz-need-cookie" style="display:none;margin-bottom:12px;padding:9px 11px;
+           border-inline-start:3px solid var(--accent-2);background:var(--card2);
+           border-radius:6px;font-size:12px">
+        🔒 הפורום הזה מסתיר היסטוריית פוסטים מאורחים — פתח את "אפשרויות נוספות" למטה
+        והזן עוגיית התחברות, אחרת הדוח יצא ריק.
+      </div>
+
+      <details id="chz-adv" class="adv-box">
+        <summary>⚙️ אפשרויות נוספות</summary>
+        <div style="padding-top:12px">
+          <div class="form-group" style="margin-bottom:10px">
+            <label class="form-label">משתמש שני
+              <span style="font-size:10px;opacity:.6">(מילוי יפיק דוח השוואה)</span></label>
+            <input id="chz-user2" class="form-input" placeholder="השאר ריק לניתוח של משתמש אחד">
+            <div style="font-size:11px;color:var(--subtext);margin-top:4px">
+              שתי הסריקות רצות בזו אחר זו ולא במקביל — כדי לא להכפיל את העומס על הפורום.
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:10px">
+            <label class="form-label">עוגיית <span dir="ltr">express.sid</span>
+              <span style="font-size:10px;opacity:.6">(נשמרת לפעם הבאה)</span>
+              — <b style="color:var(--accent-text);cursor:pointer;text-decoration:underline"
+                   onclick="toggleCookieHelp('chz-cookie-help')">🍪 איך משיגים?</b></label>
+            <input id="chz-cookie" class="form-input" dir="ltr" placeholder="s%3A...  (השאר ריק אם הפורום ציבורי)">
+          </div>
+          <div id="chz-cookie-help" style="display:none;margin-bottom:10px"></div>
+          <div class="form-group" style="margin-bottom:6px">
+            <label class="form-label">הגבל מספר פוסטים
+              <span style="font-size:10px;opacity:.6">(למשתמשים ותיקים הניתוח עלול להיות ארוך)</span></label>
+            <input id="chz-maxposts" type="number" min="1" class="form-input" placeholder="הכל (ריק)">
+          </div>
         </div>
-      </div>
-      <div class="form-group" style="margin-bottom:10px">
-        <label class="form-label">עוגיית express.sid <span style="font-size:10px;opacity:.6">(אופציונלי בפורום ציבורי · נשמרת לפעם הבאה)</span></label>
-        <input id="chz-cookie" class="form-input" dir="ltr" placeholder="s%3A...  (השאר ריק אם הפורום ציבורי)">
-      </div>
-      <div class="form-group" style="margin-bottom:6px">
-        <label class="form-label">הגבל מספר פוסטים <span style="font-size:10px;opacity:.6">(אופציונלי — למשתמשים ותיקים הניתוח עלול להיות ארוך)</span></label>
-        <input id="chz-maxposts" type="number" min="1" class="form-input" placeholder="הכל (ריק)">
-      </div>
+      </details>
     </div>
   `, [
     { label: '📊 נתח פעילות', cls: 'btn-primary', action: runChazonishnik },
@@ -5617,11 +5632,26 @@ async function openChazonishnik() {
 }
 
 async function chzPrefillCookie() {
-  const url = document.getElementById('chz-forum')?.value || '';
+  const sel = document.getElementById('chz-forum');
+  const url = sel?.value || '';
   const input = document.getElementById('chz-cookie');
   if (!input || !url) return;
   const saved = await api('get_saved_cookie', url);
-  if (saved) input.value = saved;
+  // מחליפים תמיד ולא רק כשיש ערך: עוגייה שייכת לפורום אחד, ומעבר לפורום
+  // אחר עם הערך הישן בשדה היה שולח אותה למארח שהיא לא נועדה לו.
+  input.value = saved || '';
+  chzCookieNotice(sel, !!saved);
+}
+
+// פורום שדורש התחברות **ואין לו עוגייה שמורה** הוא המקרה היחיד שבו המשתמש
+// באמת חייב את האפשרויות המתקדמות — ורק אז הן נפתחות מעצמן. אחרת הקיפול
+// מאבד את כל הערך שלו.
+function chzCookieNotice(sel, hasCookie) {
+  const need = sel?.selectedOptions?.[0]?.dataset.login === '1' && !hasCookie;
+  const note = document.getElementById('chz-need-cookie');
+  const adv  = document.getElementById('chz-adv');
+  if (note) note.style.display = need ? '' : 'none';
+  if (need && adv) adv.open = true;
 }
 
 function openExt(url) {
@@ -5797,32 +5827,40 @@ async function openStinknik() {
     .map(f => `<option value="${esc(f.url)}">${esc(f.name)}</option>`).join('');
   openModal('🦨 Stinknik — כל הדיסלייקים של ניק', `
     <div style="font-size:13.5px;line-height:1.7">
-      <div style="padding:12px 14px;background:var(--card2);border-radius:10px;margin-bottom:14px">
-        <b>מה זה עושה?</b> Stinknik סורק את כל הפוסטים של משתמש ומציג את <b>כל</b> הפוסטים
-        שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק "שנוי במחלוקת",
-        כלומר רק פוסטים עם יותר דיסים מלייקים).
+      <div style="color:var(--subtext);font-size:12.5px;margin-bottom:16px">
+        מוצא את <b>כל</b> הפוסטים של משתמש שקיבלו דיסלייקים — גם אלה שהפורום עצמו
+        לא מציג.
       </div>
-      <div style="font-size:12px;color:var(--subtext);margin-bottom:14px">
-        💡 עובד על כל פורום NodeBB. ברוב המקרים <b>לא נדרשת עוגייה</b> (המידע ציבורי). אם מתקבלת
-        שגיאת הרשאה, אפשר להוסיף עוגייה — <b style="color:var(--accent-text);cursor:pointer;text-decoration:underline" onclick="toggleCookieHelp('stink-cookie-help')">ראה הדרכה</b>.
-      </div>
-      <div id="stink-cookie-help" style="display:none;margin-bottom:14px"></div>
-      <div class="form-group" style="margin-bottom:10px">
+      <div class="form-group" style="margin-bottom:12px">
         <label class="form-label">פורום</label>
         <select id="stink-forum" class="form-select" onchange="stinkPrefillCookie()">${opts}</select>
       </div>
-      <div class="form-group" style="margin-bottom:10px">
+      <div class="form-group" style="margin-bottom:12px">
         <label class="form-label">שם משתמש או קישור לפרופיל</label>
         <input id="stink-user" class="form-input" dir="auto" placeholder="בנימין  או  קישור מלא לפרופיל">
       </div>
-      <div class="form-group" style="margin-bottom:10px">
-        <label class="form-label" style="font-size:11px;color:var(--subtext)">עוגייה (אופציונלי · נשמרת לפעם הבאה)</label>
-        <input id="stink-cookie" class="form-input" dir="ltr" placeholder="השאר ריק ברוב המקרים">
-      </div>
-      <div class="form-group" style="margin-bottom:6px">
-        <label class="form-label" style="font-size:11px;color:var(--subtext)">הגבל מספר פוסטים (אופציונלי — לניקים ותיקים הסריקה עלולה להיות ארוכה)</label>
-        <input id="stink-maxposts" type="number" min="1" class="form-input" placeholder="הכל (ריק)">
-      </div>
+      <details id="stink-adv" class="adv-box">
+        <summary>⚙️ אפשרויות נוספות</summary>
+        <div style="padding-top:12px">
+          <div class="form-group" style="margin-bottom:10px">
+            <label class="form-label">עוגיית התחברות
+              <span style="font-size:10px;opacity:.6">(נשמרת לפעם הבאה)</span>
+              — <b style="color:var(--accent-text);cursor:pointer;text-decoration:underline"
+                   onclick="toggleCookieHelp('stink-cookie-help')">🍪 איך משיגים?</b></label>
+            <input id="stink-cookie" class="form-input" dir="ltr" placeholder="השאר ריק ברוב המקרים">
+            <div style="font-size:11px;color:var(--subtext);margin-top:4px">
+              ברוב הפורומים המידע ציבורי ואין צורך בעוגייה. הוסף אותה רק אם התקבלה
+              שגיאת הרשאה.
+            </div>
+          </div>
+          <div id="stink-cookie-help" style="display:none;margin-bottom:10px"></div>
+          <div class="form-group" style="margin-bottom:6px">
+            <label class="form-label">הגבל מספר פוסטים
+              <span style="font-size:10px;opacity:.6">(לניקים ותיקים הסריקה עלולה להיות ארוכה)</span></label>
+            <input id="stink-maxposts" type="number" min="1" class="form-input" placeholder="הכל (ריק)">
+          </div>
+        </div>
+      </details>
     </div>
   `, [
     { label: '🦨 מצא דיסלייקים', cls: 'btn-primary', action: runStinknik },
@@ -5839,8 +5877,8 @@ async function stinkPrefillCookie() {
   const url = document.getElementById('stink-forum')?.value || '';
   const input = document.getElementById('stink-cookie');
   if (!input || !url) return;
-  const saved = await api('get_saved_cookie', url);
-  if (saved) input.value = saved;
+  // כמו בחזונישניק: מחליפים תמיד, כדי שעוגייה של פורום אחד לא תישלח לאחר
+  input.value = await api('get_saved_cookie', url) || '';
 }
 
 async function runStinknik() {

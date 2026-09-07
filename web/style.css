@@ -189,10 +189,6 @@
 [data-density="cozy"] .nav-btn{padding:9px 13px;font-size:14.5px}
 [data-density="cozy"] .nav-btn .icon{font-size:17px;width:22px}
 
-  .nav-group{margin-bottom:2px}
-  .nav-label{font-size:9px;padding:1px 12px;letter-spacing:.08em}
-}
-
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
 html,body{
@@ -1279,3 +1275,34 @@ tbody td, .card-row .cv, #lookup-profile, .tooltip,
 @media (max-height: 640px) {
   .nav-btn{padding:2px 13px;font-size:13px}
   .nav-btn .icon{font-size:13px;width:18px}
+  .nav-group{margin-bottom:2px}
+  .nav-label{font-size:9px;padding:1px 12px;letter-spacing:.08em}
+}
+
+/* ── "אפשרויות נוספות" בדיאלוגים ─────────────────────────────────────────
+   אשפי חזונישניק ושטינקניק פרשו את כל השדות וההסברים בבת אחת. הקיפול הזה
+   משאיר על המסך את המסלול הרגיל בלבד (פורום + שם + כפתור). הוא ויזואלי
+   בלבד: הילדים נשארים ב-DOM וה-JS קורא אותם כרגיל גם כשהוא סגור. */
+.adv-box{
+  border:1px solid var(--border);
+  border-radius:10px;
+  padding:10px 12px;
+  background:var(--card2);
+}
+.adv-box > summary{
+  cursor:pointer;
+  font-size:12.5px;
+  font-weight:600;
+  color:var(--text-dim);
+  list-style:none;
+  display:flex;
+  align-items:center;
+  gap:7px;
+  user-select:none;
+}
+/* הסימן המובנה של הדפדפן מוחלף במשלנו. **החלפת תו ולא סיבוב**: חץ מסובב
+   חייב כיוון הפוך ב-RTL וב-LTR, ומעלה/מטה נכון בשתי השפות בלי בלוק נוסף. */
+.adv-box > summary::-webkit-details-marker{display:none}
+.adv-box > summary::after{content:"▾";margin-inline-start:auto;font-size:11px}
+.adv-box[open] > summary::after{content:"▴"}
+.adv-box[open] > summary{color:var(--accent-text)}
