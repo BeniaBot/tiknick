@@ -1015,33 +1015,58 @@ class API:
 
     def has_mail_client(self):
         """
-        האם רשום ב-Windows מטפל ל-mailto?
+        האם רשום ב-Windows מטפל ל-mailto — **ואפשר לסמוך עליו**.
 
         @tsoolgee תיקן נכון: `mailto:` מגיע ל-ShellExecute, ובלי תוכנת דואר
-        מוגדרת הלחיצה פשוט לא עושה כלום. אבל הפתרון שלו קיבע Gmail בתוך
-        מסלול המוצר, והקהל כאן חרדי — חלק גדול ממנו מאחורי סינון שחוסם את
-        mail.google.com, וזה גם לקח את היכולת ממי שכן הגדיר תוכנת דואר.
-        לכן: בודקים, ומחליטים לפי המצב בפועל.
+        הלחיצה לא עושה כלום. הפתרון שלו קיבע Gmail, וזה לא מתאים לקהל שיושב
+        מאחורי סינון. אז הוספתי בדיקת רישום — **וגם היא לא הספיקה**:
+
+        על מכונה אמיתית ה-ProgId הרשום היה `AppXbx2ce4…`, כלומר אפליקציית
+        הדואר של חנות Windows — שהוסרה מ-Windows 11. הרישום קיים, התוכנה לא,
+        ו-mailto: נשלח לשומקום. אותו "כלום לא קורה" בדיוק, רק בדרך ארוכה יותר.
+
+        המסקנה: Windows אינו יודע לענות על השאלה הזו בוודאות, ולכן **לא
+        מנחשים**. מדווחים מה נמצא ומה אומת, והממשק מציג את שתי האפשרויות.
         """
+        info = {"ok": True, "has": False, "verified": False, "handler": ""}
         try:
             import winreg
         except ImportError:
-            return {"ok": True, "has": False}
-        for root, path in ((winreg.HKEY_CURRENT_USER,
-                            r"Software\Microsoft\Windows\Shell\Associations"
-                            r"\UrlAssociations\mailto\UserChoice"),
-                           (winreg.HKEY_CLASSES_ROOT, r"mailto\shell\open\command")):
+            return info
+        progid = ""
+        try:
+            with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r"Software\Microsoft\Windows\Shell\Associations"
+                    r"\UrlAssociations\mailto\UserChoice") as k:
+                progid = str(winreg.QueryValueEx(k, "ProgId")[0] or "").strip()
+        except OSError:
+            pass
+        # **בלי נפילה לאחור.** אם למשתמש יש UserChoice — זה מה ש-Windows יריץ,
+        # נקודה. נפילה ל-`mailto\shell\open\command` הייתה מאמתת את Outlook
+        # שמותקן במקרה, בזמן שהבחירה בפועל היא AppX מת — כלומר מדווחת "יש
+        # תוכנת דואר" על מכונה שבה הכפתור לא עושה כלום. נמדד בדיוק כך.
+        cmd = ""
+        path = (progid + r"\shell\open\command") if progid \
+            else r"mailto\shell\open\command"
+        try:
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, path) as k:
+                cmd = str(winreg.QueryValueEx(k, "")[0] or "").strip()
+        except OSError:
+            pass
+        info["handler"] = (progid or cmd)[:120]
+        info["has"] = bool(progid or cmd)
+        # "מאומת" = הפקודה מצביעה על קובץ שקיים בפועל. מטפל AppX אינו נפתר
+        # לנתיב ולכן לעולם לא ייחשב מאומת — וזה הנכון: הוא בדיוק המקרה
+        # שנכשל בשקט.
+        if cmd:
+            import shlex
             try:
-                with winreg.OpenKey(root, path) as k:
-                    val, _ = winreg.QueryValueEx(
-                        k, "ProgId" if "UserChoice" in path else "")
-                    v = str(val or "").strip()
-                    # "ProgId" ריק, או ברירת מחדל שאינה מטפל אמיתי
-                    if v and v.lower() not in ("", "none"):
-                        return {"ok": True, "has": True, "handler": v[:120]}
-            except OSError:
-                continue
-        return {"ok": True, "has": False}
+                exe = shlex.split(cmd, posix=False)[0].strip('"')
+                info["verified"] = bool(exe) and os.path.exists(exe)
+            except Exception:
+                info["verified"] = False
+        return info
 
     def open_url(self, url):
         """פתח URL בדפדפן ברירת המחדל של המערכת"""

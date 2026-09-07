@@ -161,6 +161,20 @@ _TPL_EN = {
     "פוסטים": "Posts",
     # שלושת המקטעים החדשים. הטקסטים חיים בתוך ה-<script>, ולכן הם אינם
     # מפתחות בקטלוג המשותף — הם מתורגמים כאן, בתבנית של המודול הזה בלבד.
+    "👥 עם מי הוא מדבר": "👥 Who they talk to",
+    "לא נמצאו אזכורים או ציטוטים בפוסטים שנסרקו":
+        "No mentions or quotes were found in the scanned posts",
+    "הקרובים אליו": "Closest to them",
+    " — הוא פונה אליהם, והם מחזירים בלייקים":
+        " — they reach out, and get likes back",
+    "פונה אליהם והם שותקים": "They reach out, the others stay silent",
+    " — מעולם לא קיבל מהם לייק": " — never once received a like from them",
+    "מעריצים שקטים": "Silent admirers",
+    " — עושים לו לייקים, והוא לא פונה אליהם":
+        " — they give likes, and never get addressed",
+    " פניות · ": " approaches · ",
+    " פניות": " approaches",
+    " לייקים": " likes",
     "💤 תקופות שקט": "💤 Periods of silence",
     "🔥 מתי הוא הכי חד": "🔥 When they are at their sharpest",
     "💬 כמה הוא נשאר בשרשור": "💬 How long they stay in a thread",
@@ -231,6 +245,43 @@ _vote_lock = threading.Lock()
 _vote_fails = {"n": 0}
 
 
+# NodeBB מרנדר גם אזכור (@שם) וגם כותרת ציטוט ("@שם said in ...") כטקסט
+# שמתחיל ב-@. לכן ביטוי אחד תופס את שניהם — בלי אף בקשה נוספת.
+#
+# הכלל זהה לזה שבשדות התיוג בממשק (ראו TAG_OPEN ב-app.js), ומאותה סיבה:
+# @ באמצע מילה הוא כתובת מייל, לא אזכור. `beni@gmail.com` היה מייצר
+# "gmail.com" כאיש קשר.
+_MENTION_RX = re.compile(
+    r'@([0-9A-Za-z\u0590-\u05ff_][0-9A-Za-z\u0590-\u05ff._-]{1,30})')
+# \u05d4\u05db\u05dc\u05dc \u05d0\u05d9\u05e0\u05d5 "@ \u05e4\u05d5\u05ea\u05d7 \u05de\u05d9\u05dc\u05d4" \u05d0\u05dc\u05d0 "\u05de\u05d4 \u05e9\u05dc\u05e4\u05e0\u05d9\u05d5 \u05d0\u05d9\u05e0\u05d5 \u05e0\u05e8\u05d0\u05d4 \u05db\u05de\u05d5 \u05de\u05d9\u05d9\u05dc". \u05d1\u05e2\u05d1\u05e8\u05d9\u05ea \u05d5'
+# \u05d4\u05d7\u05d9\u05d1\u05d5\u05e8 \u05e0\u05d3\u05d1\u05e7\u05ea \u05dc\u05de\u05d9\u05dc\u05d4 \u2014 "\u05d5@\u05e9\u05e8\u05d4" \u05d4\u05d5\u05d0 \u05d0\u05d6\u05db\u05d5\u05e8 \u05dc\u05d2\u05de\u05e8\u05d9 \u05ea\u05e7\u05d9\u05df, \u05d5\u05d4\u05db\u05dc\u05dc \u05d4\u05de\u05d7\u05de\u05d9\u05e8 \u05e4\u05e1\u05e4\u05e1 \u05d0\u05d5\u05ea\u05d5.
+# \u05de\u05d4 \u05e9\u05db\u05df \u05d7\u05d9\u05d9\u05d1 \u05dc\u05d4\u05d9\u05e4\u05e1\u05dc \u05d4\u05d5\u05d0 `beni@gmail.com`, \u05d5\u05e9\u05dd \u05dc\u05e4\u05e0\u05d9 \u05d4-@ \u05ea\u05de\u05d9\u05d3 \u05d9\u05e9 \u05ea\u05d5 \u05dc\u05d8\u05d9\u05e0\u05d9.
+_EMAILISH_BEFORE = re.compile(r"[0-9A-Za-z._%+-]")
+_LOOKS_LIKE_DOMAIN = re.compile(r"\.[a-z]{2,}$", re.I)
+MAX_MENTIONS_PER_POST = 8
+
+
+def _mentions_in(text, me=""):
+    """מי מוזכר או מצוטט בפוסט אחד. מוחזר בלי כפילויות ובלי המשתמש עצמו."""
+    out = []
+    txt = text or ""
+    low_me = (me or "").strip().lower()
+    for m in _MENTION_RX.finditer(txt):
+        i = m.start()
+        # התו שלפני ה-@ הוא מה שמכריע: אות לטינית או ספרה = כתובת מייל.
+        if i > 0 and _EMAILISH_BEFORE.match(txt[i - 1]):
+            continue
+        name = m.group(1).rstrip("._-")
+        if not name or _LOOKS_LIKE_DOMAIN.search(name):
+            continue
+        if name.lower() == low_me or name in out:
+            continue
+        out.append(name)
+        if len(out) >= MAX_MENTIONS_PER_POST:
+            break
+    return out
+
+
 def _reset_vote_stats():
     with _vote_lock:
         _vote_fails["n"] = 0
@@ -241,12 +292,15 @@ def _vote_failures():
         return _vote_fails["n"]
 
 
-def _fetch_detail(base, cookie, post):
+def _fetch_detail(base, cookie, post, me=""):
     try:
         time.sleep(DETAIL_DELAY)   # נימוס: 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
         pid = post["pid"]
         clean = re.sub(r"<[^<]+?>", "", post.get("content", "") or "")
         words = len(clean.split())
+        # החילוץ על הטקסט הנקי: NodeBB עוטף אזכור בעוגן, והפשטת התגיות
+        # משאירה בדיוק "@שם".
+        mentions = _mentions_in(clean, me)
         upvoters = []
         with _vote_lock:
             give_up = _vote_fails["n"] >= _VOTE_FAIL_GIVEUP
@@ -279,6 +333,7 @@ def _fetch_detail(base, cookie, post):
             "likes": len(upvoters),
             "voters": upvoters,
             "votes_ok": votes_ok,
+            "mentions": mentions,
             "words": words,
         }
     except Exception:
@@ -315,7 +370,7 @@ def _collect(username, cookie, base, progress=None, cancel_flag=None,
     total = len(raw)
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as ex:
-        futs = {ex.submit(_fetch_detail, base, cookie, x): x for x in raw}
+        futs = {ex.submit(_fetch_detail, base, cookie, x, slug): x for x in raw}
         for fut in concurrent.futures.as_completed(futs):
             if cancel_flag is not None and cancel_flag.is_set():
                 for f2 in futs:
@@ -466,7 +521,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     total = len(raw_posts)
     done = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=CONCURRENCY) as ex:
-        futs = {ex.submit(_fetch_detail, base, cookie, p): p for p in raw_posts}
+        futs = {ex.submit(_fetch_detail, base, cookie, p, slug): p for p in raw_posts}
         for fut in concurrent.futures.as_completed(futs):
             if cancel_flag is not None and cancel_flag.is_set():
                 for f in futs:
@@ -605,6 +660,7 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 <div class="card col-4"><h3>📏 אורך תוכן</h3><div class="chart-box"><canvas id="chart-length"></canvas></div></div>
 <div class="card col-6"><h3>⭐ הפוסטים המוצלחים ביותר</h3><div class="list-container" id="list-best"></div></div>
 <div class="card col-6"><h3>🔍 קשר בין אורך פוסט לפופולריות</h3><div class="chart-box"><canvas id="chart-scatter"></canvas></div></div>
+<div class="card col-12"><h3>👥 עם מי הוא מדבר</h3><div class="list-container" id="list-social"></div></div>
 <div class="card col-6"><h3>💤 תקופות שקט</h3><div class="list-container" id="list-gaps"></div></div>
 <div class="card col-6"><h3>🔥 מתי הוא הכי חד</h3><div class="list-container" id="list-sharp"></div></div>
 <div class="card col-12"><h3>💬 כמה הוא נשאר בשרשור</h3><div class="list-container" id="list-threads"></div></div>
@@ -642,6 +698,53 @@ new Chart(document.getElementById('chart-scatter'),{type:'scatter',data:{dataset
 const li=(a,b)=>`<div class="list-item"><span>${a}</span><span class="badge">${b}</span></div>`;
 const note=t=>`<div class="list-item" style="opacity:.75">${t}</div>`;
 const dayFmt=ts=>new Date(ts).toLocaleDateString();
+
+// 👥 עם מי הוא מדבר — הצלבה של שני צדדים שכבר ירדו ולא דיברו זה עם זה:
+// את מי הוא מזכיר או מצטט (מתוך תוכן הפוסטים), מול מי עושה לו לייקים.
+// ההצלבה היא הסיפור: הדדיות = חבר. לייקים בלי אזכור = מעריץ. אזכורים
+// חוזרים בלי אף לייק = משהו אחר לגמרי.
+(()=>{
+  const box=document.getElementById('list-social');
+  const talks={}, likes={};
+  data.forEach(p=>{
+    (p.mentions||[]).forEach(n=>{talks[n]=(talks[n]||0)+1;});
+    (p.voters||[]).forEach(v=>{if(v.uid!=myUid)likes[v.username]=(likes[v.username]||0)+1;});
+  });
+  const names=Object.keys(talks);
+  if(!names.length){
+    box.innerHTML=note('לא נמצאו אזכורים או ציטוטים בפוסטים שנסרקו');
+    return;
+  }
+  const link=n=>`<a href="${esc(baseUrl)}/user/${escAttr(n)}" target="_blank">${esc(n)}</a>`;
+  // התאמת שמות חסרת רגישות לאותיות גדולות — בפורום "David" ו-"david" הם אחד
+  const likeOf={}; Object.keys(likes).forEach(k=>likeOf[k.toLowerCase()]=likes[k]);
+  const got=n=>likeOf[n.toLowerCase()]||0;
+
+  const mutual=names.filter(n=>got(n)>0)
+                    .sort((a,b)=>(talks[b]+got(b))-(talks[a]+got(a)));
+  const oneWay=names.filter(n=>got(n)===0&&talks[n]>=3)
+                    .sort((a,b)=>talks[b]-talks[a]);
+  const silentFans=Object.keys(likes)
+        .filter(n=>!names.some(t=>t.toLowerCase()===n.toLowerCase()))
+        .sort((a,b)=>likes[b]-likes[a]);
+
+  let html='';
+  if(mutual.length){
+    html+=note('<b>הקרובים אליו</b> — הוא פונה אליהם, והם מחזירים בלייקים');
+    mutual.slice(0,8).forEach(n=>{
+      html+=li(link(n), talks[n]+' פניות · '+got(n)+' לייקים');
+    });
+  }
+  if(oneWay.length){
+    html+=note('<b>פונה אליהם והם שותקים</b> — מעולם לא קיבל מהם לייק');
+    oneWay.slice(0,6).forEach(n=>{ html+=li(link(n), talks[n]+' פניות'); });
+  }
+  if(silentFans.length){
+    html+=note('<b>מעריצים שקטים</b> — עושים לו לייקים, והוא לא פונה אליהם');
+    silentFans.slice(0,6).forEach(n=>{ html+=li(link(n), likes[n]+' לייקים'); });
+  }
+  box.innerHTML=html||note('לא נמצאו אזכורים או ציטוטים בפוסטים שנסרקו');
+})();
 
 // 💤 תקופות שקט — מתי הפסיק לכתוב, ולכמה זמן
 (()=>{

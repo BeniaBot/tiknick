@@ -1185,17 +1185,37 @@ function contactMenu(type, value) {
     foot.appendChild(b);
   };
   if (type === 'phone') {
-    add('💬 וואטסאפ', 'btn-primary', () => api('open_url', waLink(v)));
-    add('📞 חיוג', 'btn-ghost', () => api('open_url', 'tel:' + v.replace(/[^\d+]/g, '')));
+    const openAndReport = async (url, what) => {
+      const r = await api('open_url', url);
+      if (!r || !r.ok) toast((r && r.error) || ('לא ניתן לפתוח ' + what), 'error');
+    };
+    add('💬 וואטסאפ', 'btn-primary', () => openAndReport(waLink(v), 'וואטסאפ'));
+    // tel: על מחשב בלי אפליקציית טלפון הוא בדיוק אותה לחיצה שותקת
+    add('📞 חיוג', 'btn-ghost', () =>
+      openAndReport('tel:' + v.replace(/[^\d+]/g, ''), 'את החייגן'));
   } else {
-    // תוכנת דואר מוגדרת → פותחים אותה, כמו שתמיד היה. אין → הדפדפן, במקום
-    // לחיצה שלא עושה כלום. הבדיקה עצמה היא מ-PR #4 של @tsoolgee; ההכללה כאן
-    // היא כדי לא לקבע ספק אחד לכל המשתמשים.
-    add('📧 שלח מייל', 'btn-primary', async () => {
-      const m = await api('has_mail_client');
-      if (m && m.has) { api('open_url', 'mailto:' + v); return; }
-      api('open_url', 'https://mail.google.com/mail/?view=cm&fs=1&to='
-                      + encodeURIComponent(v));
+    // הכפתור הזה כבר "לא עשה כלום" פעמיים, משתי סיבות שונות: פעם כי לא
+    // הייתה תוכנת דואר, ופעם כי הייתה **רשומה** תוכנה שכבר לא מותקנת
+    // (AppX של אפליקציית הדואר שהוסרה מ-Windows 11). Windows לא יודע לענות
+    // על זה בוודאות, ולכן לא מנחשים: מציגים את שתי הדרכים, ומדווחים כשמשהו
+    // נכשל במקום לשתוק.
+    const openAndReport = async (url, what) => {
+      const r = await api('open_url', url);
+      if (!r || !r.ok) toast((r && r.error) || ('לא ניתן לפתוח ' + what), 'error');
+    };
+    add('🌐 מייל בדפדפן', 'btn-primary', () =>
+      openAndReport('https://mail.google.com/mail/?view=cm&fs=1&to='
+                    + encodeURIComponent(v), 'את הדפדפן'));
+    api('has_mail_client').then(m => {
+      if (!m || !m.has) return;          // אין מטפל רשום — אין מה להציע
+      const b = document.createElement('button');
+      b.className = 'btn btn-ghost';
+      b.textContent = m.verified ? '📧 תוכנת הדואר' : '📧 תוכנת הדואר (לא אומתה)';
+      if (!m.verified) b.title =
+        'רשום מטפל ל-mailto, אבל לא ניתן לאמת שהתוכנה מותקנת. '
+        + 'אם הלחיצה לא עושה כלום — השתמש בדפדפן.';
+      b.onclick = () => { ov.remove(); openAndReport('mailto:' + v, 'את תוכנת הדואר'); };
+      foot.insertBefore(b, foot.firstChild);
     });
   }
   add('📋 העתק', 'btn-ghost', async () => {
@@ -5746,6 +5766,12 @@ function fillModalBody(frameId) {
   const body = document.querySelector('#modal-overlay .modal-body');
   const fr = document.getElementById(frameId);
   if (!body || !fr) return;
+  // `.modal` הוא flex column עם max-height בלבד — **בלי גובה**. לכן `flex:1`
+  // על הגוף לא קיבל שום מקום לחלק, המסגרת נפלה ל-min-height שלה, והדוח כולו
+  // נדחס לחלון של כמה מאות פיקסלים. נותנים לחלון גובה אמיתי, ואז שרשרת
+  // ה-flex עובדת כמתוכנן.
+  const modal = body.closest('.modal');
+  if (modal) modal.style.height = '90vh';
   body.style.display = 'flex';
   body.style.flexDirection = 'column';
   fr.style.height = 'auto';
@@ -5763,7 +5789,7 @@ function showChazonishnikReport(html, postCount) {
     { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveChazonishnikReport(html) },
     { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openChazonishnik },
     { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
-  ], 'modal-lg');
+  ], 'modal-xl');
   fillModalBody('chz-frame');
   setTimeout(() => {
     const frame = document.getElementById('chz-frame');
@@ -5913,7 +5939,7 @@ function showStinknikReport(html, disCount) {
     { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveStinknikReport(html) },
     { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openStinknik },
     { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
-  ], 'modal-lg');
+  ], 'modal-xl');
   fillModalBody('stink-frame');
   setTimeout(() => {
     const frame = document.getElementById('stink-frame');

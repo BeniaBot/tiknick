@@ -463,6 +463,8 @@ body[data-view="cards"] #cards-wrap{display:block}
 @keyframes pop{from{transform:translateY(24px) scale(.95);opacity:0}to{transform:translateY(0) scale(1);opacity:1}}
 .modal.modal-sm{width:480px}
 .modal.modal-lg{width:860px}
+/* דוחות: לוח מחוונים ברשת של 12 עמודות נחנק ב-860px */
+.modal.modal-xl{width:1280px}
 .modal-header{
   padding:22px 26px 16px;border-bottom:1px solid var(--border-soft);
   display:flex;align-items:center;justify-content:space-between;position:relative;

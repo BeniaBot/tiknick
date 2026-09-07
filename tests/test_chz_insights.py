@@ -35,11 +35,12 @@ DAY = 86400000
 BASE_TS = 1735689600000          # 2025-01-01, קבוע — הבדיקה לא תלויה בשעון
 
 
-def post(i, ts, hour, likes, tid, title, votes_ok=True):
+def post(i, ts, hour, likes, tid, title, votes_ok=True,
+         mentions=None, voters=None):
     return {"pid": i, "title": title, "tid": tid, "ts": ts,
             "date": "2025-01-01", "hour": hour, "dow": 2, "day": "רביעי",
-            "month": "2025-01", "likes": likes, "voters": [],
-            "votes_ok": votes_ok, "words": 40}
+            "month": "2025-01", "likes": likes, "voters": voters or [],
+            "votes_ok": votes_ok, "mentions": mentions or [], "words": 40}
 
 
 def build(posts):
@@ -55,7 +56,7 @@ def render(html, section):
 const boxes = {};
 const mk = () => ({ _h: '', set innerHTML(v){ this._h = v; },
                     get innerHTML(){ return this._h; }, innerText: '' });
-for (const id of ['list-gaps','list-sharp','list-threads','list-fans','list-best',
+for (const id of ['list-gaps','list-sharp','list-threads','list-social','list-fans','list-best',
                   'stat-posts','stat-likes','stat-words','stat-time'])
   boxes[id] = mk();
 globalThis.document = { getElementById: id => boxes[id] || mk() };
@@ -64,6 +65,7 @@ Chart.defaults = {};
 %s
 console.log(JSON.stringify({ gaps: boxes['list-gaps'].innerHTML,
                              sharp: boxes['list-sharp'].innerHTML,
+                             social: boxes['list-social'].innerHTML,
                              threads: boxes['list-threads'].innerHTML }));
 """ % body
     p = os.path.join(tempfile.mkdtemp(), "r.js")
@@ -146,6 +148,50 @@ out = render(build(noname), "threads")
 # חמישה מזהים שונים = חמישה שרשורים נפרדים, בכל אחד פוסט אחד.
 # קיבוץ לפי הכותרת "תגובה" היה נותן שרשור מזויף אחד עם חמישה פוסטים.
 ok("קיבוץ לפי מזהה ולא לפי כותרת", "5 · 100%" in out, out[:300])
+
+
+# ══ 👥 עם מי הוא מדבר ═════════════════════════════════════════════════════
+def v(name, uid=2):
+    return {"uid": uid, "username": name}
+
+
+social = [
+    # חבר: הוא פונה אליו והוא מחזיר בלייקים
+    post(1, BASE_TS, 10, 2, 1, "א", mentions=["דוד"], voters=[v("דוד"), v("שרה")]),
+    post(2, BASE_TS + DAY, 10, 1, 2, "ב", mentions=["דוד"], voters=[v("דוד")]),
+    # פונה אליו והוא שותק — שלוש פעמים, אפס לייקים
+    post(3, BASE_TS + 2 * DAY, 10, 0, 3, "ג", mentions=["יריב"]),
+    post(4, BASE_TS + 3 * DAY, 10, 0, 4, "ד", mentions=["יריב"]),
+    post(5, BASE_TS + 4 * DAY, 10, 0, 5, "ה", mentions=["יריב"]),
+    # מעריץ שקט: שרה עושה לייקים, הוא לא מזכיר אותה מעולם
+    post(6, BASE_TS + 5 * DAY, 10, 1, 6, "ו", voters=[v("שרה")]),
+]
+out = render(build(social), "social")
+ok("הקרובים אליו מוצגים", "הקרובים אליו" in out, out[:200])
+ok("דוד שם עם שני הצדדים", "2 פניות · 2 לייקים" in out, out[:400])
+ok("מי שפונים אליו והוא שותק", "3 פניות" in out and "שותקים" in out, out[:600])
+ok("מעריץ שקט מזוהה", "מעריצים שקטים" in out and "שרה" in out, out[:800])
+ok("יש קישור לפרופיל", "/user/" in out, out[:300])
+ok("הוא עצמו לא ברשימה", "someone" not in out, out[:400])
+
+# בלי אזכורים בכלל — נאמר במפורש, בלי להמציא
+none_ = [post(i, BASE_TS + i * DAY, 10, 1, 800 + i, "x", voters=[v("שרה")])
+         for i in range(3)]
+out = render(build(none_), "social")
+ok("בלי אזכורים — מעריצים בלבד", "מעריצים שקטים" in out or "לא נמצאו אזכורים" in out,
+   out[:300])
+
+# חילוץ האזכורים עצמו — הכלל זהה לזה של שדות התיוג
+ok("אזכור פשוט", CZ._mentions_in("שלום @דוד", "x") == ["דוד"])
+ok("ציטוט של NodeBB", CZ._mentions_in("@משה said in נושא:", "x") == ["משה"])
+ok("מייל אינו אזכור", CZ._mentions_in("beni@gmail.com", "x") == [])
+ok("גם מייל מסובך", CZ._mentions_in("a.b_c%d+e@example.co.il", "x") == [])
+# בעברית ו'/ה' החיבור נדבקות למילה. הכלל "@ פותח מילה" פספס את זה, ולכן
+# הכלל הוא "מה שלפני ה-@ אינו נראה כמו מייל".
+ok("ו' החיבור לפני אזכור", CZ._mentions_in("@דוד ו@שרה גם", "x") == ["דוד", "שרה"])
+ok("גם ה' הידיעה", CZ._mentions_in("ה@מנהל אמר", "x") == ["מנהל"])
+ok("בלי כפילויות", CZ._mentions_in("@דוד וגם @שרה, ושוב @דוד", "x") == ["דוד", "שרה"])
+ok("בלי המשתמש עצמו", CZ._mentions_in("@לומדעס", "לומדעס") == [])
 
 
 # ══ אנגלית ════════════════════════════════════════════════════════════════
