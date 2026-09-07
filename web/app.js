@@ -127,9 +127,14 @@ function applyColMove(key, toIndex) {
 // איזה אינדקס-שחרור מתאים למיקום המצביע. ths[0] הוא הימני ביותר ב-RTL, ולכן
 // עוברים לפי סדר ה-DOM ומחפשים את הראשון שמרכזו שמאלה מהמצביע.
 function dropIndexAt(ths, clientX) {
+  // ב-RTL ths[0] היא העמודה הימנית ביותר, ולכן "לפני i" הוא הראשון שמרכזו
+  // משמאל לסמן. ב-LTR ths[0] היא השמאלית — ואז אותו תנאי מחזיר 0 כמעט תמיד,
+  // כלומר כל גרירה נחתה בקצה. התנאי מתהפך עם הכיוון.
+  const rtl = isRtl();
   for (let i = 0; i < ths.length; i++) {
     const r = ths[i].getBoundingClientRect();
-    if (clientX > r.left + r.width / 2) return i;
+    const mid = r.left + r.width / 2;
+    if (rtl ? clientX > mid : clientX < mid) return i;
   }
   return ths.length;
 }
@@ -144,8 +149,12 @@ function showDropLine(ths, idx) {
   const ref = ths[Math.min(idx, ths.length - 1)];
   if (!ref) return;
   const r = ref.getBoundingClientRect();
-  // הוספה "לפני" עמודה ב-RTL = הקצה הימני שלה; הוספה בסוף = הקצה השמאלי של האחרונה
-  line.style.left = (idx >= ths.length ? r.left : r.right) + 'px';
+  // "לפני" עמודה = הקצה שממנו היא מתחילה: ימין ב-RTL, שמאל ב-LTR.
+  // "בסוף" = הקצה הנגדי של האחרונה.
+  const rtl = isRtl();
+  const atEnd = idx >= ths.length;
+  line.style.left = (rtl ? (atEnd ? r.left : r.right)
+                         : (atEnd ? r.right : r.left)) + 'px';
   line.style.top = r.top + 'px';
   line.style.height = (document.getElementById('table-wrap')?.clientHeight || r.height) + 'px';
 }
@@ -1289,13 +1298,17 @@ function relativeTime(dateStr) {
   const now = new Date();
   const diff = Math.floor((now - d) / 1000);
   if (isNaN(diff)) return dateStr;
-  if (diff < 60) return 'עכשיו';
+  // הערך הזה נכתב לתוך #tbody, שמסומן data-no-i18n כדי שלא יתורגמו בו שמות
+  // ניקים — ולכן מנוע התרגום לא מגיע לכאן. עמודת "עודכן" נשארה עברית באנגלית.
+  // הפתרון הוא לתרגם **במקור**, ולא לפתוח את המכולה.
+  const T = (typeof tt === 'function') ? tt : (s => s);
+  if (diff < 60) return T('עכשיו');
   // עברית: יחיד/זוגי/רבים ("לפני דקה", "לפני שעתיים", "אתמול")
   const m = Math.floor(diff / 60), h = Math.floor(diff / 3600), dd = Math.floor(diff / 86400);
-  if (diff < 3600)   return m === 1 ? 'לפני דקה'  : m === 2 ? 'לפני שתי דקות' : `לפני ${m} דקות`;
-  if (diff < 86400)  return h === 1 ? 'לפני שעה'  : h === 2 ? 'לפני שעתיים'  : `לפני ${h} שעות`;
-  if (diff < 604800) return dd === 1 ? 'אתמול'    : dd === 2 ? 'לפני יומיים'  : `לפני ${dd} ימים`;
-  return d.toLocaleDateString('he-IL');
+  if (diff < 3600)   return m === 1 ? T('לפני דקה')  : m === 2 ? T('לפני שתי דקות') : T(`לפני ${m} דקות`);
+  if (diff < 86400)  return h === 1 ? T('לפני שעה')  : h === 2 ? T('לפני שעתיים')  : T(`לפני ${h} שעות`);
+  if (diff < 604800) return dd === 1 ? T('אתמול')    : dd === 2 ? T('לפני יומיים')  : T(`לפני ${dd} ימים`);
+  return d.toLocaleDateString(isRtl() ? 'he-IL' : 'en-GB');
 }
 
 function renderOpenBtn(td, n) {
@@ -2147,7 +2160,15 @@ async function onTagInput(e) {
   // ב-RTL הסמן יושב בקצה הימני של השדה; עיגון לשמאל פתח את הרשימה
   // מרחק של כמעט רוחב חלון מהמקום שבו מקלידים.
   box.style.left = '';
-  box.style.right = (window.innerWidth - rect.right) + 'px';
+  // ב-RTL הסמן יושב בקצה הימני של השדה, ב-LTR בשמאלי. עיגון קבוע לימין
+  // פתח את הרשימה בצד ההפוך מהסמן במצב אנגלית.
+  if (isRtl()) {
+    box.style.right = (window.innerWidth - rect.right) + 'px';
+    box.style.left = '';
+  } else {
+    box.style.left = rect.left + 'px';
+    box.style.right = '';
+  }
   box.style.top  = (rect.bottom + 4) + 'px';
   box.style.display = '';
 }
@@ -2487,11 +2508,15 @@ function openUserLookup(tab) {
         <input type="text" id="lookup-input" placeholder="שם משתמש / שם אמיתי..." autocomplete="off"
                oninput="onLookupInput(this.value)">
       </div>
-      <div id="lookup-results" style="max-height:150px;overflow-y:auto;margin-bottom:6px"></div>
+      <!-- שמות ניקים, פורומים וכל מה שנסרק הם **נתונים**. מנוע התרגום מטייל
+           על כל ה-DOM, ובקטלוג יש מילים עבריות רגילות — ניק ששמו "ייצוא"
+           הופך ל-"Export". #tbody ו-#cards-grid כבר מסומנים; אלה המשטחים
+           הנוספים שמציגים ערכים מהמאגר. -->
+      <div id="lookup-results" data-no-i18n style="max-height:150px;overflow-y:auto;margin-bottom:6px"></div>
       <div id="lookup-profile"></div>
     </div>
-    <div id="idm-pane" style="display:none"></div>
-    <div id="idsug-pane" style="display:none"></div>
+    <div id="idm-pane" data-no-i18n style="display:none"></div>
+    <div id="idsug-pane" data-no-i18n style="display:none"></div>
   `, [
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg', { id: 'user-lookup' });
@@ -2567,7 +2592,7 @@ async function showMergedProfile(nickId) {
   if (!p) { if (box) box.innerHTML = '<div style="padding:14px;color:var(--danger)">לא נמצא</div>'; return; }
   if (box) box.innerHTML =
     `<div style="text-align:left;margin-bottom:6px">
-       <button class="btn btn-sm btn-ghost" onclick="openPrintDialog(${nickId})">🖨️ פרופיל להדפסה</button>
+       <button class="btn btn-sm btn-ghost" onclick="openPrintDialog(${nickId}, () => { openUserLookup('look'); showMergedProfile(${nickId}); })">🖨️ פרופיל להדפסה</button>
      </div>` + renderMergedProfile(p);
   S.lastMergedProfile = p;
   api('touch_recent', nickId);
@@ -2592,7 +2617,7 @@ function renderMergedProfile(p) {
                  font-size:12px;cursor:pointer;margin:0 0 6px 6px">
       <span style="width:8px;height:8px;border-radius:50%;background:${S.forumColors[m.forum] || '#8b90a0'}"></span>
       <b>${esc(m.username)}</b>
-      <span style="color:var(--subtext)">${esc(m.forum)}</span>
+      <span data-no-i18n style="color:var(--subtext)">${esc(m.forum)}</span>
     </span>`).join('');
 
   // שדות מאוחדים
@@ -2601,7 +2626,9 @@ function renderMergedProfile(p) {
       const attribution = members.length > 1
         ? `<span style="color:var(--subtext);font-size:11px"> — ${esc(v.username)} [${esc(v.forum)}]</span>` : '';
       const disp = String(v.value).includes('@') ? renderTaggedText(v.value) : esc(v.value);
-      return `<div style="padding:2px 0">${disp}${attribution}</div>`;
+      // ערך מהמאגר — לא ממשק. בלי הסימון הזה ניק או הערה שתוכנם מילה
+      // עברית רגילה ("ייצוא", "כללי") מתורגמים על המסך.
+      return `<div data-no-i18n style="padding:2px 0">${disp}${attribution}</div>`;
     }).join('');
     return `
       <div style="display:flex;gap:12px;padding:9px 0;border-bottom:1px solid var(--border-soft)">
@@ -2616,9 +2643,9 @@ function renderMergedProfile(p) {
       <div style="display:flex;gap:8px;align-items:center;font-size:13px;padding:4px 0">
         <span>${c.type === 'phone' ? '📞' : '📧'}</span>
         <b class="contact-link" dir="ltr" data-ctype="${esc(c.type)}" data-cval="${esc(c.value)}">${esc(c.value)}</b>
-        ${c.label ? `<span style="color:var(--subtext);font-size:11px">${esc(c.label)}</span>` : ''}
+        ${c.label ? `<span data-no-i18n style="color:var(--subtext);font-size:11px">${esc(c.label)}</span>` : ''}
         ${c.is_private ? '<span title="סודי">🔒</span>' : ''}
-        <span style="color:var(--subtext);font-size:11px;margin-right:auto">${esc(c.username)} [${esc(c.forum)}]</span>
+        <span data-no-i18n style="color:var(--subtext);font-size:11px;margin-right:auto">${esc(c.username)} [${esc(c.forum)}]</span>
       </div>`).join('')}` : '';
 
   return `
@@ -2626,7 +2653,7 @@ function renderMergedProfile(p) {
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:12px">
         <div style="width:56px;height:56px;border-radius:16px;overflow:hidden;box-shadow:var(--shadow-sm);flex-shrink:0">${avatarHtml}</div>
         <div style="flex:1;min-width:0">
-          <div style="font-size:18px;font-weight:800">${esc(primary.username || '')}</div>
+          <div data-no-i18n style="font-size:18px;font-weight:800">${esc(primary.username || '')}</div>
           <div style="font-size:12px;color:var(--subtext)">
             ${members.length > 1 ? `${members.length} זהויות מקושרות` : 'זהות אחת'}
           </div>
@@ -3635,7 +3662,7 @@ async function printProfileNow(nickId, opts = {}) {
   else toast('לא ניתן לפתוח את הגיליון' + (r?.path ? ` — הקובץ נשמר ב: ${r.path}` : ''), 'error');
 }
 
-async function openPrintDialog(nickId) {
+async function openPrintDialog(nickId, back) {
   openModal('🖨️ פרופיל להדפסה', `
     <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:10px">
       <label style="display:flex;gap:8px;align-items:center;font-size:12.5px;cursor:pointer">
@@ -3656,6 +3683,9 @@ async function openPrintDialog(nickId) {
         priv:  document.getElementById('pr-priv').checked,
         history: document.getElementById('pr-hist').checked });
     }},
+    ...(typeof back === 'function'
+        ? [{ label: '↩ חזרה', cls: 'btn-ghost', action: () => { closeModal(); back(); } }]
+        : []),
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg', { id: 'print-profile' });
   ['pr-group', 'pr-hist', 'pr-priv'].forEach(id =>
@@ -3887,7 +3917,7 @@ async function openScanRuns(back) {
           נוספו ${r.added} · עודכנו ${r.updated}${r.failed_pages ? ` · ${r.failed_pages} עמודים נכשלו` : ''}
         </div>
       </div>
-      ${r.changes ? `<button class="btn btn-sm btn-ghost" onclick="openScanChanges(${r.id})">${r.changes} שינויים</button>`
+      ${r.changes ? `<button class="btn btn-sm btn-ghost" onclick="openScanChanges(${r.id}, openScanRuns)">${r.changes} שינויים</button>`
                   : '<span style="color:var(--subtext);font-size:12px">ללא שינוי</span>'}
     </div>`).join('')
     : '<div style="padding:24px;text-align:center;color:var(--subtext)">עדיין לא בוצעו סריקות</div>';
@@ -3899,7 +3929,10 @@ async function openScanRuns(back) {
   ], 'modal-lg');
 }
 
-async function openScanChanges(runId) {
+// openModal סוגר את החלון הנוכחי ואין לו מחסנית. חמישה חלונות כבר מקבלים
+// `back`; שני אלה נשכחו — לחיצה על "N שינויים" ביומן הסריקות השמידה את
+// היומן, וכפתור ההדפסה השמיד את הפרופיל המאוחד שפתח אותו.
+async function openScanChanges(runId, back) {
   const LIMIT = 500;
   const ch = await api('get_scan_changes', runId, LIMIT) || [];
   const truncated = ch.length >= LIMIT;
@@ -3924,7 +3957,12 @@ async function openScanChanges(runId) {
             ← <bdi><b>${esc(c.new_value || '(ריק)')}</b></bdi></span>
         </div>`).join('')}` : ''}
     ${!ch.length ? '<div style="padding:24px;text-align:center;color:var(--subtext)">לא נמצאו שינויים</div>' : ''}`;
-  openModal('📋 מה השתנה בסריקה', html, [{ label: 'סגור', cls: 'btn-ghost', action: closeModal }], 'modal-lg');
+  openModal('📋 מה השתנה בסריקה', html, [
+    ...(typeof back === 'function'
+        ? [{ label: '↩ חזרה', cls: 'btn-ghost', action: () => { closeModal(); back(); } }]
+        : []),
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg');
 }
 
 // ══ BACKUP / RESTORE (קובץ DB שלם) ═══════════════════════════════════
@@ -4541,10 +4579,21 @@ function toggleAllResetCols(val) {
   document.querySelectorAll('.reset-col').forEach(cb => cb.checked = val);
 }
 
-async function doResetAll() {
-  if (!confirm('למחוק את כל הניקים לגמרי? פעולה בלתי הפיכה!')) return;
-  if (!confirm('בטוח לחלוטין?')) return;
-  await api('reset_all');
+async function doResetAll(force) {
+  if (!force) {
+    if (!confirm('למחוק את כל הניקים לגמרי? פעולה בלתי הפיכה!')) return;
+    if (!confirm('בטוח לחלוטין?')) return;
+  }
+  const r = await api('reset_all', !!force);
+  // התוצאה נזרקה, וההודעה "כל הניקים נמחקו" הוצגה גם כשהשרת **סירב** —
+  // בזמן שסריקה רצה, או כשהגיבוי שלפני האיפוס נכשל. רשת הביטחון שנוספה
+  // ב-0.8.11 (needs_confirm) לא הייתה מחוברת לשום דבר.
+  if (r && r.needs_confirm) {
+    if (confirm((r.error || 'הגיבוי שלפני האיפוס נכשל.') +
+                '\n\nלאפס בכל זאת, בלי גיבוי?')) return doResetAll(true);
+    return;
+  }
+  if (!r || !r.ok) { toast(r?.error || 'האיפוס לא בוצע', 'error'); return; }
   S.selectedId = null;
   closeModal();
   await loadNicks();
@@ -4556,9 +4605,18 @@ async function doResetColumns() {
   if (!selected.length) { toast('בחר לפחות עמודה אחת', 'error'); return; }
   if (!confirm(`לאפס ${selected.length} עמודות בכל הניקים?`)) return;
   const res = await api('reset_columns', selected);
+  if (res && res.needs_confirm) {
+    if (!confirm((res.error || 'הגיבוי נכשל.') + '\n\nלאפס בכל זאת?')) return;
+    const again = await api('reset_columns', selected, true);
+    if (!again || !again.ok) { toast(again?.error || 'האיפוס לא בוצע', 'error'); return; }
+    closeModal(); await loadNicks();
+    toast(`${again.count||0} עמודות אופסו`, 'success');
+    return;
+  }
+  if (!res || !res.ok) { toast(res?.error || 'האיפוס לא בוצע', 'error'); return; }
   closeModal();
   await loadNicks();
-  toast(`${res?.count||0} עמודות אופסו`, 'success');
+  toast(`${res.count||0} עמודות אופסו`, 'success');
 }
 
 async function doResetSettings() {
@@ -6187,6 +6245,12 @@ function safeColor(v, fallback = 'var(--accent)') {
 
 // כתובת בטוחה ל-href/src: רק http(s) או data:image. אחרת — לא נפתח כלום.
 // (avatar_url מגיע מהפורום; ערך כמו javascript:... אסור להגיע ל-DOM)
+// כיוון הפריסה בפועל. שלושה מקומות בקובץ מודדים גיאומטריה, וכל אחד מהם
+// חישב את זה לבד (או הניח RTL) — מה שנשבר במצב אנגלית.
+function isRtl() {
+  return document.documentElement.getAttribute('dir') !== 'ltr';
+}
+
 function safeUrl(u) {
   const s = String(u ?? '').trim();
   return /^(https?:\/\/|data:image\/)/i.test(s) ? s : '';

@@ -22,18 +22,22 @@ const COLS = [
   { key: 'notes', label: 'הערות', width: 180 },
 ];
 
+// כיוון הפריסה — הבדיקות מחליפות אותו כדי לבדוק את שני המצבים.
+// dropIndexAt קורא ל-isRtl(), ו-isRtl קורא ל-document.
+const DIR = { value: 'rtl' };
 const sandbox = {
   COLS,
   MIN_COL_W: 46,
   MAX_COL_W: 640,
   COL_LAYOUT: { order: null, w: {} },
   DISPLAY: { hidden_cols: '' },
+  document: { documentElement: { getAttribute: () => DIR.value } },
   console,
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 vm.runInContext(
-  [grab('loadColLayout'), grab('orderedCols'), grab('visibleCols'),
+  [grab('isRtl'), grab('loadColLayout'), grab('orderedCols'), grab('visibleCols'),
    grab('hiddenColsSet'), grab('applyColMove'), grab('dropIndexAt'),
    grab('colWidth')].join('\n'),
   sandbox);
@@ -108,6 +112,23 @@ const ths = [
 ok('מצביע מימין לכולן → 0', sandbox.dropIndexAt(ths, 790) === 0, String(sandbox.dropIndexAt(ths, 790)));
 ok('בין המרכזים של 1 ו-2 → 2', sandbox.dropIndexAt(ths, 620) === 2, String(sandbox.dropIndexAt(ths, 620)));
 ok('משמאל לכולן → הסוף', sandbox.dropIndexAt(ths, 400) === 3, String(sandbox.dropIndexAt(ths, 400)));
+
+// ── ואותה גיאומטריה ב-LTR (מצב אנגלית) ────────────────────────────────
+// כאן ths[0] היא העמודה ה**שמאלית**, ולכן התנאי חייב להתהפך. קודם הוא לא
+// התהפך, הלולאה החזירה 0 כמעט לכל מיקום סמן, וכל גרירה נחתה בקצה — כלומר
+// סידור עמודות פשוט לא עבד באנגלית.
+DIR.value = 'ltr';
+const lths = [
+  { getBoundingClientRect: () => ({ left: 0,   right: 100, width: 100, top: 0, height: 20 }) },
+  { getBoundingClientRect: () => ({ left: 100, right: 200, width: 100, top: 0, height: 20 }) },
+  { getBoundingClientRect: () => ({ left: 200, right: 300, width: 100, top: 0, height: 20 }) },
+];
+ok('LTR: משמאל לכולן → 0', sandbox.dropIndexAt(lths, 10) === 0, String(sandbox.dropIndexAt(lths, 10)));
+ok('LTR: בין המרכזים של 0 ו-1 → 1', sandbox.dropIndexAt(lths, 120) === 1, String(sandbox.dropIndexAt(lths, 120)));
+ok('LTR: מימין לכולן → הסוף', sandbox.dropIndexAt(lths, 290) === 3, String(sandbox.dropIndexAt(lths, 290)));
+ok('LTR: לא כל גרירה נוחתת ב-0',
+   new Set([10, 120, 220, 290].map(x => sandbox.dropIndexAt(lths, x))).size > 1);
+DIR.value = 'rtl';
 
 // סימן שינוי הרוחב: הידית על הקצה השמאלי, גרירה שמאלה = רחב יותר
 const resize = (startX, startW, clientX) =>

@@ -3318,8 +3318,17 @@ def backup_to(dest_path):
     dst = sqlite3.connect(dest_path)
     try:
         src.backup(dst)
+        # הקובץ החדש יורש WAL מהמאגר החי. גיבוי הוא קובץ ארכיון שנפתח לקריאה
+        # בלבד, ופתיחה כזו מייצרת ‎-wal/‎-shm שאי אפשר לנקות — ואז list_backups
+        # מדלגת עליו לנצח. DELETE הוא המצב הנכון לארכיון.
+        dst.execute("PRAGMA journal_mode=DELETE")
     finally:
         dst.close()
+    for suffix in ("-wal", "-shm"):
+        try:
+            os.remove(dest_path + suffix)
+        except OSError:
+            pass
     return src.execute("SELECT COUNT(*) FROM nicks").fetchone()[0]
 
 def _close_thread_connection():
@@ -3358,6 +3367,22 @@ def backup_dir():
     os.makedirs(d, exist_ok=True)
     return d
 
+def _has_live_journal(path):
+    """נכון רק לגיבוי שנקטע באמצע הכתיבה, לא לכזה שנפתח לקריאה אחר כך."""
+    try:
+        db_mtime = os.path.getmtime(path)
+    except OSError:
+        return True
+    for suffix in ("-journal", "-wal"):
+        side = path + suffix
+        try:
+            if os.path.getmtime(side) <= db_mtime + 1:
+                return True          # נכתב יחד עם הקובץ = כתיבה שנקטעה
+        except OSError:
+            continue
+    return False
+
+
 def list_backups():
     """הגיבויים האוטומטיים, החדש ראשון."""
     out = []
@@ -3367,8 +3392,10 @@ def list_backups():
             if not name.startswith("tiknick-") or not name.endswith(".db"):
                 continue
             full = os.path.join(d, name)
-            # גיבוי שהושלם לא משאיר -journal/-wal לצידו
-            if os.path.exists(full + "-journal") or os.path.exists(full + "-wal"):
+            # גיבוי שהושלם לא משאיר -journal/-wal לצידו — אבל ‎-wal שנוצר
+            # מפתיחה לקריאה מאוחר יותר הוא **חדש** מה-.db, ואילו הסימן לגיבוי
+            # חצי-כתוב הוא ‎-wal שנכתב יחד איתו. משווים זמנים במקום לפסול הכול.
+            if _has_live_journal(full):
                 continue
             try:
                 st = os.stat(full)
@@ -3406,6 +3433,11 @@ def _prune_backups(keep=AUTO_BACKUP_KEEP):
             except OSError:
                 pass
 
+# גיבוי אחד בכל רגע. auto_backup אינה מרימה דגל שה-_busy של main רואה,
+# ולכן שתי לחיצות מהירות רצו במקביל על אותו קובץ.
+_backup_lock = threading.Lock()
+
+
 def auto_backup(reason="daily", force=False):
     """
     עותק מלא דרך ה-backup API של SQLite (לא העתקת קובץ — WAL).
@@ -3429,9 +3461,16 @@ def auto_backup(reason="daily", force=False):
         # כותבים ל-.part ומשנים שם רק כשהקובץ שלם. הגיבוי היומי רץ ב-thread
         # daemon, וסגירת החלון קוטלת אותו באמצע — קובץ חלקי (גודל > 0) היה
         # נספר כגיבוי תקין ואפילו מפנה מקום לגיבוי טוב שנמחק במקומו.
-        part = dest + ".part"
+        # שתי לחיצות על "גבה עכשיו" מקבלות שני threads (pywebview מריץ כל
+        # קריאת גשר בנפרד), ובגיבוי של 99MB יש שניות שלמות ביניהן. אותו שם
+        # קובץ פירושו אותו .part, ושתי כתיבות שנכנסות זו לתוך זו — ואז אחת
+        # מהן נכשלת ב-os.replace עם שגיאת Windows גולמית באנגלית, והשנייה
+        # עלולה להשאיר ארכיון פגום. המנעול מסדר אותם, והסיומת הייחודית
+        # מבטיחה שגם בלעדיו הם לא ידרסו זה את זה.
+        part = "%s.%d.part" % (dest, os.getpid() ^ threading.get_ident())
         try:
-            backup_to(part)
+            with _backup_lock:
+                backup_to(part)
             size = os.path.getsize(part)
             if size <= 0:
                 raise ValueError("הגיבוי יצא ריק")
