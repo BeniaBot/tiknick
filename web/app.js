@@ -5233,6 +5233,12 @@ async function openInternetSync() {
               title="פרוקסי — אם הרשת שלך חוסמת גישה ישירה לפורומים">🛡️ רשת ופרוקסי</button>
     </div>
 
+    <div class="section-hdr">על הפורום עצמו</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
+      <button class="btn btn-ghost btn-sm" onclick="openForumStats()"
+              title="מי נרשם ראשון, מתי הפורום נפתח ומה גדל בו — שש בקשות, לא סריקה">🏛️ מי היה כאן ראשון</button>
+    </div>
+
     <div id="sync-check-result" style="font-size:13px;margin-bottom:12px;min-height:20px"></div>
 
     <div id="sync-progress-wrap" style="display:none;margin-top:8px">
@@ -5968,6 +5974,55 @@ function showStinknikReport(html, disCount) {
   fillModalBody('stink-frame');
   setTimeout(() => {
     const frame = document.getElementById('stink-frame');
+    if (frame) frame.srcdoc = html;
+  }, 100);
+}
+
+// ══ דוח הפורום — "מי היה כאן ראשון" ═══════════════════════════════════
+// שש בקשות, לא סריקה. אין כאן מצב רקע ואין באנר צף: הקריאה חוזרת תוך שניות
+// בודדות, ו-forumstats אוכף תקרת זמן משלו.
+async function openForumStats() {
+  // syncActive() מחזיר את תיבת הסימון של הפורום הפעיל; הכתובת יושבת ב-data-url
+  const forumUrl = syncActive()?.dataset.url || '';
+  if (!forumUrl) { toast('בחר פורום עם כתובת', 'error'); return; }
+  openModal('🏛️ מי היה כאן ראשון', `
+    <div style="text-align:center;padding:26px 16px">
+      <div style="font-size:40px;margin-bottom:14px">🏛️</div>
+      <div style="font-size:14px;margin-bottom:6px">שולף את נתוני הפורום…</div>
+      <div style="font-size:12px;color:var(--subtext)">שש בקשות בלבד — כמה שניות</div>
+    </div>
+  `, [], 'modal-sm', { id: 'fs-wait' });
+  const r = await api('run_forum_stats', forumUrl);
+  // אם המשתמש סגר או עבר הלאה בינתיים — לא חוטפים לו את החלון בחזרה
+  if (_currentModalId !== 'fs-wait') return;
+  if (!r?.ok) {
+    closeModal();
+    toast('לא ניתן להפיק את הדוח: ' + (r?.error || ''), 'error');
+    return;
+  }
+  showForumStatsReport(r.html, r.stats || {});
+}
+
+function showForumStatsReport(html, stats) {
+  const bits = [];
+  if (stats.founded) bits.push('נפתח ' + stats.founded);
+  if (stats.user_count) bits.push(stats.user_count.toLocaleString() + ' משתמשים');
+  openModal('🏛️ מי היה כאן ראשון' + (bits.length ? ' · ' + bits.join(' · ') : ''), `
+    <iframe id="fstats-frame" sandbox="allow-scripts allow-popups"
+            style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
+  `, [
+    { label: '💾 שמור כ-HTML', cls: 'btn-primary',
+      action: async () => {
+        const r = await api('save_forum_stats_report', html);
+        if (r?.ok) toast('הדוח נשמר ✓', 'success');
+        else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
+      } },
+    { label: '↩ חזרה לסנכרון', cls: 'btn-ghost', action: openInternetSync },
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-xl');
+  fillModalBody('fstats-frame');
+  setTimeout(() => {
+    const frame = document.getElementById('fstats-frame');
     if (frame) frame.srcdoc = html;
   }, 100);
 }

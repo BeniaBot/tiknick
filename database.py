@@ -945,6 +945,28 @@ def get_cookie_for_url(url):
         row = conn.execute("SELECT cookie FROM forum_cookies WHERE origin=?", (origin,)).fetchone()
         return (row[0] if row else "") or ""
 
+def usernames_for_origin(url):
+    """
+    שמות הניקים שכבר יש עליהם תיק בפורום שיושב באותו origin.
+
+    משמש את דוח הפורום (`forumstats`) כדי לסמן מי מהחברים הראשונים כבר במאגר —
+    זה מה שהופך אותו לכלי של התוכנה ולא לדף סטטיסטיקות גנרי.
+    ההתאמה היא לפי origin ולא לפי שם, כי הדוח מקבל כתובת ולא שם פורום.
+    עמודה אחת בלבד, ורק לפורום אחד — האינדקס על `forum` מכסה את זה.
+    """
+    origin = _origin(url)
+    if not origin:
+        return []
+    with get_connection() as conn:
+        names = [r["name"] for r in conn.execute("SELECT name, url FROM forums")
+                 if _origin(r["url"]) == origin]
+        if not names:
+            return []
+        ph = ",".join("?" * len(names))
+        return [r[0] for r in conn.execute(
+            f"SELECT username FROM nicks WHERE forum IN ({ph})", names)]
+
+
 def save_cookie_for_url(url, cookie):
     """שומר/מעדכן עוגייה לדומיין. עוגייה ריקה מוחקת את השמורה."""
     origin = _origin(url)

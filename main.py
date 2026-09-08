@@ -1169,6 +1169,31 @@ class API:
     def get_chazonishnik_progress(self):
         return dict(_chz_state)
 
+    # ── דוח הפורום — "מי היה כאן ראשון" ────────────────────────────
+    def run_forum_stats(self, base_url="", cookie=""):
+        """
+        מפיק את דוח הפורום ומחזיר אותו ישירות.
+
+        **בלי thread ובלי מצב רקע, במכוון**: זה שש בקשות ולא סריקה — נמדד
+        9 שניות מול mitmachim.top (31 אלף משתמשים) ומול bina.top. pywebview
+        מריץ כל קריאת גשר ב-thread משלה, ולכן החלון אינו נתקע. מכונת מצבים
+        נוספת ברקע הייתה מוסיפה בדיוק את סוג הבאג של "running שנתקע לנצח"
+        תמורת שום דבר. `forumstats.TOTAL_DEADLINE` הוא התקרה.
+        """
+        import forumstats
+        base_url = (base_url or forumstats.DEFAULT_BASE).strip()
+        cookie = (cookie or "").strip() or (db.get_cookie_for_url(base_url) or "")
+        try:
+            known = db.usernames_for_origin(base_url)
+        except Exception:                       # noqa: BLE001
+            logging.exception("forum stats: reading local nicks failed")
+            known = []          # הסימון "במאגר" הוא תוספת, לא תנאי לדוח
+        try:
+            return forumstats.analyze_forum(base_url, cookie or None, known)
+        except Exception as e:                  # noqa: BLE001
+            logging.exception("forum stats failed")
+            return {"ok": False, "html": "", "stats": {}, "error": str(e)}
+
     # ── Stinknik — ניתוח דיסלייקים ─────────────────────────────────
     def run_stinknik(self, user_input, cookie="", base_url="https://mitmachim.top",
                      max_posts=None):
@@ -1253,6 +1278,26 @@ class API:
             return {"ok": True, "path": path}
         except Exception as e:
             logging.exception("save_stinknik_report failed")
+            return {"ok": False, "error": str(e)}
+
+    def save_forum_stats_report(self, html=None):
+        if not html:
+            return {"ok": False, "error": "אין דוח לשמירה"}
+        try:
+            import webview
+            result = webview.windows[0].create_file_dialog(
+                webview.SAVE_DIALOG, save_filename="forum_stats.html",
+                file_types=("HTML Files (*.html)",))
+            if not result:
+                return {"ok": False, "error": "בוטל"}
+            path = result if isinstance(result, str) else result[0]
+            if not path.lower().endswith(".html"):
+                path += ".html"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(html)
+            return {"ok": True, "path": path}
+        except Exception as e:                  # noqa: BLE001
+            logging.exception("save_forum_stats_report failed")
             return {"ok": False, "error": str(e)}
 
     def cancel_chazonishnik(self):
