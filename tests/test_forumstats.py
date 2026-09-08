@@ -154,8 +154,8 @@ ok("שם זהה מסומן", fm[0]["in_db"] is True, fm[0])
 ok("נרמול רווח/מקף עובד", fm[1]["in_db"] is True, fm[1])
 ok("מי שאינו במאגר אינו מסומן", fm[2]["in_db"] is False, fm[2])
 ok("המונה נכון", r2["stats"]["in_db"] == 2, r2["stats"]["in_db"])
-ok("התגית מופיעה בדוח", "במאגר" in r2["html"])
-ok("ובלי מאגר אין תגית", "במאגר" not in r["html"])
+ok("התגית מופיעה בדוח", 'class="tag ok"' in r2["html"] and "במאגר" in r2["html"])
+ok("ובלי מאגר אין תגית", 'class="tag ok"' not in r["html"])
 
 # ══ שאר המקטעים ══════════════════════════════════════════════════════════
 ok("סכום הפוסטים מהקטגוריות", st["total_posts"] == 4900, st["total_posts"])
@@ -395,8 +395,86 @@ ok("והיא נשענת על הזיהוי הקיים של הסורק",
    "_looks_like_challenge" in io.open(FS.__file__, encoding="utf-8").read())
 
 
+# ══ 📇 מהמאגר שלך — הרעיון של בנימין ═════════════════════════════════════
+# "בשדה מוניטין, מי שיש לו את המספר הכי נמוך הוא הכי הרבה דיסים." המוניטין
+# כבר נסרק לכל משתמש ויושב מקומית, ולכן זו תשובה **באפס בקשות** לשאלה
+# שה-API הציבורי לא יכול לענות עליה.
+LOCAL = {
+    "scanned": 31036, "banned": 214, "no_posts": 9012,
+    "last_scrape": "2026-09-07T22:10:00",
+    "worst": [{"username": "שנוא מאוד", "rep": -347, "posts": "900"},
+              {"username": "פחות", "rep": -12, "posts": "50"}],
+    "best": [{"username": "מישהו 12", "rep": 20147, "posts": "27330"}],
+}
+rl = run(local=LOCAL)
+h = rl["html"]
+ok("המקטע המקומי מופיע", "מהמאגר שלך" in h)
+ok("הכי הרבה דיסלייקים", "שנוא מאוד" in h and "-347" in h, h.count("-347"))
+ok("הכי הרבה לייקים", "מישהו 12" in h and "20,147" in h)
+ok("המקור מוצהר", "31,036" in h and "אפס בקשות רשת" in h)
+ok("המורחקים נספרים", "214" in h)
+ok("תאריך הסריקה מוצג בלי השעה", "2026-09-07" in h and "22:10" not in h)
+ok("נאמר שזו הערכה ולא ספירה", "לייקים פחות דיסלייקים" in h)
+ok("והמגבלה מפנה לשם", "המשתמש" in h and "מוערך למטה" in h)
+ok("המקטע לא עלה אף בקשה", rl["stats"]["requests"] == 6, rl["stats"]["requests"])
+ok("ה-snapshot נשמר ב-stats", rl["stats"]["local"]["scanned"] == 31036)
+
+# בלי מאגר — הזמנה לסרוק, לא כרטיס ריק
+r0 = run()
+ok("בלי נתונים מקומיים מוסבר מה לעשות", "סרוק אותו" in r0["html"])
+ok("ואין שמות מומצאים", "שנוא מאוד" not in r0["html"])
+
+# מוניטין ריק אינו אפס — הוא "לא נמדד", ולכן לא נכנס לרשימה
+ok("שורה בלי מוניטין אינה מוצגת",
+   "אין נתוני מוניטין" in run(local={"scanned": 5, "worst": [], "best": []})["html"])
+
+# שם עם רווח מקבל סלאג עם מקף — אותו באג שתוקן ב-0.9 בקישורי חזונישניק
+ok("הקישור בנוי מסלאג ולא משם עם רווחים",
+   "/user/%D7%9E%D7%99%D7%A9%D7%94%D7%95-12" in h,
+   [x for x in h.split('"') if "/user/" in x][:2])
+
+
 _srv.shutdown()
 _srv.server_close()
+
+# ══ db.forum_local_snapshot — על מאגר זמני, לעולם לא על האמיתי ═══════════
+import tempfile   # noqa: E402
+import database as db   # noqa: E402
+
+db.close_pool()
+db.DB_PATH = os.path.join(tempfile.mkdtemp(), "t.db")
+db.init_db()
+db.add_forum("בדיקה", "#fff", "https://f.example")
+for _u, _rep, _pc, _jd, _st in (
+        ("שנוא", "-347", "900", "2019-03-04", "פעיל"),
+        ("שנוא2", "-12", "50", "2019-03-04", "מורחק"),
+        ("נמוך9", "-9", "4", "2019-03-04", "פעיל"),
+        ("אהוב", "20147", "27330", "2020-01-01", "פעיל"),
+        ("רפאים", "", "0", "2022-02-02", "פעיל")):
+    db.create_nick({"forum": "בדיקה", "username": _u, "reputation": _rep,
+                    "post_count": _pc, "join_date": _jd, "status": _st})
+
+snap = db.forum_local_snapshot("f.example")     # גם בלי סכימה
+ok("הצילום מוצא את הפורום לפי origin", snap["scanned"] == 5, snap["scanned"])
+# מוניטין הוא TEXT בסכימה. מיון טקסטואלי היה שם "-9" לפני "-347" — כלומר
+# בדיוק את האדם הלא נכון בראש הרשימה.
+ok("המיון מספרי ולא טקסטואלי",
+   [w["username"] for w in snap["worst"]] == ["שנוא", "שנוא2", "נמוך9"],
+   [(w["username"], w["rep"]) for w in snap["worst"]])
+ok("החיוביים בסדר יורד", [b["username"] for b in snap["best"]] == ["אהוב"],
+   [(b["username"], b["rep"]) for b in snap["best"]])
+ok("מוניטין ריק אינו נספר כאפס",
+   all(w["username"] != "רפאים" for w in snap["worst"] + snap["best"]))
+ok("מורחקים נספרים", snap["banned"] == 1, snap["banned"])
+ok("מי שלא כתב נספר", snap["no_posts"] == 1, snap["no_posts"])
+ok("שנות ההצטרפות מקובצות",
+   [(y["year"], y["c"]) for y in snap["by_year"]] ==
+   [("2019", 3), ("2020", 1), ("2022", 1)], snap["by_year"])
+ok("כתובת ריקה מחזירה צילום ריק בלי חריגה",
+   db.forum_local_snapshot("")["scanned"] == 0)
+ok("פורום שאינו במאגר מחזיר ריק",
+   db.forum_local_snapshot("https://nope.example")["scanned"] == 0)
+db.close_pool()
 
 print()
 if fails:

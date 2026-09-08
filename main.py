@@ -1183,13 +1183,18 @@ class API:
         import forumstats
         base_url = (base_url or forumstats.DEFAULT_BASE).strip()
         cookie = (cookie or "").strip() or (db.get_cookie_for_url(base_url) or "")
+        known, local = [], {}
         try:
             known = db.usernames_for_origin(base_url)
+            # הרעיון של בנימין: המוניטין שכבר נסרק עונה על "מי קיבל הכי הרבה
+            # דיסלייקים" — שאלה שה-API הציבורי לא יכול לענות עליה — באפס בקשות.
+            local = db.forum_local_snapshot(base_url)
         except Exception:                       # noqa: BLE001
             logging.exception("forum stats: reading local nicks failed")
-            known = []          # הסימון "במאגר" הוא תוספת, לא תנאי לדוח
+            # שני אלה הם תוספת, לא תנאי לדוח
         try:
-            return forumstats.analyze_forum(base_url, cookie or None, known)
+            return forumstats.analyze_forum(base_url, cookie or None, known,
+                                            local=local)
         except Exception as e:                  # noqa: BLE001
             logging.exception("forum stats failed")
             return {"ok": False, "html": "", "stats": {}, "error": str(e)}

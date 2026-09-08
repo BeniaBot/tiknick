@@ -72,7 +72,8 @@ _LIMITS = [
     ("הפוסט עם הכי הרבה דיסלייקים בפורום",
      "דיסלייקים אינם נחשפים ברמת הפורום — רק פר-פוסט. שטינקניק מוצא אותם "
      "למשתמש אחד כי הוא עובר על הפוסטים שלו; לעשות את זה לפורום שלם פירושו "
-     "אלפי בקשות לשרת של מתנדבים, וזה לא ייעשה."),
+     "אלפי בקשות לשרת של מתנדבים, וזה לא ייעשה. **המשתמש** עם הכי הרבה "
+     "דיסלייקים כן מוערך למטה, מתוך המוניטין שכבר נסרק."),
 ]
 
 
@@ -382,7 +383,7 @@ def _categories(data, want=TOP_ROWS):
 
 
 def analyze_forum(base_url=DEFAULT_BASE, cookie=None, known_usernames=None,
-                  first_n=FIRST_MEMBERS, deadline=TOTAL_DEADLINE):
+                  first_n=FIRST_MEMBERS, deadline=TOTAL_DEADLINE, local=None):
     """
     מפיק את דוח הפורום. מחזיר {ok, html, stats, error}.
 
@@ -436,6 +437,7 @@ def analyze_forum(base_url=DEFAULT_BASE, cookie=None, known_usernames=None,
         "first_members": first_rows,
         "members_ok": status == "ok",
         "in_db": sum(1 for r in first_rows if r["in_db"]),
+        "local": dict(local or {}),
         "requests": f.calls,
         "missing": [p for p, _ in f.failed],
     }
@@ -446,7 +448,7 @@ def analyze_forum(base_url=DEFAULT_BASE, cookie=None, known_usernames=None,
                 "error": f.challenge or "הפורום לא החזיר נתונים"}
 
     html_out = _build_html(stats, cats, most_viewed, most_replied,
-                           top_posters, oldest, f.failed)
+                           top_posters, oldest, f.failed, local or {})
     return {"ok": True, "html": html_out, "stats": stats, "error": ""}
 
 
@@ -522,6 +524,60 @@ def _people_rows(base, rows, label):
     return "".join(out)
 
 
+def _local_note(local):
+    """מה בדיוק עומד מאחורי המקטע הזה — כמה ניקים, ומתי נסרקו."""
+    n = _int(local.get("scanned"))
+    if not n:
+        return _t("אין עדיין ניקים סרוקים מהפורום הזה במאגר. סרוק אותו, "
+                  "והמקטע הזה יתמלא — בלי אף בקשה נוספת.")
+    bits = [_t("מחושב מ-") + "{:,}".format(n) + _t(" ניקים שסרוקים אצלך")]
+    if _int(local.get("banned")):
+        bits.append("{:,}".format(_int(local["banned"])) + _t(" מורחקים"))
+    if _int(local.get("no_posts")):
+        bits.append("{:,}".format(_int(local["no_posts"])) + _t(" בלי אף פוסט"))
+    when = str(local.get("last_scrape") or "")[:10]
+    if when:
+        bits.append(_t("נסרק לאחרונה ") + when)
+    return " · ".join(bits) + " · " + _t("אפס בקשות רשת")
+
+
+def _rep_rows(base, rows, negative):
+    """
+    שורות מוניטין מהמאגר המקומי.
+
+    **הרעיון של בנימין**: `reputation` נאסף מכל משתמש בכל סריקה מאז ומעולם,
+    ומי שהמספר שלו הנמוך ביותר הוא מי שספג הכי הרבה דיסלייקים. זה עונה על
+    השאלה שאמרתי שה-API לא יכול לענות עליה — כי התשובה כבר יושבת מקומית,
+    באפס בקשות.
+
+    זו **הערכה ולא ספירה**: מוניטין ב-NodeBB הוא הפרש (לייקים פחות
+    דיסלייקים), ולכן מי שקיבל אלף לייקים ואלף דיסלייקים ייראה כמו מי שלא
+    קיבל דבר. הכרטיס אומר את זה במפורש.
+    """
+    if not rows:
+        return ('<div class="empty">'
+                + _esc(_t("אין נתוני מוניטין בניקים שנסרקו")) + "</div>")
+    top = max(abs(_int(r.get("rep"))) for r in rows) or 1
+    out = []
+    for r in rows:
+        name = _txt(r.get("username"))
+        link = "%s/user/%s" % (base, urllib.parse.quote(
+            re.sub(r"\s+", "-", name), safe=""))
+        rep = _int(r.get("rep"))
+        out.append(
+            '<div class="row">'
+            '<div class="row-main"><a href="%s" target="_blank" class="tlink">%s</a>'
+            '<div class="row-sub">%s %s</div></div>'
+            '<div class="row-num" style="color:%s">%s</div>'
+            '%s</div>' % (
+                _esc(link), _esc(name) or _esc(_t("ללא שם")),
+                "{:,}".format(_int(r.get("posts"))), _esc(_t("פוסטים")),
+                "var(--bad)" if negative else "var(--ok)",
+                "{:,}".format(rep),
+                _bar(abs(rep), top, "var(--bad)" if negative else "var(--ok)")))
+    return "".join(out)
+
+
 def _cat_rows(cats):
     if not cats:
         return '<div class="empty">' + _esc(_t("אין נתונים זמינים")) + '</div>'
@@ -575,6 +631,22 @@ _TPL_EN = {
         "From the popular-topics list the forum publishes",
     "מתוך אותה רשימה — לא מתוך כל הארכיון":
         "From that same list — not from the whole archive",
+    "מהמאגר שלך": "From your own database",
+    "הכי הרבה דיסלייקים": "Most downvotes",
+    "הכי הרבה לייקים": "Most upvotes",
+    "מוערך מהמוניטין: לייקים פחות דיסלייקים. מי שקיבל גם וגם בכמות דומה לא יופיע כאן":
+        "Estimated from reputation: upvotes minus downvotes. Someone who got plenty of both will not show up here",
+    "אותו מספר, מהקצה השני": "The same number, from the other end",
+    "אין נתוני מוניטין בניקים שנסרקו": "No reputation data in the scanned nicks",
+    "אין עדיין ניקים סרוקים מהפורום הזה במאגר. סרוק אותו, והמקטע הזה יתמלא — בלי אף בקשה נוספת.":
+        "No nicks from this forum are on file yet. Scan it and this section fills in — with no extra request.",
+    "מחושב מ-": "Computed from ",
+    " ניקים שסרוקים אצלך": " nicks on file",
+    " מורחקים": " banned",
+    " בלי אף פוסט": " with no posts at all",
+    "נסרק לאחרונה ": "last scanned ",
+    "אפס בקשות רשת": "zero network requests",
+    "ללא שם": "Unnamed",
     "הופק מ-": "Produced from ",
     " בקשות בלבד": " requests only",
     "מקטעים שלא נטענו:": "Sections that did not load:",
@@ -647,6 +719,16 @@ __FIRSTS__</div>
   <div class="card col-6"><h3>✍️ הכותבים הגדולים</h3>__POSTERS__</div>
   <div class="card col-6"><h3>🕰️ הוותיקים מבין הנושאים הבולטים</h3><div class="note">הוותיק ביותר מבין אותם נושאים — לא הנושא הראשון בפורום</div>__OLDEST__</div>
 
+  <div class="card col-12" style="padding-bottom:6px">
+    <h3>📇 מהמאגר שלך</h3>
+    <div class="note">__LOCALNOTE__</div></div>
+  <div class="card col-6"><h3>👎 הכי הרבה דיסלייקים</h3>
+    <div class="note">מוערך מהמוניטין: לייקים פחות דיסלייקים. מי שקיבל גם וגם בכמות דומה לא יופיע כאן</div>
+__WORST__</div>
+  <div class="card col-6"><h3>💚 הכי הרבה לייקים</h3>
+    <div class="note">אותו מספר, מהקצה השני</div>
+__BEST__</div>
+
   <div class="card col-12"><h3>🔍 מה לא מוצג כאן, ולמה</h3>
     <div class="limits">__LIMITS__</div></div>
 </div>
@@ -654,7 +736,7 @@ __FIRSTS__</div>
 </div></body></html>"""
 
 
-def _build_html(stats, cats, viewed, replied, posters, oldest, failed):
+def _build_html(stats, cats, viewed, replied, posters, oldest, failed, local=None):
     base = stats["base"]
     limits = "".join(
         "<li><b>%s</b> — %s</li>" % (_esc(_t(a)), _esc(_t(b))) for a, b in _LIMITS)
@@ -678,6 +760,9 @@ def _build_html(stats, cats, viewed, replied, posters, oldest, failed):
         "REPLIED": _topic_rows(base, replied, "posts", _t("תגובות")),
         "POSTERS": _people_rows(base, posters, _t("פוסטים")),
         "OLDEST": _topic_rows(base, oldest, "views", _t("צפיות"), bars=False),
+        "LOCALNOTE": _esc(_local_note(local or {})),
+        "WORST": _rep_rows(base, (local or {}).get("worst") or [], True),
+        "BEST": _rep_rows(base, (local or {}).get("best") or [], False),
         "LIMITS": limits,
         "FOOT": _esc(foot),
     })

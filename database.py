@@ -3354,6 +3354,61 @@ def get_stats():
             ORDER BY c DESC LIMIT 8""")]
     return {"totals": totals, "by_forum": by_forum, "top_groups": top_groups}
 
+def forum_local_snapshot(url, top=8):
+    """
+    מה שהמאגר המקומי כבר יודע על הפורום — **אפס בקשות רשת**.
+
+    הרעיון של בנימין, והוא נכון: `reputation` נאסף מכל משתמש בכל סריקה מאז
+    ומעולם, ומי שהמספר שלו הנמוך ביותר הוא מי שקיבל הכי הרבה דיסלייקים.
+    זה בדיוק מה שאמרתי שאי אפשר להביא מה-API — ומסתבר שהוא כבר יושב כאן.
+
+    **מה שחוזר מכאן הוא על מי שנסרק, לא על הפורום.** מי שלא נכלל בסריקה
+    האחרונה פשוט לא קיים בחישוב, ולכן `scanned` חוזר יחד עם הכול והדוח מציין
+    אותו במפורש. מוניטין הוא הפרש (לייקים פחות דיסלייקים) ולא ספירת
+    דיסלייקים — זו הערכה, וכך זה גם נאמר.
+    """
+    origin = _origin(url)
+    out = {"scanned": 0, "forums": [], "worst": [], "best": [], "banned": 0,
+           "silent": 0, "no_posts": 0, "by_year": [], "last_scrape": ""}
+    if not origin:
+        return out
+    with get_connection() as conn:
+        names = [r["name"] for r in conn.execute("SELECT name, url FROM forums")
+                 if _origin(r["url"]) == origin]
+        if not names:
+            return out
+        out["forums"] = names
+        ph = ",".join("?" * len(names))
+
+        def q(sql, extra=()):
+            return conn.execute(sql.replace("{F}", ph), list(names) + list(extra))
+
+        out["scanned"] = q("SELECT COUNT(*) FROM nicks WHERE forum IN ({F})").fetchone()[0]
+        if not out["scanned"]:
+            return out
+        out["banned"] = q("SELECT COUNT(*) FROM nicks WHERE forum IN ({F}) "
+                          "AND status='מורחק'").fetchone()[0]
+        # CAST: reputation הוא TEXT בסכימה, ומיון טקסטואלי היה שם "-9" לפני
+        # "-100". ריק/NULL אינו אפס — הוא "לא נמדד", ולכן מסונן החוצה.
+        rep = ("SELECT username, forum, CAST(reputation AS INTEGER) AS rep, "
+               "COALESCE(post_count,'') AS posts FROM nicks "
+               "WHERE forum IN ({F}) AND COALESCE(reputation,'') != '' "
+               "AND CAST(reputation AS INTEGER) %s 0 ORDER BY rep %s LIMIT ?")
+        out["worst"] = [dict(r) for r in q(rep % ("<", "ASC"), (top,))]
+        out["best"] = [dict(r) for r in q(rep % (">", "DESC"), (top,))]
+        out["no_posts"] = q("SELECT COUNT(*) FROM nicks WHERE forum IN ({F}) "
+                            "AND COALESCE(post_count,'0') IN ('','0')").fetchone()[0]
+        out["by_year"] = [dict(r) for r in q(
+            "SELECT substr(join_date,1,4) AS year, COUNT(*) AS c FROM nicks "
+            "WHERE forum IN ({F}) AND length(COALESCE(join_date,'')) >= 4 "
+            "GROUP BY year ORDER BY year")]
+    for n in names:
+        ts = get_setting("last_scrape_" + n) or ""
+        if ts > out["last_scrape"]:
+            out["last_scrape"] = ts
+    return out
+
+
 def record_field_value(nick_id, field_name, value, source_id):
     """רושם/מעדכן ערך של שדה ממקור מסוים, ואז מכריע מחדש מי מנצח."""
     if field_name in _NON_SOURCED or value in (None, ""):
