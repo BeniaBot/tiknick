@@ -34,6 +34,8 @@ import i18n
 import net
 import scraper
 
+REPORT_NAME = "תיק הפורום"
+
 DEFAULT_BASE = "https://mitmachim.top"
 
 # ── ה-User-Agent המזוהה, ולמה דווקא הוא ──────────────────────────────────
@@ -78,7 +80,16 @@ _LIMITS = [
 
 
 def _t(s):
-    return i18n.t(s)
+    """
+    תרגום של מחרוזת שנבנית **בזמן ריצה** ולא יושבת בתבנית.
+
+    `translate_template` רץ על התבנית בלבד, ולכן כל תווית שמוזרקת אחר כך
+    (שם הדוח, "צפיות", "נרשם", "במאגר") נשארה עברית באנגלית למרות שהמפתח
+    כבר היה ב-`_TPL_EN`. אותו דפוס כמו `stinknik._t` עם `_LOCAL_EN`.
+    """
+    if i18n.lang() != "en":
+        return s
+    return _TPL_EN.get(s) or i18n.t(s)
 
 
 # ══ רשת ═══════════════════════════════════════════════════════════════════
@@ -382,10 +393,14 @@ def _categories(data, want=TOP_ROWS):
     return out[:want], sum(c["posts"] for c in out), sum(c["topics"] for c in out)
 
 
-def analyze_forum(base_url=DEFAULT_BASE, cookie=None, known_usernames=None,
-                  first_n=FIRST_MEMBERS, deadline=TOTAL_DEADLINE, local=None):
+NEWLINE = chr(10)
+
+
+def _collect(base_url=DEFAULT_BASE, cookie=None, known_usernames=None,
+             first_n=FIRST_MEMBERS, deadline=TOTAL_DEADLINE, local=None):
     """
-    מפיק את דוח הפורום. מחזיר {ok, html, stats, error}.
+    אוסף את כל מה שצריך לפורום אחד ומחזיר את החלקים, בלי לבנות HTML —
+    כדי ששני מסלולי הכניסה (פורום אחד / כמה) יחלקו בדיוק את אותו קוד רשת.
 
     `known_usernames` — שמות הניקים שכבר יש עליהם תיק ב-Tik-Nick באותו פורום.
     זה מה שהופך את הדוח לכלי של התוכנה ולא לדף סטטיסטיקות גנרי: ליד כל חבר
@@ -447,8 +462,76 @@ def analyze_forum(base_url=DEFAULT_BASE, cookie=None, known_usernames=None,
         return {"ok": False, "html": "", "stats": stats,
                 "error": f.challenge or "הפורום לא החזיר נתונים"}
 
-    html_out = _build_html(stats, cats, most_viewed, most_replied,
-                           top_posters, oldest, f.failed, local or {})
+    return {"ok": True, "stats": stats, "error": "",
+            "parts": (stats, cats, most_viewed, most_replied, top_posters,
+                      oldest, f.failed, local or {})}
+
+
+def analyze_forum(base_url=DEFAULT_BASE, cookie=None, known_usernames=None,
+                  first_n=FIRST_MEMBERS, deadline=TOTAL_DEADLINE, local=None):
+    """דוח של פורום אחד. מחזיר {ok, html, stats, error}."""
+    r = _collect(base_url, cookie, known_usernames, first_n, deadline, local)
+    if not r["ok"]:
+        return {"ok": False, "html": "", "stats": r.get("stats") or {},
+                "error": r["error"]}
+    return {"ok": True, "stats": r["stats"], "error": "",
+            "html": _build_html(*r["parts"])}
+
+
+def analyze_forums(targets, first_n=FIRST_MEMBERS, deadline=TOTAL_DEADLINE):
+    """
+    דוח אחד לכמה פורומים.
+
+    בנימין: *"בסנכרון לאינטרנט אפשר לסמן כמה. הבעיה שהפיצ'ר לא עובד עם כמה
+    יחד."* — צדק; הכלי לקח את הפורום הפעיל בלבד.
+
+    `targets` הוא רשימת `{name, url, cookie, known, local}`. הפורומים נסרקים
+    **בזה אחר זה ולא במקביל** — בדיוק כמו בהשוואת שני המשתמשים בחזונישניק:
+    שניים בו-זמנית מכפילים את העומס, וכל מנגנון הנימוס בנוי סביב זרם אחד.
+    לכל פורום תקציב זמן משלו, כך שפורום אחד שנתקע לא בולע את כל הדוח.
+
+    פורום שנכשל לגמרי מקבל שורה בטבלה ומקטע שאומר זאת — ולא מפיל את השאר.
+    """
+    targets = [t for t in (targets or []) if (t.get("url") or "").strip()]
+    if not targets:
+        return {"ok": False, "html": "", "stats": {}, "error": "לא נבחר אף פורום"}
+    if len(targets) == 1:
+        t = targets[0]
+        return analyze_forum(t["url"], t.get("cookie"), t.get("known"),
+                             first_n, deadline, t.get("local"))
+
+    rows, sections, calls, failed_names = [], [], 0, []
+    for t in targets:
+        name = t.get("name") or t["url"]
+        r = _collect(t["url"], t.get("cookie"), t.get("known"), first_n,
+                     deadline, t.get("local"))
+        st = r.get("stats") or {}
+        loc = t.get("local") or {}
+        calls += _int(st.get("requests"))
+        rows.append({
+            "name": name, "founded": st.get("founded") or "",
+            "user_count": st.get("user_count"), "total_topics": st.get("total_topics"),
+            "total_posts": st.get("total_posts"), "scanned": loc.get("scanned"),
+            "banned": loc.get("banned"),
+        })
+        if r["ok"]:
+            sections.append(_build_grid(*r["parts"], section_title=name))
+        else:
+            failed_names.append(name)
+            sections.append(
+                '<div class="sect"><bdi>%s</bdi></div>'
+                '<div class="card col-12"><div class="empty">%s</div></div>'
+                % (_esc(name), _esc(r["error"] or _t("הפורום לא החזיר נתונים"))))
+
+    if len(failed_names) == len(targets):
+        return {"ok": False, "html": "", "stats": {},
+                "error": "אף אחד מהפורומים שנבחרו לא החזיר נתונים"}
+    stats = {"forums": [r["name"] for r in rows], "compare": rows,
+             "requests": calls, "failed": failed_names}
+    subtitle = "%d %s · %s" % (len(targets), _t("פורומים"),
+                               " · ".join(r["name"] for r in rows))
+    html_out = _page("📇 " + _t(REPORT_NAME), subtitle,
+                     _compare_table(rows), NEWLINE.join(sections), calls)
     return {"ok": True, "html": html_out, "stats": stats, "error": ""}
 
 
@@ -578,6 +661,84 @@ def _rep_rows(base, rows, negative):
     return "".join(out)
 
 
+def _ratio_rows(base, rows):
+    """
+    מוניטין **לפוסט**: מי שכל פוסט שלו אהוב, ולא מי שכתב הכי הרבה.
+
+    זו הזווית שאף אחד לא רואה — בפורום מדורגים לפי כמות, וכאן מדורגים לפי
+    יחס. רצפת 30 פוסטים מונעת ממי שכתב פוסט אחד מוצלח להוביל את הטבלה.
+    """
+    if not rows:
+        return ('<div class="empty">'
+                + _esc(_t("אין מספיק כותבים ותיקים בניקים שנסרקו")) + "</div>")
+    top = max(float(r.get("ratio") or 0) for r in rows) or 1.0
+    out = []
+    for r in rows:
+        name = _txt(r.get("username"))
+        link = "%s/user/%s" % (base, urllib.parse.quote(
+            re.sub(r"\s+", "-", name), safe=""))
+        ratio = float(r.get("ratio") or 0)
+        out.append(
+            '<div class="row">'
+            '<div class="row-main"><a href="%s" target="_blank" class="tlink">%s</a>'
+            '<div class="row-sub">%s %s · %s %s</div></div>'
+            '<div class="row-num" style="color:var(--ok)">%s<span class="unit">%s</span></div>'
+            '%s</div>' % (
+                _esc(link), _esc(name) or _esc(_t("ללא שם")),
+                "{:,}".format(_int(r.get("posts"))), _esc(_t("פוסטים")),
+                "{:,}".format(_int(r.get("rep"))), _esc(_t("מוניטין")),
+                _esc(("%.1f" % ratio) if ratio < 100 else "{:,}".format(int(ratio))),
+                _esc(_t("לפוסט")),
+                _bar(int(ratio * 100), int(top * 100), "var(--ok)")))
+    return "".join(out)
+
+
+def _gone_rows(base, rows):
+    """ותיקים ששקטו — כתבו הרבה, ולא נראו יותר משנה."""
+    if not rows:
+        return ('<div class="empty">'
+                + _esc(_t("אף כותב ותיק לא נעלם מהניקים שנסרקו")) + "</div>")
+    top = max(_int(r.get("posts")) for r in rows) or 1
+    out = []
+    for r in rows:
+        name = _txt(r.get("username"))
+        link = "%s/user/%s" % (base, urllib.parse.quote(
+            re.sub(r"\s+", "-", name), safe=""))
+        out.append(
+            '<div class="row">'
+            '<div class="row-main"><a href="%s" target="_blank" class="tlink">%s</a>'
+            '<div class="row-sub">%s %s · %s %s</div></div>'
+            '<div class="row-num">%s<span class="unit">%s</span></div>'
+            '%s</div>' % (
+                _esc(link), _esc(name) or _esc(_t("ללא שם")),
+                _esc(_t("נרשם")), _esc(str(r.get("join_date") or "")[:10]),
+                _esc(_t("נראה לאחרונה")), _esc(str(r.get("last_seen") or "")[:10]),
+                "{:,}".format(_int(r.get("posts"))), _esc(_t("פוסטים")),
+                _bar(_int(r.get("posts")), top)))
+    return "".join(out)
+
+
+def _year_rows(rows):
+    """גלי ההצטרפות לפי שנה — מתי הפורום גדל, ומתי הוא נעצר."""
+    rows = [r for r in (rows or []) if str(r.get("year") or "").isdigit()]
+    if not rows:
+        return ('<div class="empty">'
+                + _esc(_t("אין תאריכי הצטרפות בניקים שנסרקו")) + "</div>")
+    top = max(_int(r.get("c")) for r in rows) or 1
+    peak = max(rows, key=lambda r: _int(r.get("c")))
+    out = []
+    for r in rows:
+        c = _int(r.get("c"))
+        out.append(
+            '<div class="row">'
+            '<div class="row-main"><span class="tlink plain" dir="ltr">%s</span></div>'
+            '<div class="row-num">%s<span class="unit">%s</span></div>'
+            '%s</div>' % (
+                _esc(r.get("year")), "{:,}".format(c), _esc(_t("נרשמו")),
+                _bar(c, top, "var(--accent2)" if r is peak else "var(--accent)")))
+    return "".join(out)
+
+
 def _cat_rows(cats):
     if not cats:
         return '<div class="empty">' + _esc(_t("אין נתונים זמינים")) + '</div>'
@@ -597,7 +758,23 @@ def _cat_rows(cats):
 
 
 _TPL_EN = {
-    "מי היה כאן ראשון": "Who got here first",
+    "תיק הפורום": "The forum file",
+    "הפוסט הראשון בפורום":
+        "The forum's first post",
+    "ל-NodeBB אין נתיב ציבורי לנושא הישן ביותר: הפרמטר sort=oldest_to_newest מתעלם מאורח (נבדק — התשובה חוזרת עם recently_replied), ו-‎/api/topic/1 מחזיר 404. במקום לנחש, מוצג כאן הוותיק ביותר מבין הנושאים הבולטים.":
+        "NodeBB has no public route to the oldest topic: the sort=oldest_to_newest parameter is ignored for a guest (measured — the answer comes back with recently_replied), and /api/topic/1 returns 404. Rather than guess, what is shown here is the oldest of the notable topics.",
+    "מונה הנושאים והפוסטים":
+        "The topic and post counters",
+    "הוא סכום הקטגוריות שהפורום מציג לכלי הזה. קטגוריה שדורשת הרשאה אינה נספרת, ולכן זו רצפה ולא סך הכול האמיתי של הפורום.":
+        "They are the sum of the categories the forum shows this tool. A category that requires permission is not counted, so this is a floor rather than the forum's real total.",
+    "הפוסט עם הכי הרבה דיסלייקים בפורום":
+        "The forum's most-downvoted post",
+    "דיסלייקים אינם נחשפים ברמת הפורום — רק פר-פוסט. שטינקניק מוצא אותם למשתמש אחד כי הוא עובר על הפוסטים שלו; לעשות את זה לפורום שלם פירושו אלפי בקשות לשרת של מתנדבים, וזה לא ייעשה. **המשתמש** עם הכי הרבה דיסלייקים כן מוערך למטה, מתוך המוניטין שכבר נסרק.":
+        "Downvotes are not exposed forum-wide — only per post. Stinknik finds them for one user because it walks that user's posts; doing it for a whole forum would mean thousands of requests to a volunteer's server, and it will not be done. The **user** with the most downvotes is estimated below, from the reputation already scanned.",
+    "הפורום לא החזיר נתונים":
+        "The forum returned no data",
+    "השוואה בין פורומים": "Forum comparison",
+    "פורומים": "forums",
     "החברים הראשונים": "The first members",
     "הקטגוריות הגדולות": "The largest categories",
     "הנושאים הכי נצפים": "Most viewed topics",
@@ -632,6 +809,21 @@ _TPL_EN = {
     "מתוך אותה רשימה — לא מתוך כל הארכיון":
         "From that same list — not from the whole archive",
     "מהמאגר שלך": "From your own database",
+    "הכי אהובים לפי פוסט": "Best liked per post",
+    "מוניטין חלקי מספר הפוסטים — מי שכל פוסט שלו נחשב, ולא מי שכתב הכי הרבה. מ-30 פוסטים ומעלה":
+        "Reputation divided by post count — whose every post counts, rather than who wrote the most. From 30 posts up",
+    "גלי הצטרפות": "Waves of arrival",
+    "לפי שנת ההרשמה של הניקים שסרוקים אצלך": "By the join year of the nicks on file",
+    "ותיקים ששקטו": "Veterans who went quiet",
+    "כתבו לפחות 50 פוסטים, ולא נראו יותר משנה":
+        "Wrote at least 50 posts and have not been seen for over a year",
+    "אין מספיק כותבים ותיקים בניקים שנסרקו":
+        "Not enough established posters among the scanned nicks",
+    "אף כותב ותיק לא נעלם מהניקים שנסרקו":
+        "No established poster has gone missing among the scanned nicks",
+    "אין תאריכי הצטרפות בניקים שנסרקו": "No join dates among the scanned nicks",
+    "מוניטין": "reputation", "לפוסט": "per post", "נרשמו": "joined",
+    "נראה לאחרונה": "last seen",
     "הכי הרבה דיסלייקים": "Most downvotes",
     "הכי הרבה לייקים": "Most upvotes",
     "מוערך מהמוניטין: לייקים פחות דיסלייקים. מי שקיבל גם וגם בכמות דומה לא יופיע כאן":
@@ -651,6 +843,46 @@ _TPL_EN = {
     " בקשות בלבד": " requests only",
     "מקטעים שלא נטענו:": "Sections that did not load:",
 }
+
+_GRID = """__SECTION_HEAD__
+<div class="grid">
+  <div class="card col-3"><div class="kpi-t">החבר הראשון נרשם</div><div class="kpi-v">__FOUNDED__</div><div class="kpi-s">לא תאריך פתיחה רשמי</div></div>
+  <div class="card col-3"><div class="kpi-t">משתמשים</div><div class="kpi-v">__USERS__</div></div>
+  <div class="card col-3"><div class="kpi-t">נושאים</div><div class="kpi-v">__TOPICS__</div><div class="kpi-s">בקטגוריות הגלויות</div></div>
+  <div class="card col-3"><div class="kpi-t">פוסטים</div><div class="kpi-v">__POSTS__</div><div class="kpi-s">בקטגוריות הגלויות</div></div>
+
+  <div class="card col-6"><h3>👑 החברים הראשונים</h3>__FIRSTNOTE__
+__FIRSTS__</div>
+  <div class="card col-6"><h3>📚 הקטגוריות הגדולות</h3>__CATS__</div>
+  <div class="card col-6"><h3>👀 הנושאים הכי נצפים</h3><div class="note">מתוך הנושאים שהפורום מפרסם כפופולריים ומדוברים — לא מתוך כל הארכיון</div>__VIEWED__</div>
+  <div class="card col-6"><h3>💬 הנושאים הכי מדוברים</h3><div class="note">מתוך אותה רשימה</div>__REPLIED__</div>
+  <div class="card col-6"><h3>✍️ הכותבים הגדולים</h3>__POSTERS__</div>
+  <div class="card col-6"><h3>🕰️ הוותיקים מבין הנושאים הבולטים</h3><div class="note">הוותיק ביותר מבין אותם נושאים — לא הנושא הראשון בפורום</div>__OLDEST__</div>
+
+  <div class="card col-12" style="padding-bottom:6px">
+    <h3>📇 מהמאגר שלך</h3>
+    <div class="note">__LOCALNOTE__</div></div>
+  <div class="card col-6"><h3>👎 הכי הרבה דיסלייקים</h3>
+    <div class="note">מוערך מהמוניטין: לייקים פחות דיסלייקים. מי שקיבל גם וגם בכמות דומה לא יופיע כאן</div>
+__WORST__</div>
+  <div class="card col-6"><h3>💚 הכי הרבה לייקים</h3>
+    <div class="note">אותו מספר, מהקצה השני</div>
+__BEST__</div>
+
+  <div class="card col-6"><h3>⚡ הכי אהובים לפי פוסט</h3>
+    <div class="note">מוניטין חלקי מספר הפוסטים — מי שכל פוסט שלו נחשב, ולא מי שכתב הכי הרבה. מ-30 פוסטים ומעלה</div>
+__RATIO__</div>
+  <div class="card col-6"><h3>📅 גלי הצטרפות</h3>
+    <div class="note">לפי שנת ההרשמה של הניקים שסרוקים אצלך</div>
+__YEARS__</div>
+  <div class="card col-12"><h3>🌙 ותיקים ששקטו</h3>
+    <div class="note">כתבו לפחות 50 פוסטים, ולא נראו יותר משנה</div>
+__GONE__</div>
+
+  <div class="card col-12"><h3>🔍 מה לא מוצג כאן, ולמה</h3>
+    <div class="limits">__LIMITS__</div></div>
+</div>"""
+
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="he" dir="rtl"><head><meta charset="utf-8">
@@ -701,52 +933,90 @@ a.tlink:hover{color:var(--accent2);text-decoration:underline}
 .limits b{color:var(--accent)}
 .limits li{margin:9px 0 0;list-style:none}
 .foot{color:var(--dim);font-size:.76rem;margin-top:20px;text-align:center}
+.sect{margin:26px 0 13px;padding-bottom:7px;border-bottom:1px solid var(--border);font-size:1.25rem;font-weight:800}
+.sect a{color:var(--accent2);text-decoration:none;font-size:.8rem;font-weight:400;margin-inline-start:9px}
+.cmp{width:100%;border-collapse:collapse;font-size:.86rem}
+.cmp th,.cmp td{padding:8px 10px;border-bottom:1px solid var(--border);text-align:start;white-space:nowrap}
+.cmp th{color:var(--dim);font-weight:600;font-size:.78rem}
+.cmp td.n{font-weight:700}
+.cmp tr:last-child td{border-bottom:none}
+.cmp .best{color:var(--accent)}
 </style></head>
 <body><div class="wrap">
-<h1>🏛️ מי היה כאן ראשון</h1>
+<h1>__HEADING__</h1>
 <div class="sub">__FORUM__</div>
-<div class="grid">
-  <div class="card col-3"><div class="kpi-t">החבר הראשון נרשם</div><div class="kpi-v">__FOUNDED__</div><div class="kpi-s">לא תאריך פתיחה רשמי</div></div>
-  <div class="card col-3"><div class="kpi-t">משתמשים</div><div class="kpi-v">__USERS__</div></div>
-  <div class="card col-3"><div class="kpi-t">נושאים</div><div class="kpi-v">__TOPICS__</div><div class="kpi-s">בקטגוריות הגלויות</div></div>
-  <div class="card col-3"><div class="kpi-t">פוסטים</div><div class="kpi-v">__POSTS__</div><div class="kpi-s">בקטגוריות הגלויות</div></div>
-
-  <div class="card col-6"><h3>👑 החברים הראשונים</h3>__FIRSTNOTE__
-__FIRSTS__</div>
-  <div class="card col-6"><h3>📚 הקטגוריות הגדולות</h3>__CATS__</div>
-  <div class="card col-6"><h3>👀 הנושאים הכי נצפים</h3><div class="note">מתוך הנושאים שהפורום מפרסם כפופולריים ומדוברים — לא מתוך כל הארכיון</div>__VIEWED__</div>
-  <div class="card col-6"><h3>💬 הנושאים הכי מדוברים</h3><div class="note">מתוך אותה רשימה</div>__REPLIED__</div>
-  <div class="card col-6"><h3>✍️ הכותבים הגדולים</h3>__POSTERS__</div>
-  <div class="card col-6"><h3>🕰️ הוותיקים מבין הנושאים הבולטים</h3><div class="note">הוותיק ביותר מבין אותם נושאים — לא הנושא הראשון בפורום</div>__OLDEST__</div>
-
-  <div class="card col-12" style="padding-bottom:6px">
-    <h3>📇 מהמאגר שלך</h3>
-    <div class="note">__LOCALNOTE__</div></div>
-  <div class="card col-6"><h3>👎 הכי הרבה דיסלייקים</h3>
-    <div class="note">מוערך מהמוניטין: לייקים פחות דיסלייקים. מי שקיבל גם וגם בכמות דומה לא יופיע כאן</div>
-__WORST__</div>
-  <div class="card col-6"><h3>💚 הכי הרבה לייקים</h3>
-    <div class="note">אותו מספר, מהקצה השני</div>
-__BEST__</div>
-
-  <div class="card col-12"><h3>🔍 מה לא מוצג כאן, ולמה</h3>
-    <div class="limits">__LIMITS__</div></div>
-</div>
+__COMPARE__
+__SECTIONS__
 <div class="foot">__FOOT__</div>
 </div></body></html>"""
 
 
-def _build_html(stats, cats, viewed, replied, posters, oldest, failed, local=None):
+_CMP_COLS = [
+    ("name", "פורום", False),
+    ("founded", "החבר הראשון", False),
+    ("user_count", "משתמשים", True),
+    ("total_topics", "נושאים", True),
+    ("total_posts", "פוסטים", True),
+    ("scanned", "סרוקים אצלך", True),
+    ("banned", "מורחקים", True),
+]
+
+
+def _compare_table(rows):
+    """
+    טבלת השוואה בין הפורומים שנבחרו.
+
+    זה מה שהופך "כמה פורומים" מרשימה של דוחות זה מתחת לזה לדבר שאי אפשר
+    לראות בשום מקום אחר: איזה פורום גדול יותר, איזה ותיק יותר, ואיפה יש לך
+    כיסוי. הערך הגבוה בכל עמודה מודגש.
+    """
+    if len(rows) < 2:
+        return ""
+    best = {}
+    for key, _lbl, numeric in _CMP_COLS:
+        if numeric:
+            vals = [_int(r.get(key)) for r in rows]
+            best[key] = max(vals) if any(vals) else None
+    head = "".join("<th>%s</th>" % _esc(_t(lbl)) for _k, lbl, _n in _CMP_COLS)
+    body = []
+    for r in rows:
+        tds = []
+        for key, _lbl, numeric in _CMP_COLS:
+            if key == "name":
+                tds.append('<td class="n"><bdi>%s</bdi></td>' % _esc(r.get("name") or ""))
+            elif numeric:
+                v = _int(r.get(key))
+                cls = "n best" if (best.get(key) and v == best[key]) else "n"
+                tds.append('<td class="%s">%s</td>'
+                           % (cls, "{:,}".format(v) if v else "—"))
+            else:
+                tds.append("<td>%s</td>" % _esc(r.get(key) or "—"))
+        body.append("<tr>%s</tr>" % "".join(tds))
+    return ('<div class="card col-12" style="margin-bottom:4px;overflow-x:auto">'
+            '<h3>%s</h3><table class="cmp"><tr>%s</tr>%s</table></div>'
+            % (_esc("⚖️ " + _t("השוואה בין פורומים")), head, "".join(body)))
+
+
+def _build_grid(stats, cats, viewed, replied, posters, oldest, failed,
+                local=None, section_title=""):
+    """
+    רשת הכרטיסים של פורום אחד.
+
+    היא הוצאה מהשלד כדי שדוח אחד יוכל להחזיק כמה פורומים: בנימין דיווח
+    שאפשר לסמן כמה פורומים בסנכרון, אבל הכלי עבד רק על הראשון שבהם.
+    """
     base = stats["base"]
     limits = "".join(
         "<li><b>%s</b> — %s</li>" % (_esc(_t(a)), _esc(_t(b))) for a, b in _LIMITS)
     if failed:
         limits += ('<li style="color:var(--dim);margin-top:12px">' + _esc(_t("מקטעים שלא נטענו:"))
                    + " " + _esc(", ".join(p for p, _ in failed)) + "</li>")
-    foot = "%s%d%s" % (_t("הופק מ-"), stats["requests"], _t(" בקשות בלבד"))
-    return _fill(i18n.translate_template(_TEMPLATE, _TPL_EN), {
-        "TITLE": _esc(_t("מי היה כאן ראשון")),
-        "FORUM": _esc(base),
+    head = ""
+    if section_title:
+        head = ('<div class="sect"><bdi>%s</bdi><a href="%s" target="_blank">%s</a></div>'
+                % (_esc(section_title), _esc(base), _esc(base)))
+    return _fill(i18n.translate_template(_GRID, _TPL_EN), {
+        "SECTION_HEAD": head,
         "FOUNDED": _esc(stats["founded"] or "—"),
         "USERS": "{:,}".format(stats["user_count"]) if stats["user_count"] else "—",
         "TOPICS": "{:,}".format(stats["total_topics"]) if stats["total_topics"] else "—",
@@ -763,6 +1033,26 @@ def _build_html(stats, cats, viewed, replied, posters, oldest, failed, local=Non
         "LOCALNOTE": _esc(_local_note(local or {})),
         "WORST": _rep_rows(base, (local or {}).get("worst") or [], True),
         "BEST": _rep_rows(base, (local or {}).get("best") or [], False),
+        "RATIO": _ratio_rows(base, (local or {}).get("per_post") or []),
+        "YEARS": _year_rows((local or {}).get("by_year") or []),
+        "GONE": _gone_rows(base, (local or {}).get("gone") or []),
         "LIMITS": limits,
+    })
+
+
+def _page(heading, subtitle, compare_html, sections_html, requests):
+    foot = "%s%d%s" % (_t("הופק מ-"), requests, _t(" בקשות בלבד"))
+    return _fill(i18n.translate_template(_TEMPLATE, _TPL_EN), {
+        "TITLE": _esc(_t(REPORT_NAME)),
+        "HEADING": _esc(heading),
+        "FORUM": _esc(subtitle),
+        "COMPARE": compare_html,
+        "SECTIONS": sections_html,
         "FOOT": _esc(foot),
     })
+
+
+def _build_html(stats, cats, viewed, replied, posters, oldest, failed, local=None):
+    """דוח של פורום אחד — שלד עם רשת אחת בתוכו."""
+    grid = _build_grid(stats, cats, viewed, replied, posters, oldest, failed, local)
+    return _page("📇 " + _t(REPORT_NAME), stats["base"], "", grid, stats["requests"])

@@ -1170,6 +1170,37 @@ class API:
         return dict(_chz_state)
 
     # ── דוח הפורום — "מי היה כאן ראשון" ────────────────────────────
+    def run_forum_stats_many(self, targets=None):
+        """
+        תיק הפורום לכמה פורומים בבת אחת.
+
+        בסנכרון אפשר לסמן כמה פורומים, והכלי עבד רק על הפעיל שבהם. `targets`
+        הוא [{name, url, cookie}] — והעוגייה של כל פורום נשלפת **שלו בלבד**
+        כשלא נמסרה, כך שכלל הפרטיות מ-0.8.3 נשמר גם כאן.
+        """
+        import forumstats
+        out = []
+        for t in (targets or []):
+            url = (t.get("url") or "").strip()
+            if not url:
+                continue
+            ck = (t.get("cookie") or "").strip() or (db.get_cookie_for_url(url) or "")
+            item = {"name": t.get("name") or url, "url": url, "cookie": ck or None,
+                    "known": [], "local": {}}
+            try:
+                item["known"] = db.usernames_for_origin(url)
+                item["local"] = db.forum_local_snapshot(url)
+            except Exception:               # noqa: BLE001
+                logging.exception("forum stats: reading local nicks failed for %s", url)
+            out.append(item)
+        if not out:
+            return {"ok": False, "html": "", "stats": {}, "error": "לא נבחר אף פורום"}
+        try:
+            return forumstats.analyze_forums(out)
+        except Exception as e:              # noqa: BLE001
+            logging.exception("forum stats failed")
+            return {"ok": False, "html": "", "stats": {}, "error": str(e)}
+
     def run_forum_stats(self, base_url="", cookie=""):
         """
         מפיק את דוח הפורום ומחזיר אותו ישירות.

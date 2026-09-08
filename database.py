@@ -3369,7 +3369,8 @@ def forum_local_snapshot(url, top=8):
     """
     origin = _origin(url)
     out = {"scanned": 0, "forums": [], "worst": [], "best": [], "banned": 0,
-           "silent": 0, "no_posts": 0, "by_year": [], "last_scrape": ""}
+           "silent": 0, "no_posts": 0, "by_year": [], "per_post": [],
+           "gone": [], "last_scrape": ""}
     if not origin:
         return out
     with get_connection() as conn:
@@ -3402,6 +3403,30 @@ def forum_local_snapshot(url, top=8):
             "SELECT substr(join_date,1,4) AS year, COUNT(*) AS c FROM nicks "
             "WHERE forum IN ({F}) AND length(COALESCE(join_date,'')) >= 4 "
             "GROUP BY year ORDER BY year")]
+        # מוניטין **לפוסט** — מי שכל פוסט שלו אהוב, ולא מי שכתב הכי הרבה.
+        # רצפה של 30 פוסטים: בלעדיה מי שכתב פוסט אחד מוצלח מוביל את הטבלה,
+        # וזה רעש ולא ממצא (אותו שיקול כמו "מתי הוא הכי חד" בחזונישניק).
+        out["per_post"] = [dict(r) for r in q(
+            "SELECT username, CAST(reputation AS INTEGER) AS rep, "
+            "       CAST(post_count AS INTEGER) AS posts, "
+            "       ROUND(CAST(reputation AS REAL) / CAST(post_count AS REAL), 2) AS ratio "
+            "FROM nicks WHERE forum IN ({F}) "
+            "  AND COALESCE(reputation,'') != '' AND CAST(post_count AS INTEGER) >= 30 "
+            "  AND CAST(reputation AS INTEGER) > 0 "
+            "ORDER BY ratio DESC LIMIT ?", (top,))]
+        # ותיקים ששקטו: נרשמו מוקדם, כתבו הרבה, ולא נראו יותר משנה.
+        out["gone"] = [dict(r) for r in q(
+            "SELECT username, join_date, last_seen, "
+            "       CAST(post_count AS INTEGER) AS posts "
+            "FROM nicks WHERE forum IN ({F}) "
+            "  AND length(COALESCE(last_seen,'')) >= 10 "
+            "  AND last_seen < date('now','-365 days') "
+            "  AND CAST(COALESCE(post_count,'0') AS INTEGER) >= 50 "
+            "ORDER BY posts DESC LIMIT ?", (top,))]
+        out["silent"] = q(
+            "SELECT COUNT(*) FROM nicks WHERE forum IN ({F}) "
+            "AND length(COALESCE(last_seen,'')) >= 10 "
+            "AND last_seen < date('now','-365 days')").fetchone()[0]
     for n in names:
         ts = get_setting("last_scrape_" + n) or ""
         if ts > out["last_scrape"]:

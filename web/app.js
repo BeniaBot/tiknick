@@ -5236,7 +5236,7 @@ async function openInternetSync() {
     <div class="section-hdr">על הפורום עצמו</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
       <button class="btn btn-ghost btn-sm" onclick="openForumStats()"
-              title="מי נרשם ראשון, מתי הפורום נפתח ומה גדל בו — שש בקשות, לא סריקה">🏛️ מי היה כאן ראשון</button>
+              title="מי נרשם ראשון, מה גדל בפורום, מי הכי אהוב ומי הכי שנוא — על כל הפורומים שסימנת">📇 תיק הפורום</button>
     </div>
 
     <div id="sync-check-result" style="font-size:13px;margin-bottom:12px;min-height:20px"></div>
@@ -5301,23 +5301,51 @@ function closeSyncModal() {
   closeModal();
 }
 
+// בודק את **כל** הפורומים המסומנים, לא רק את הראשון. בנימין דיווח שזה בדק
+// אחד בלבד בזמן שאפשר לסמן כמה, וזה נקרא כמו באג — בצדק.
+//
+// גם באג ותיק תוקן כאן: השורה שעדכנה את הפלטפורמה השתמשה ב-`sel`, משתנה
+// שנעלם כשבורר הפורום הפך מ-<select> לתיבות סימון ב-0.8.21. כל בדיקה
+// **מוצלחת** זרקה ReferenceError מיד אחרי שצוירה ה-✓, ולכן `updateSyncHint`
+// לא רץ אף פעם. שקט לגמרי, כי אף אחד לא ממתין ל-Promise הזה.
 async function doForumCheck() {
-  const url = syncActive()?.dataset.url || '';
-  const cookie = document.getElementById('sync-cookie').value.trim();
+  const picked = syncPicked();
   const box = document.getElementById('sync-check-result');
-  if (!url) { box.innerHTML = '<span style="color:var(--danger)">לפורום זה אין כתובת URL</span>'; return; }
-  box.innerHTML = '<span style="color:var(--subtext)">בודק…</span>';
-  const r = await api('check_forum', url, cookie);
-  if (r && r.ok) {
-    const platName = PLATFORM_LABELS[r.platform] || r.platform || 'פורום';
-    const cnt = r.user_count != null ? `~${r.user_count} משתמשים` : 'זמין';
-    box.innerHTML = `<span style="color:var(--success)">✓ ${esc(platName)} תקין (${esc(String(cnt))})</span>`;
-    // עדכן את סימון הפלטפורמה באופציה הנבחרת (נשמר גם בצד השרת)
-    if (sel.selectedOptions[0] && r.platform) sel.selectedOptions[0].dataset.platform = r.platform;
-    updateSyncHint();   // רק הרמז — לא לדרוס את העוגייה שהוקלדה זה עתה
-  } else {
-    box.innerHTML = `<span style="color:var(--danger)">✕ ${esc(r?.error || 'בדיקה נכשלה')}</span>`;
+  if (!picked.length) {
+    box.innerHTML = '<span style="color:var(--danger)">לא סומן אף פורום</span>';
+    return;
   }
+  const typed = document.getElementById('sync-cookie').value.trim();
+  const activeUrl = syncActive()?.dataset.url || '';
+  const lines = [];
+  const paint = () => { box.innerHTML = lines.join('<br>'); };
+
+  for (const cb of picked) {
+    const name = esc(cb.value), url = cb.dataset.url || '';
+    const i = lines.length;
+    if (!url) {
+      lines.push(`<span style="color:var(--danger)">✕ <bdi>${name}</bdi> — אין כתובת</span>`);
+      paint();
+      continue;
+    }
+    lines.push(`<span style="color:var(--subtext)"><bdi>${name}</bdi> — בודק…</span>`);
+    paint();
+    // כלל הפרטיות מ-0.8.3: העוגייה שהוקלדה שייכת לפורום הפעיל בלבד. לשאר
+    // מועברת מחרוזת ריקה, ו-check_forum ייקח את השמורה שלהם אם יש.
+    const r = await api('check_forum', url, url === activeUrl ? typed : '');
+    if (r && r.ok) {
+      if (r.platform) cb.dataset.platform = r.platform;
+      const plat = PLATFORM_LABELS[r.platform] || r.platform || 'פורום';
+      const cnt = r.user_count != null ? `~${r.user_count} משתמשים` : 'זמין';
+      lines[i] = `<span style="color:var(--success)">✓ <bdi>${name}</bdi> — ` +
+                 `${esc(plat)} (${esc(String(cnt))})</span>`;
+    } else {
+      lines[i] = `<span style="color:var(--danger)">✕ <bdi>${name}</bdi> — ` +
+                 `${esc(r?.error || 'בדיקה נכשלה')}</span>`;
+    }
+    paint();
+  }
+  updateSyncHint();   // רק הרמז — לא לדרוס את העוגייה שהוקלדה זה עתה
 }
 
 async function doStartScrape() {
@@ -5982,17 +6010,30 @@ function showStinknikReport(html, disCount) {
 // שש בקשות, לא סריקה. אין כאן מצב רקע ואין באנר צף: הקריאה חוזרת תוך שניות
 // בודדות, ו-forumstats אוכף תקרת זמן משלו.
 async function openForumStats() {
-  // syncActive() מחזיר את תיבת הסימון של הפורום הפעיל; הכתובת יושבת ב-data-url
-  const forumUrl = syncActive()?.dataset.url || '';
-  if (!forumUrl) { toast('בחר פורום עם כתובת', 'error'); return; }
-  openModal('🏛️ מי היה כאן ראשון', `
+  // **כל** הפורומים המסומנים, לא רק הפעיל — אפשר לסמן כמה בסנכרון, ובנימין
+  // דיווח בצדק שהכלי התעלם מכולם חוץ מהראשון.
+  const picked = syncPicked().filter(c => (c.dataset.url || '').trim());
+  if (!picked.length) { toast('סמן פורום עם כתובת', 'error'); return; }
+  const activeUrl = syncActive()?.dataset.url || '';
+  const typed = document.getElementById('sync-cookie')?.value.trim() || '';
+  // העוגייה שהוקלדה שייכת לפורום הפעיל בלבד; לשאר תישלף השמורה שלהם בצד השרת
+  const targets = picked.map(c => ({
+    name: c.value, url: c.dataset.url,
+    cookie: c.dataset.url === activeUrl ? typed : '',
+  }));
+  const many = targets.length > 1;
+  openModal('📇 תיק הפורום', `
     <div style="text-align:center;padding:26px 16px">
-      <div style="font-size:40px;margin-bottom:14px">🏛️</div>
-      <div style="font-size:14px;margin-bottom:6px">שולף את נתוני הפורום…</div>
-      <div style="font-size:12px;color:var(--subtext)">שש בקשות בלבד — כמה שניות</div>
+      <div style="font-size:40px;margin-bottom:14px">📇</div>
+      <div style="font-size:14px;margin-bottom:6px">${many
+        ? `שולף את נתוני ${targets.length} הפורומים…`
+        : 'שולף את נתוני הפורום…'}</div>
+      <div style="font-size:12px;color:var(--subtext)">${many
+        ? 'שש בקשות לכל פורום, בזה אחר זה — כדי לא להעמיס'
+        : 'שש בקשות בלבד — כמה שניות'}</div>
     </div>
   `, [], 'modal-sm', { id: 'fs-wait' });
-  const r = await api('run_forum_stats', forumUrl);
+  const r = await api('run_forum_stats_many', targets);
   // אם המשתמש סגר או עבר הלאה בינתיים — לא חוטפים לו את החלון בחזרה
   if (_currentModalId !== 'fs-wait') return;
   if (!r?.ok) {
@@ -6005,9 +6046,13 @@ async function openForumStats() {
 
 function showForumStatsReport(html, stats) {
   const bits = [];
-  if (stats.founded) bits.push('נפתח ' + stats.founded);
-  if (stats.user_count) bits.push(stats.user_count.toLocaleString() + ' משתמשים');
-  openModal('🏛️ מי היה כאן ראשון' + (bits.length ? ' · ' + bits.join(' · ') : ''), `
+  if (Array.isArray(stats.compare) && stats.compare.length > 1) {
+    bits.push(stats.compare.length + ' פורומים');
+  } else {
+    if (stats.founded) bits.push('החבר הראשון ' + stats.founded);
+    if (stats.user_count) bits.push(stats.user_count.toLocaleString() + ' משתמשים');
+  }
+  openModal('📇 תיק הפורום' + (bits.length ? ' · ' + bits.join(' · ') : ''), `
     <iframe id="fstats-frame" sandbox="allow-scripts allow-popups"
             style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
   `, [

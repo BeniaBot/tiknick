@@ -311,13 +311,13 @@ ok("וזה מה שנשלח בפועל", seen.get("ua") == _SC.USER_AGENT, seen.g
 i18n.set_lang("en")
 try:
     en = run()["html"]
-    ok("הכותרת מתורגמת", "Who got here first" in en, en[:0])
+    ok("הכותרת מתורגמת", "The forum file" in en, en[:0])
     ok("והתוויות גם", "The first members" in en and "Members" in en)
     ok("הכיוון מתהפך", 'dir="ltr"' in en and 'lang="en"' in en)
 finally:
     i18n.set_lang("he")
 he = run()["html"]
-ok("ובעברית הכול חוזר כשהיה", "מי היה כאן ראשון" in he and 'dir="rtl"' in he)
+ok("ובעברית הכול חוזר כשהיה", FS.REPORT_NAME in he and 'dir="rtl"' in he)
 
 
 # ══ שני הבאגים החמורים מהביקורת האדוורסרית ═══════════════════════════════
@@ -432,6 +432,69 @@ ok("שורה בלי מוניטין אינה מוצגת",
 ok("הקישור בנוי מסלאג ולא משם עם רווחים",
    "/user/%D7%9E%D7%99%D7%A9%D7%94%D7%95-12" in h,
    [x for x in h.split('"') if "/user/" in x][:2])
+
+
+# ══ כמה פורומים בדוח אחד ═════════════════════════════════════════════════
+# בנימין: "בסנכרון לאינטרנט אפשר לסמן כמה. הבעיה שהפיצ'ר לא עובד עם כמה יחד."
+LOC_A = {"scanned": 900, "banned": 7, "worst": [], "best": [], "per_post": [],
+         "by_year": [], "gone": []}
+LOC_B = {"scanned": 40, "banned": 1, "worst": [], "best": [], "per_post": [],
+         "by_year": [], "gone": []}
+multi = FS.analyze_forums([
+    {"name": "פורום א", "url": BASE, "local": LOC_A},
+    {"name": "פורום ב", "url": BASE, "local": LOC_B},
+])
+ok("דוח לכמה פורומים מופק", multi["ok"] is True, multi.get("error"))
+mh = multi["html"]
+ok("שני שמות הפורומים מופיעים", "פורום א" in mh and "פורום ב" in mh)
+ok("יש טבלת השוואה", 'class="cmp"' in mh and "השוואה בין פורומים" in mh)
+ok("שתי רשתות כרטיסים", mh.count('class="grid"') == 2, mh.count('class="grid"'))
+ok("שני מקטעים מסומנים", mh.count('class="sect"') == 2, mh.count('class="sect"'))
+ok("הבקשות מסוכמות", multi["stats"]["requests"] == 12, multi["stats"]["requests"])
+ok("הכותרת סופרת פורומים", "2 " in mh and "פורומים" in mh)
+ok("הגבוה בעמודה מודגש", 'class="n best"' in mh)
+ok("לא נשארו מצייני מקום",
+   not [m for m in ("__SECTIONS__", "__COMPARE__", "__HEADING__", "__RATIO__",
+                    "__YEARS__", "__GONE__") if m in mh])
+
+# פורום יחיד ברשימה = בדיוק הדוח הרגיל, בלי טבלת השוואה
+one = FS.analyze_forums([{"name": "יחיד", "url": BASE}])
+ok("פורום אחד ברשימה נותן את הדוח הרגיל",
+   one["ok"] is True and 'class="cmp"' not in one["html"])
+ok("ובלי כותרת מקטע", 'class="sect"' not in one["html"])
+
+# פורום שנכשל אינו מפיל את השאר
+STATE["fail"] = {"/api/"}
+mixed = FS.analyze_forums([{"name": "טוב", "url": BASE},
+                           {"name": "רע", "url": "http://127.0.0.1:1/"}])
+STATE["fail"] = set()
+ok("רשימה ריקה מדווחת", FS.analyze_forums([])["ok"] is False)
+ok("כשכולם נכשלו זה כישלון", mixed["ok"] is False, mixed.get("error"))
+
+STATE["fail"] = set()
+mixed2 = FS.analyze_forums([{"name": "טוב", "url": BASE},
+                            {"name": "רע", "url": "http://127.0.0.1:1/"}])
+ok("פורום שנכשל לא מפיל את השאר", mixed2["ok"] is True, mixed2.get("error"))
+ok("והוא מדווח בשמו", "רע" in mixed2["html"] and "טוב" in mixed2["html"])
+ok("ונרשם ברשימת הכושלים", mixed2["stats"]["failed"] == ["רע"],
+   mixed2["stats"]["failed"])
+
+
+# ══ הכרטיסים החדשים מהמאגר ═══════════════════════════════════════════════
+LOC2 = dict(LOCAL)
+LOC2["per_post"] = [{"username": "יעיל", "rep": 900, "posts": 40, "ratio": 22.5},
+                    {"username": "פורה", "rep": 2000, "posts": 5000, "ratio": 0.4}]
+LOC2["by_year"] = [{"year": "2019", "c": 120}, {"year": "2020", "c": 640},
+                   {"year": "2021", "c": 300}]
+LOC2["gone"] = [{"username": "נטש", "join_date": "2019-02-02",
+                 "last_seen": "2023-01-01", "posts": 700}]
+rc = run(local=LOC2)
+hc = rc["html"]
+ok("מוניטין לפוסט מוצג", "יעיל" in hc and "22.5" in hc)
+ok("והרצפה מוסברת", "מ-30 פוסטים ומעלה" in hc)
+ok("גלי הצטרפות מוצגים", "2019" in hc and "2020" in hc and "גלי הצטרפות" in hc)
+ok("ותיקים ששקטו מוצגים", "נטש" in hc and "2023-01-01" in hc)
+ok("הכול עדיין בלי JavaScript", "<script" not in hc.lower())
 
 
 _srv.shutdown()
