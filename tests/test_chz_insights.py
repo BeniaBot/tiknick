@@ -37,10 +37,13 @@ BASE_TS = 1735689600000          # 2025-01-01, קבוע — הבדיקה לא ת
 
 def post(i, ts, hour, likes, tid, title, votes_ok=True,
          mentions=None, voters=None):
+    # mentions בפורמט שהדוח באמת מקבל: [{k, name, slug}]
+    ms = [{"k": CZ._norm_key(m), "name": str(m).replace("-", " "), "slug": m}
+          for m in (mentions or [])]
     return {"pid": i, "title": title, "tid": tid, "ts": ts,
             "date": "2025-01-01", "hour": hour, "dow": 2, "day": "רביעי",
             "month": "2025-01", "likes": likes, "voters": voters or [],
-            "votes_ok": votes_ok, "mentions": mentions or [], "words": 40}
+            "votes_ok": votes_ok, "mentions": ms, "words": 40}
 
 
 def build(posts):
@@ -154,8 +157,6 @@ ok("קיבוץ לפי מזהה ולא לפי כותרת", "5 · 100%" in out, ou
 # ══ חילוץ אזכורים — הכרטיס הוסר מ-0.9.0, הפונקציות נשארו ═════════════════
 # הכרטיס "עם מי הוא מדבר" ירד כי החצי שמנחש (מי הוא מזכיר) לא היה מול מה
 # לאמת. החילוץ עצמו נכון ומכוסה, כדי שהחזרה אליו תתחיל מבסיס בדוק.
-ok("הכרטיס אינו בתבנית", "list-social" not in io.open(
-    CZ.__file__, encoding="utf-8").read())
 ok("mentions אינו נשלח לדוח", '"mentions": mentions' not in io.open(
     CZ.__file__, encoding="utf-8").read())
 
@@ -263,6 +264,87 @@ ok("המספר הרשמי לא נגע בשאר החישובים",
    (k_small, k_big))
 ok("והוא כן שינה את הכותרת", k_big["posts"] == "999" and k_small["posts"] == "3",
    (k_small["posts"], k_big["posts"]))
+
+# ══ 👥 עם מי הוא מדבר — הכרטיס שחזר, והפעם מול מה שהפורום באמת שולח ══════
+# הוא נמשך מ-0.9.0 אחרי ששתי גרסאות נתנו תוצאות שגויות אצל בנימין. הסיבה
+# התבררה רק כשהסתכלנו בתוכן אמיתי: `content` הוא HTML, ובאזכור ה-@ והשם
+# מופרדים בתגית — ולכן רגקס שמחפש שם אחרי ה-@ מצא **אפס** ב-26 פוסטים
+# שכולם מזכירים מישהו. נמדד על החשבון של בנימין ב-mitmachim.top.
+
+A = ('<p><a class="plugin-mentions-user plugin-mentions-a" '
+     'href="/user/%D7%A6%D7%95%D7%9C-%D7%92%D7%90%D7%94" '
+     'aria-label="Profile: צול גאה">@<bdi>צול גאה</bdi></a> תודה רבה</p>')
+ok("אזכור אמיתי מחולץ", CZ._mentions_from_html(A, "בנימין-מחשבים")
+   == [("צול-גאה", "צול גאה")], CZ._mentions_from_html(A, "בנימין-מחשבים"))
+ok("הרגקס הישן היה מחזיר ריק", CZ._mentions_in(A, "x") == [], CZ._mentions_in(A, "x"))
+ok("המשתמש עצמו מוחרג", CZ._mentions_from_html(A, "צול גאה") == [])
+ok("גם לפי הצורה עם המקף", CZ._mentions_from_html(A, "צול-גאה") == [])
+ok("בלי כפילויות", len(CZ._mentions_from_html(A + A, "x")) == 1)
+ok("טקסט בלי אזכור", CZ._mentions_from_html("<p>שלום עולם</p>", "x") == [])
+ok("קישור רגיל אינו אזכור",
+   CZ._mentions_from_html('<a href="/user/דוד">דוד</a>', "x") == [])
+
+# **המפתח המנורמל הוא כל הסיפור**: האזכור נושא slug והמצביע נושא שם תצוגה.
+ok("slug ושם תצוגה מתאימים", CZ._norm_key("צול-גאה") == CZ._norm_key("צול גאה"))
+ok("וגם קו תחתון", CZ._norm_key("א_ב") == CZ._norm_key("א ב"))
+ok("אבל אנשים שונים לא מתמזגים", CZ._norm_key("דוד") != CZ._norm_key("דויד"))
+
+# אזכור בתוך **גוף** ציטוט שייך למי שכתב אותו, לא לנבדק
+# כותרת הציטוט של NodeBB ("@פלוני said in") היא **כן** פנייה שלו ונשמרת;
+# אזכור שקבור בתוך גוף הציטוט שייך למי שכתב אותו ויורד.
+HEAD = ('<blockquote><p>' + A + ' said in נושא:</p>'
+        + 'טקסט של מישהו אחר ' * 40 + '</blockquote><p>מסכים</p>')
+ok("כותרת הציטוט נספרת", CZ._mentions_from_html(HEAD, "x") == [("צול-גאה", "צול גאה")],
+   CZ._mentions_from_html(HEAD, "x"))
+DEEP = ('<blockquote><p>מישהו said in נושא:</p>' + 'מילוי ארוך ' * 40
+        + A + '</blockquote><p>מסכים</p>')
+ok("אזכור עמוק בתוך גוף הציטוט יורד", CZ._mentions_from_html(DEEP, "x") == [],
+   CZ._mentions_from_html(DEEP, "x"))
+
+# ── והכרטיס עצמו, מול DOM אמיתי ─────────────────────────────────────────
+def voter(uid, name, slug):
+    return {"uid": uid, "username": name, "userslug": slug}
+
+# חבר: הוא מזכיר אותו והוא עושה לו לייק. שים לב שהאזכור בא כ-slug
+# והמצביע כשם תצוגה — בדיוק המצב שהפיל את הגרסאות הקודמות.
+soc = [
+    post(1, BASE_TS, 10, 1, 100, "א", mentions=["צול-גאה"],
+         voters=[voter(9, "צול גאה", "צול-גאה")]),
+    post(2, BASE_TS + DAY, 10, 1, 100, "א", mentions=["צול-גאה"],
+         voters=[voter(9, "צול גאה", "צול-גאה")]),
+    # מעריץ שקט: עושה לייק, לא מוזכר
+    post(3, BASE_TS + 2 * DAY, 10, 1, 101, "ב",
+         voters=[voter(11, "מעריץ שקט", "מעריץ-שקט")]),
+    # פונה אליו שלוש פעמים ולא מקבל לייק
+    post(4, BASE_TS + 3 * DAY, 10, 0, 102, "ג", mentions=["מתעלם"]),
+    post(5, BASE_TS + 4 * DAY, 10, 0, 102, "ג", mentions=["מתעלם"]),
+    post(6, BASE_TS + 5 * DAY, 10, 0, 102, "ג", mentions=["מתעלם"]),
+]
+out = render(build(soc), "social")
+ok("הקרובים אליו", "הקרובים אליו" in out and "צול גאה" in out, out[:200])
+ok("מעריצים שקטים", "מעריצים שקטים" in out and "מעריץ שקט" in out)
+ok("פונה אליהם ולא הגיע לייק", "לא הגיע מהם לייק" in out and "מתעלם" in out)
+ok("החבר לא נספר כמעריץ שקט",
+   out.index("צול גאה") < out.index("מעריץ שקט"), "סדר הקבוצות")
+ok("הקישור נבנה מהסלאג",
+   "/user/" + __import__("urllib.parse", fromlist=["x"]).quote("צול-גאה") in out,
+   [x for x in out.split('"') if "/user/" in x][:2])
+
+# ספירת לייקים חלקית — הקבוצה השלילית נעלמת, כי "לא הגיע לייק" אינו ידוע
+part = [dict(p, votes_ok=False) for p in soc]
+out2 = render(build(part), "social")
+ok("בלי ספירת לייקים אין קבוצה שלילית", "🙊 פונה אליהם" not in out2)
+ok("והמשתמש מקבל הסבר", "ספירת הלייקים הייתה חלקית" in out2)
+
+# בלי כלום — מצב ריק מפורש
+out3 = render(build([post(1, BASE_TS, 10, 0, 1, "א")]), "social")
+ok("מצב ריק מפורש", "לא נמצאו אזכורים" in out3, out3[:120])
+
+# בריחה: שם עוין מהפורום
+bad = [post(1, BASE_TS, 10, 1, 1, "א", mentions=["x"],
+            voters=[voter(9, '<img src=x onerror=alert(1)>', "x")])]
+out4 = render(build(bad), "social")
+ok("שם עוין עובר בריחה", "<img src=x" not in out4)
 
 print()
 if fails:

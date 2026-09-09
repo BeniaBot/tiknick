@@ -162,6 +162,21 @@ _TPL_EN = {
     # שלושת המקטעים החדשים. הטקסטים חיים בתוך ה-<script>, ולכן הם אינם
     # מפתחות בקטלוג המשותף — הם מתורגמים כאן, בתבנית של המודול הזה בלבד.
     "👥 עם מי הוא מדבר": "👥 Who they talk to",
+    "— תגובה בלי אזכור מפורש אינה נראית לניתוח.":
+        "— a reply with no explicit mention is invisible to this analysis.",
+    "הקרובים אליו": "Closest to him",
+    "מעריצים שקטים": "Quiet admirers",
+    "פונה אליהם, ולא הגיע מהם לייק": "He addresses them, and no upvote came back",
+    "לא נמצאו אזכורים או לייקים בפוסטים שנסרקו":
+        "No mentions or upvotes were found in the scanned posts",
+    "הזכיר ": "mentioned ",
+    "הזכיר": "mentioned",
+    " · לייקים ": " · upvotes ",
+    "עושים לו לייק, והוא לא מזכיר אותם": "They upvote him; he never mentions them",
+    "פניות בפוסטים שנסרקו": "approaches in the scanned posts",
+    "@שם או ציטוט": "@name or a quote",
+    "הכול מתוך הפוסטים שנסרקו בלבד. אזכור נספר כשהפורום סימן אותו כפנייה":
+        "All from the scanned posts only. A mention counts when the forum itself marked it as one",
     "לא נמצאו אזכורים או ציטוטים בפוסטים שנסרקו":
         "No mentions or quotes were found in the scanned posts",
     "הקרובים אליו": "Closest to them",
@@ -362,6 +377,63 @@ def _vote_failures():
         return _vote_fails["n"]
 
 
+# ── האזכורים, בפעם השלישית — והפעם מתוך מה שהפורום באמת שולח ────────────
+# הכרטיס "עם מי הוא מדבר" נמשך מ-0.9.0 אחרי ששתי גרסאות שלו נתנו תוצאות
+# שגויות אצל בנימין. הסיבה התבררה רק כשהסתכלתי סוף סוף בתוכן אמיתי:
+# **`content` הוא HTML, ובאזכור ה-@ והשם מופרדים בתגית.** NodeBB שולח
+#
+#   <a class="plugin-mentions-user" href="/user/%D7%A6%D7%95%D7%9C-%D7%92%D7%90%D7%94"
+#      aria-label="Profile: צול גאה">@<bdi>צול גאה</bdi></a>
+#
+# ולכן רגקס שמחפש שם **מיד אחרי** ה-@ לא מוצא כלום. נמדד על החשבון של
+# בנימין: 0 אזכורים ב-26 פוסטים שכולם מזכירים מישהו, ובהם `צול-גאה` —
+# בדיוק האדם שהוא אמר שפנה אליו והכרטיס טען שלא.
+#
+# החילוץ הזה אינו ניחוש: ה-href הוא ה-slug עצמו, וזה **אותו מפתח** שרשימת
+# המצביעים מפתחת לפיו. אין כאן מיילים, אין ו' החיבור, ואין דומיינים.
+_MENTION_A_RX = re.compile(
+    r'<a[^>]*class="[^"]*plugin-mentions-user[^"]*"[^>]*href="/user/([^"#?]+)"',
+    re.I)
+_ARIA_NAME_RX = re.compile(r'aria-label="Profile:\s*([^"]+)"', re.I)
+
+
+def _mentions_from_html(raw_html, me_slug=""):
+    """
+    מי מוזכר בפוסט — לפי העוגנים ש-NodeBB עצמו מסמן.
+
+    מחזיר [(slug, display)] בלי כפילויות ובלי המשתמש עצמו. `_strip_quotes`
+    מופעל קודם, כדי שאזכור שיושב **בתוך גוף ציטוט** לא ייזקף לו: הטקסט הזה
+    נכתב על ידי אדם אחר. שורת הכותרת של הציטוט ("@פלוני said in") כן נשמרת,
+    כי היא מציינת את מי הוא ציטט.
+    """
+    body = _strip_quotes(raw_html or "")
+    out, seen = [], set()
+    low_me = (me_slug or "").strip().lower()
+    for m in _MENTION_A_RX.finditer(body):
+        slug = urllib.parse.unquote(m.group(1)).strip()
+        key = _norm_key(slug)
+        if not key or key == _norm_key(low_me) or key in seen:
+            continue
+        seen.add(key)
+        tail = body[m.end():m.end() + 260]
+        nm = _ARIA_NAME_RX.search(m.group(0) + tail)
+        out.append((slug, _unesc(nm.group(1)).strip() if nm else slug.replace("-", " ")))
+        if len(out) >= MAX_MENTIONS_PER_POST:
+            break
+    return out
+
+
+def _norm_key(s):
+    """
+    מפתח אחד לשני הצדדים.
+
+    NodeBB מחזיר באזכור את ה-**slug** (`צול-גאה`) וברשימת המצביעים את **שם
+    התצוגה** (`צול גאה`). השוואה ישירה ביניהם לא מתאימה אף שם לאף שם, ומכאן
+    יצאו שתי הקבוצות השליליות השקריות שבנימין דיווח עליהן.
+    """
+    return re.sub(r"[\s_\-]+", "", _unesc(str(s or ""))).strip().lower()
+
+
 def _fetch_detail(base, cookie, post, me=""):
     try:
         time.sleep(DETAIL_DELAY)   # נימוס: 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
@@ -369,8 +441,9 @@ def _fetch_detail(base, cookie, post, me=""):
         raw = post.get("content", "") or ""
         clean = re.sub(r"<[^<]+?>", "", raw)
         words = len(clean.split())
-        # _mentions_in/_strip_quotes נשארים בקוד ומכוסים בבדיקות, אבל אינם
-        # נקראים: הכרטיס "עם מי הוא מדבר" הוסר מ-0.9.0. ראו ההערה מעליהם.
+        # `me` הוא ה-slug (ראו הקריאה ב-_collect), וזה בדיוק מה שצריך כאן:
+        # האזכור נושא slug, ולכן ההשוואה נעשית באותה מטבע.
+        mentions = _mentions_from_html(raw, me)
         upvoters = []
         with _vote_lock:
             give_up = _vote_fails["n"] >= _VOTE_FAIL_GIVEUP
@@ -403,6 +476,10 @@ def _fetch_detail(base, cookie, post, me=""):
             "likes": len(upvoters),
             "voters": upvoters,
             "votes_ok": votes_ok,
+            # [{k, name, slug}] — k הוא המפתח המנורמל, וגם צד המצביעים
+            # ייבנה לפיו. שני הצדדים חייבים להיות באותה מטבע.
+            "mentions": [{"k": _norm_key(sl), "name": nm, "slug": sl}
+                         for sl, nm in mentions],
             "words": words,
         }
     except Exception:
@@ -735,6 +812,12 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 .list-item{display:flex;justify-content:space-between;align-items:center;padding:12px;border-bottom:1px solid #334155}
 .list-item a{color:var(--text-main);text-decoration:none;font-weight:500}
 .badge{background:#0c4a6e;color:#38bdf8;padding:4px 12px;border-radius:20px;font-weight:700;font-size:.85rem}
+.grp{color:var(--accent);font-weight:700;font-size:.9rem;margin:14px 0 4px;padding-bottom:4px;border-bottom:1px solid #334155}
+.grp:first-child{margin-top:0}
+.list-item .sub{color:var(--text-dim,#94a3b8);font-size:.76rem;margin-top:2px}
+.list-item .num{font-weight:700;color:#38bdf8;flex:none;margin-inline-start:10px}
+.note-sm{color:var(--text-dim,#94a3b8);font-size:.74rem;margin-top:10px;line-height:1.5}
+.empty{color:var(--text-dim,#94a3b8);font-size:.85rem;padding:10px 2px}
 .chart-box{position:relative;height:300px;width:100%}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#475569;border-radius:3px}
 @media(max-width:900px){.col-3,.col-4,.col-6,.col-8{grid-column:span 12}}
@@ -760,6 +843,7 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 <div class="card col-6"><h3>🔍 קשר בין אורך פוסט לפופולריות</h3><div class="chart-box"><canvas id="chart-scatter"></canvas></div></div>
 <div class="card col-6"><h3>💤 תקופות שקט</h3><div class="list-container" id="list-gaps"></div></div>
 <div class="card col-6"><h3>🔥 מתי הוא הכי חד</h3><div class="list-container" id="list-sharp"></div></div>
+<div class="card col-12"><h3>👥 עם מי הוא מדבר</h3><div class="list-container" id="list-social"></div></div>
 <div class="card col-12"><h3>💬 כמה הוא נשאר בשרשור</h3><div class="list-container" id="list-threads"></div></div>
 </div>
 </div>
@@ -770,6 +854,8 @@ const data=__JSON_DATA__;const myUid=__MY_UID__;const baseUrl=__BASE_URL__;const
 // פוענחו. מפענח קטן וקבוע, בלי DOM — הדוח נשמר לקובץ ונפתח בכל מקום.
 const _ENT={quot:'"',amp:'&',lt:'<',gt:'>',apos:"'",nbsp:' ','#39':"'",'#34':'"'};
 const _U=s=>String(s==null?'':s).replace(/&(#?[a-z0-9]+);/gi,(m,k)=>_ENT[k]!==undefined?_ENT[k]:m);
+// שם משתמש מגיע מהפורום ונכנס ל-innerHTML — בריחה חובה.
+const _E=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 const escAttr=s=>encodeURIComponent(String(s==null?'':s));
 // פוסט שספירת הלייקים שלו נכשלה אינו "אפס לייקים" — הוא **לא נמדד**.
@@ -926,6 +1012,75 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   });
   box.innerHTML=html;
 })();
+// 👥 עם מי הוא מדבר — הצלבה של שני צדדים שכבר ירדו ולא דיברו זה עם זה:
+// את מי הוא מזכיר (מתוך תוכן הפוסטים) מול מי עושה לו לייקים.
+//
+// **שני הצדדים מפותחים לפי אותו מפתח מנורמל.** האזכור נושא slug
+// ("צול-גאה") והמצביע נושא שם תצוגה ("צול גאה"); השוואה ישירה ביניהם לא
+// מתאימה אף שם לאף שם, וזה מה שייצר את שתי הקבוצות השליליות השקריות.
+(function(){
+  const box = document.getElementById('list-social');
+  if (!box) return;
+  const norm = s => String(s==null?'':s).replace(/[\s_\-]+/g,'').trim().toLowerCase();
+  const disp = {}, slugOf = {};
+  const remember = (k, name, slug) => {
+    if (!disp[k]) disp[k] = name || slug || k;
+    if (slug && !slugOf[k]) slugOf[k] = slug;
+  };
+
+  // את מי הוא מזכיר
+  const said = {};
+  data.forEach(p => (p.mentions||[]).forEach(m => {
+    const k = m.k || norm(m.slug || m.name);
+    if (!k) return;
+    said[k] = (said[k]||0) + 1;
+    remember(k, m.name, m.slug);
+  }));
+
+  // מי עושה לו לייקים — רק מהפוסטים שספירת הלייקים שלהם הצליחה
+  const liked = {};
+  measured.forEach(p => (p.voters||[]).forEach(v => {
+    if (v.uid == myUid) return;
+    const k = norm(v.userslug || v.username);
+    if (!k) return;
+    liked[k] = (liked[k]||0) + 1;
+    remember(k, _U(v.username), v.userslug);
+  }));
+
+  const link = k => baseUrl + '/user/' + encodeURIComponent(slugOf[k] || k);
+  const row = (k, right, left) =>
+    '<div class="list-item"><div><a href="' + link(k) + '" target="_blank" class="who">'
+    + _E(disp[k]) + '</a><div class="sub">' + right + '</div></div>'
+    + '<div class="num">' + left + '</div></div>';
+
+  const keys = Object.keys(said).concat(Object.keys(liked));
+  const all = keys.filter((k,i) => keys.indexOf(k) === i);
+  const mutual = all.filter(k => said[k] && liked[k])
+                    .sort((a,b) => (said[b]+liked[b]) - (said[a]+liked[a])).slice(0,8);
+  const quiet  = Object.keys(liked).filter(k => !said[k])
+                    .sort((a,b) => liked[b]-liked[a]).slice(0,8);
+  // "פונה אליהם ולא הגיע מהם לייק" מוצג **רק** כשספירת הלייקים הייתה
+  // שלמה. חלקית = אנחנו לא יודעים שלא הגיע לייק, רק שלא מדדנו.
+  const oneWay = likesUnknown ? [] :
+    Object.keys(said).filter(k => said[k] >= 3 && !liked[k])
+          .sort((a,b) => said[b]-said[a]).slice(0,8);
+
+  if (!all.length) {
+    box.innerHTML = '<div class="empty">לא נמצאו אזכורים או לייקים בפוסטים שנסרקו</div>';
+    return;
+  }
+  let h = '';
+  if (mutual.length) h += '<div class="grp">🤝 הקרובים אליו</div>'
+    + mutual.map(k => row(k, 'הזכיר ' + said[k] + ' · לייקים ' + liked[k],
+                          said[k] + liked[k])).join('');
+  if (quiet.length) h += '<div class="grp">💗 מעריצים שקטים</div>'
+    + quiet.map(k => row(k, 'עושים לו לייק, והוא לא מזכיר אותם', liked[k])).join('');
+  if (oneWay.length) h += '<div class="grp">🙊 פונה אליהם, ולא הגיע מהם לייק</div>'
+    + oneWay.map(k => row(k, 'פניות בפוסטים שנסרקו', said[k])).join('');
+  if (likesUnknown) h += '<div class="note-sm">⚠️ ספירת הלייקים הייתה חלקית, ולכן לא מוצגת קבוצת "לא הגיע מהם לייק"</div>';
+  h += '<div class="note-sm">הכול מתוך הפוסטים שנסרקו בלבד. אזכור נספר כשהפורום סימן אותו כפנייה (@שם או ציטוט) — תגובה בלי אזכור מפורש אינה נראית לניתוח.</div>';
+  box.innerHTML = h;
+})();
 </script>
 </body>
 </html>"""
@@ -1075,4 +1230,6 @@ const shared = SA.top_topics.map(function (t) { return t[0]; }).filter(function 
 if (shared.length) out.push("• נושאים משותפים בין הבולטים: " +
   shared.slice(0, 3).map(esc).join(" · ") + ".");
 document.getElementById("sum").innerHTML = out.join("<br>");
+
+
 </script></body></html>"""
