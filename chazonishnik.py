@@ -166,7 +166,12 @@ _TPL_EN = {
         "— a reply with no explicit mention is invisible to this analysis.",
     "הקרובים אליו": "Closest to him",
     "מעריצים שקטים": "Quiet admirers",
-    "פונה אליהם, ולא הגיע מהם לייק": "He addresses them, and no upvote came back",
+    "מזכיר אותם, ולא הגיע מהם לייק": "He mentions them, and no upvote came back",
+    "נספר רק @אזכור או ציטוט — כפי שהפורום עצמו מסמן אותם. תגובה בשרשור בלי תיוג אינה נספרת, וזו הדרך הנפוצה לדבר כאן: אפשר לשוחח עם מישהו מאות פעמים ולהופיע כאן עם מספר חד-ספרתי.":
+        "Only an @mention or a quote is counted — as the forum itself marks them. A reply in a thread without tagging is not counted, and that is the common way to talk here: you can converse with someone hundreds of times and appear here with a single-digit number.",
+    "אזכורים בפוסטים שנסרקו": "mentions in the scanned posts",
+    "נספר רק @אזכור או ציטוט — כפי שהפורום עצמו מסמן אותם. **תגובה בשרשור בלי תיוג אינה נספרת**, וזו הדרך הנפוצה לדבר כאן: אפשר לשוחח עם מישהו מאות פעמים ולהופיע כאן עם מספר חד-ספרתי.":
+        "Only an @mention or a quote is counted — as the forum itself marks them. **A reply in a thread without tagging is not counted**, and that is the common way to talk here: you can converse with someone hundreds of times and appear here with a single-digit number.",
     "לא נמצאו אזכורים או לייקים בפוסטים שנסרקו":
         "No mentions or upvotes were found in the scanned posts",
     "הזכיר ": "mentioned ",
@@ -174,9 +179,6 @@ _TPL_EN = {
     " · לייקים ": " · upvotes ",
     "עושים לו לייק, והוא לא מזכיר אותם": "They upvote him; he never mentions them",
     "פניות בפוסטים שנסרקו": "approaches in the scanned posts",
-    "@שם או ציטוט": "@name or a quote",
-    "הכול מתוך הפוסטים שנסרקו בלבד. אזכור נספר כשהפורום סימן אותו כפנייה":
-        "All from the scanned posts only. A mention counts when the forum itself marked it as one",
     "לא נמצאו אזכורים או ציטוטים בפוסטים שנסרקו":
         "No mentions or quotes were found in the scanned posts",
     "הקרובים אליו": "Closest to them",
@@ -1082,10 +1084,10 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
                           said[k] + liked[k])).join('');
   if (quiet.length) h += '<div class="grp">💗 מעריצים שקטים</div>'
     + quiet.map(k => row(k, 'עושים לו לייק, והוא לא מזכיר אותם', liked[k])).join('');
-  if (oneWay.length) h += '<div class="grp">🙊 פונה אליהם, ולא הגיע מהם לייק</div>'
-    + oneWay.map(k => row(k, 'פניות בפוסטים שנסרקו', said[k])).join('');
+  if (oneWay.length) h += '<div class="grp">🙊 מזכיר אותם, ולא הגיע מהם לייק</div>'
+    + oneWay.map(k => row(k, 'אזכורים בפוסטים שנסרקו', said[k])).join('');
   if (likesUnknown) h += '<div class="note-sm">⚠️ ספירת הלייקים הייתה חלקית, ולכן לא מוצגת קבוצת "לא הגיע מהם לייק"</div>';
-  h += '<div class="note-sm">הכול מתוך הפוסטים שנסרקו בלבד. אזכור נספר כשהפורום סימן אותו כפנייה (@שם או ציטוט) — תגובה בלי אזכור מפורש אינה נראית לניתוח.</div>';
+  h += '<div class="note-sm">נספר רק @אזכור או ציטוט — כפי שהפורום עצמו מסמן אותם. תגובה בשרשור בלי תיוג אינה נספרת, וזו הדרך הנפוצה לדבר כאן: אפשר לשוחח עם מישהו מאות פעמים ולהופיע כאן עם מספר חד-ספרתי.</div>';
   box.innerHTML = h;
 })();
 </script>
