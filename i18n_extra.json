@@ -950,5 +950,82 @@
   "kind": "static",
   "where": "chazonishnik",
   "context": "0.9 audit"
+ },
+ {
+  "he": "ℹ️ פורום XenForo — נסרקים שם משתמש, מספר הודעות ומוניטין. תאריך הצטרפות ומייל אינם מופיעים ברשימת החברים ולכן אינם נסרקים.",
+  "en": "ℹ️ XenForo forum — username, message count and reputation are scraped. Join date and email do not appear in the member list, so they are not scraped.",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "מינימום הודעות:",
+  "en": "Minimum messages:",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "0 = כולל מי שמעולם לא כתב",
+  "en": "0 = including those who never posted",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "ניק ייכנס למאגר רק אם כתב לפחות כך וכך הודעות. 0 = הכול, כולל מי שנרשם ומעולם לא כתב.",
+  "en": "A nick enters the database only if it posted at least this many messages. 0 = everything, including those who registered and never posted.",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "רשימת החברים בפורום זה דורשת התחברות — הזן עוגיית xf_user",
+  "en": "The member list on this forum requires signing in — enter an xf_user cookie",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "אין הרשאה לצפות ברשימת המשתמשים — ייתכן שנדרשת עוגיית התחברות",
+  "en": "No permission to view the member list — a login cookie may be required",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "עמוד רשימת המשתמשים לא נמצא בכתובת זו",
+  "en": "The member list page was not found at this address",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "מבנה העמוד לא צפוי — ודא שזו רשימת החברים של פורום XenForo",
+  "en": "Unexpected page structure — make sure this is a XenForo member list",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "לא נמצאו שורות חברים בעמוד — ייתכן שמבנה הדף השתנה",
+  "en": "No member rows were found on the page — the page structure may have changed",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "לא נמצאה בכתובת זו רשימת משתמשים שניתן לקרוא אוטומטית (נבדקו NodeBB, Discourse ו-XenForo).",
+  "en": "No automatically readable member list was found at this address (NodeBB, Discourse and XenForo were checked).",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "שגיאת בקשה {1}",
+  "en": "Request error {1}",
+  "kind": "static",
+  "where": "manual",
+  "context": "XenForo member scraping (0.9.3)"
  }
 ]
