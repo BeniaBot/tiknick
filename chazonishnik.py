@@ -207,6 +207,9 @@ _TPL_EN = {
         "The upvotes were counted, but the voter names did not arrive",
     "מבוסס על ": "Based on ",
     " הלייקים — לשאר לא הגיעו שמות": " of the upvotes — no names arrived for the rest",
+    "נספרות רק שעות עם ": "Only hours with at least ",
+    " פוסטים ומעלה — אחרת שעה נדירה מנצחת במזל":
+        " posts are counted — otherwise a rare hour wins by luck",
     "בשרשורים של מי הוא חי": "Whose threads he lives in",
     "מה הצית שיחה": "What sparked conversation",
     "למי הוא באמת עונה": "Whom he actually answers",
@@ -1209,7 +1212,7 @@ const dayCounts=dayOrder.map((_,i)=>data.filter(d=>d.dow===(i+6)%7).length);
 new Chart(document.getElementById('chart-weekly'),{type:'radar',data:{labels:dayOrder,datasets:[{label:'פוסטים',data:dayCounts,borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,.2)'}]},options:{responsive:true,maintainAspectRatio:false,scales:{r:{grid:{color:'#334155'}}}}});
 const lens={'קצר':0,'בינוני':0,'ארוך':0};data.forEach(d=>{if(d.words<20)lens['קצר']++;else if(d.words<100)lens['בינוני']++;else lens['ארוך']++;});
 new Chart(document.getElementById('chart-length'),{type:'doughnut',data:{labels:Object.keys(lens),datasets:[{data:Object.values(lens),backgroundColor:['#ef4444','#3b82f6','#10b981'],borderWidth:0}]},options:{responsive:true,maintainAspectRatio:false,cutout:'70%'}});
-[...data].sort((a,b)=>b.likes-a.likes).slice(0,10).forEach(p=>{document.getElementById('list-best').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/post/${encodeURIComponent(p.pid)}" target="_blank" style="max-width:80%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</a><span class="badge">+${esc(p.likes)}</span></div>`;});
+[...data].sort((a,b)=>b.likes-a.likes).slice(0,10).forEach(p=>{document.getElementById('list-best').innerHTML+=`<div class="list-item"><div style="max-width:80%"><a href="${esc(baseUrl)}/post/${encodeURIComponent(p.pid)}" target="_blank" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(p.title)}</a><div class="sub">${esc(p.date)}</div></div><span class="badge">+${esc(p.likes)}</span></div>`;});
 if(!totalLikes){document.getElementById('list-best').innerHTML=
   '<div class="list-item" style="opacity:.75">לא התקבלו לייקים על הפוסטים שנסרקו</div>';}
 new Chart(document.getElementById('chart-scatter'),{type:'scatter',data:{datasets:[{label:'פוסטים',data:data.map(d=>({x:d.words,y:d.likes})),backgroundColor:'#38bdf888'}]},options:{responsive:true,maintainAspectRatio:false,scales:{x:{type:'logarithmic',title:{display:true,text:'כמות מילים'}},y:{title:{display:true,text:'לייקים'}}}}});
@@ -1257,12 +1260,15 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     box.innerHTML=note('אין מספיק פוסטים בשעה מסוימת כדי להשוות');
     return;
   }
-  const MIN_SAMPLE=5;
+  // הרצפה נגזרת מהיקף הדוח: שעה חייבת להחזיק לפחות רבע מהשעה הממוצעת
+  // כדי להיות ברת-השוואה. עם 1,793 פוסטים זה 18 ולא 5.
+  const MIN_SAMPLE=Math.max(5, Math.round(data.length/24*0.25));
   const sum=Array(24).fill(0), cnt=Array(24).fill(0);
   measured.forEach(d=>{sum[d.hour]+=d.likes;cnt[d.hour]++;});
   const rows=[];
   for(let h=0;h<24;h++) if(cnt[h]>=MIN_SAMPLE) rows.push({h,avg:sum[h]/cnt[h],n:cnt[h]});
   if(rows.length<2){box.innerHTML=note('אין מספיק פוסטים בשעה מסוימת כדי להשוות');return;}
+  const minNote='נספרות רק שעות עם '+MIN_SAMPLE+' פוסטים ומעלה — אחרת שעה נדירה מנצחת במזל';
   const overall=totalLikes/measured.length;
   rows.sort((a,b)=>b.avg-a.avg);
   const best=rows[0], worst=rows[rows.length-1];
@@ -1273,6 +1279,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
            worst.avg.toFixed(1));
   html+=li('הממוצע הכללי שלו', overall.toFixed(1));
   rows.slice(0,5).forEach(r=>{if(r!==best) html+=li(pad(r.h),r.avg.toFixed(1));});
+  html+=note(minNote);
   box.innerHTML=html;
 })();
 
@@ -1394,6 +1401,12 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   const box = document.getElementById('list-social');
   if (!box) return;
   const norm = s => String(s==null?'':s).replace(/[\s_\-]+/g,'').trim().toLowerCase();
+  // שמות שכבר נפתרו למקטעים האחרים, לפי סלאג — כדי שאותו אדם לא יופיע
+  // בשני כתיבים בשני כרטיסים באותו דוח.
+  const bySlug = {};
+  Object.values(meta.names || {}).forEach(v => {
+    if (v && v.slug) bySlug[norm(v.slug)] = v.name || v.slug;
+  });
   const disp = {}, slugOf = {};
   // **שם התצוגה מגיע מרשימת המצביעים, לא מהאזכור.** נמדד על mitmachim:
   // בסימון האזכור ה-slug יושב בכל שלושת המקומות (href, aria-label וה-<bdi>),
@@ -1401,7 +1414,8 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   // מי שגם עשה לייק מקבל את השם האמיתי, ו-`strong` דואג שהוא יגבר.
   const remember = (k, name, slug, strong) => {
     if (name && (strong || !disp[k])) disp[k] = name;
-    if (!disp[k]) disp[k] = slug || k;
+    if (!disp[k] && bySlug[k]) disp[k] = bySlug[k];
+    if (!disp[k]) disp[k] = name || slug || k;
     if (slug && !slugOf[k]) slugOf[k] = slug;
   };
 

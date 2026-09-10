@@ -5794,7 +5794,9 @@ if (!postcount) return `${verb} ${d} פוסטים ✓` + likes;
   const base = `${verb} ${d} מתוך ${postcount.toLocaleString()} פוסטים`;
   if (limited) return base + ' (לפי ההגבלה שהגדרת)' + likes;
   if (stoppedEarly) return base + ' — נעצר בגלל תקלת רשת, הדוח חלקי' + likes;
-  if (partial) return base + ' — השאר בפורומים שדורשים התחברות (הוסף עוגייה)' + likes;
+  // הפער נובע גם מפוסטים מחוקים ולא רק מהרשאות — וההנחיה
+  // 'הוסף עוגייה' נאמרה למי שכבר הייתה לו אחת תקינה.
+  if (partial) return base + ' — השאר מחוק או בקטגוריות שדורשות הרשאה' + likes;
   return base + (likes || ' ✓');
 }
 
