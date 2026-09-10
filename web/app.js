@@ -5211,8 +5211,9 @@ async function openInternetSync(openWith) {
 
   openModal('🌐 סנכרון לאינטרנט', `
     <p style="color:var(--subtext);font-size:13px;line-height:1.6;margin-bottom:16px">
-      סורק את רשימת המשתמשים של פורום (NodeBB או Discourse) דרך ה-API הרשמי, ומוסיף/מעדכן
-      ניקים אוטומטית. שדות ריקים מתמלאים; ערך סרוק סותר נשמר לצד הקיים ומוכרע לפי אמינות.
+      סורק את רשימת המשתמשים של הפורום ומוסיף/מעדכן ניקים אוטומטית — NodeBB ו-Discourse
+      דרך ה-API שלהם, XenForo דרך עמוד החברים הציבורי. שדות ריקים מתמלאים; ערך סרוק סותר
+      נשמר לצד הקיים ומוכרע לפי אמינות.
     </p>
 
     <div class="section-hdr">בחירת פורומים</div>
@@ -5392,12 +5393,17 @@ async function doStartScrape() {
   const picked = syncPicked();
   if (!picked.length) { toast('לא סומן אף פורום', 'error'); return; }
   const maxPages = parseInt(document.getElementById('sync-maxpages')?.value) || null;
+  // 🚨 נקרא כאן, לא בתוך ענף אחד: הערך שהמשתמש רואה חייב להיות הערך שפועל,
+  // גם כשמסומנים כמה פורומים.
+  const mp = parseInt(document.getElementById('sync-minposts')?.value);
+  const minPosts = Number.isFinite(mp) && mp > 0 ? mp : 0;
 
   let start;
   if (picked.length > 1) {
     // הבקנד כבר יודע לסרוק רשימה (start_scrape_all עם only_forums), ושם כל
     // פורום מקבל את העוגייה השמורה *שלו* — כלל הפרטיות מ-0.8.3 לא נחלש.
-    start = await api('start_scrape_all', '', maxPages, picked.map(c => c.value));
+    start = await api('start_scrape_all', '', maxPages,
+                      picked.map(c => c.value), minPosts);
   } else {
     const opt = picked[0];
     const url = opt.dataset.url || '';
@@ -5408,9 +5414,6 @@ async function doStartScrape() {
       toast(`פלטפורמת ${PLATFORM_LABELS[plat] || plat} אינה נתמכת לסריקה אוטומטית`, 'error');
       return;
     }
-    // מינימום הודעות: בפורומי XenForo כ-60% מהחשבונות מעולם לא כתבו דבר,
-    // ובפרוג זה ~88,000 שורות ריקות. ההחלטה של המשתמש, בכל סריקה מחדש.
-    const minPosts = parseInt(document.getElementById('sync-minposts')?.value);
     // סריקת XenForo היא HTML ולא API — עמוד לעמוד, ובפורום גדול זו כמעט
     // שעה. עדיף לומר את זה מראש מאשר להשאיר את המשתמש מול פס שלא זז.
     if (plat === 'xenforo' && !maxPages) {
@@ -5423,8 +5426,7 @@ async function doStartScrape() {
             '\n\nאפשר להשאיר את התוכנה פתוחה ולהמשיך לעבוד, ואפשר לעצור באמצע.' +
             '\n\nלהתחיל?')) return;
     }
-    start = await api('start_scrape', opt.value, url, cookie, maxPages,
-                      Number.isFinite(minPosts) && minPosts > 0 ? minPosts : 0);
+    start = await api('start_scrape', opt.value, url, cookie, maxPages, minPosts);
   }
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל סריקה', 'error'); return; }
 
@@ -5483,14 +5485,21 @@ function startScrapeMonitor() {
         if (gaps.length && !p.auto) promptForCookie(gaps);
         else toast('שגיאת סריקה: ' + p.error, 'error');
       } else {
-        const partial = (p.failed_pages || 0) > 0;
+        // incomplete מגיע מ-_scrape_xenforo: הסריקה לא הגיעה לסוף מאומת,
+        // או שדילגה על עמוד באמצע. בלי לקרוא אותו כאן, כל החישוב הזהיר שם
+        // נזרק והמשתמש קיבל "הסריקה הושלמה".
+        const partial = (p.failed_pages || 0) > 0 || !!p.incomplete;
         // "הוגבלה" = נעצרה בגלל מקסימום עמודים שהמשתמש הגדיר. עד 0.8.5 זה דווח
         // כ"הושלמה", והמשתמש חשב שסרק פורום שלם כשקיבל רק את העמודים הראשונים.
         const msg = p.cancelled ? 'הסריקה בוטלה'
                   : partial ? 'הסריקה הסתיימה חלקית'
                   : p.limited ? 'הסריקה נעצרה לפי ההגבלה שהגדרת' : 'הסריקה הושלמה';
         let extra = '';
-        if (partial) extra += ` · ${p.failed_pages} עמודים נכשלו`;
+        if (p.failed_pages) extra += ` · ${p.failed_pages} עמודים נכשלו`;
+        else if (p.incomplete) extra += ' · לא הגענו לסוף הרשימה';
+        // כמה חברים לא נכנסו בגלל "מינימום הודעות" — המשתמש בחר את המספר,
+        // ומגיע לו לדעת מה הוא עשה.
+        if (p.skipped_low) extra += ` · ${p.skipped_low.toLocaleString()} לא כתבו מספיק`;
         if (p.limited && !partial) extra += ` · ${p.pages} עמודים`;
         if (p.skipped && p.skipped.length) {
           const need = (p.cookie_gaps || []).length;
@@ -5498,6 +5507,13 @@ function startScrapeMonitor() {
           if (need) extra += ` (${need} מחכים לעוגייה)`;
         }
         // בסריקת "הכל" יש רשומת סריקה לכל פורום — מפנים ליומן ולא לרשומה האחרונה
+        // עוגייה שנשלחה והפורום עדיין רואה אורח — פג תוקף, הועתק חלקית,
+        // או הודבק שם העוגייה הלא נכון. בלי זה הסריקה נראית תקינה לגמרי
+        // בזמן שהיא רצה בלי הרשאות.
+        if (p.guest) {
+          toast('העוגייה נשלחה אבל הפורום עדיין רואה אותך כאורח — ייתכן שפג תוקפה',
+                'error', { ms: 10000 });
+        }
         const act = p.all_mode ? { actionLabel: '📋 מה השתנה', onAction: openScanRuns, ms: 8000 }
                   : (p.run_id ? { actionLabel: '📋 מה השתנה',
                                   onAction: () => openScanChanges(p.run_id), ms: 8000 } : {});
@@ -5622,15 +5638,24 @@ function updateSyncHint() {
   // "מינימום הודעות" מוצג רק ב-XenForo: רק שם ספירת ההודעות מגיעה באותה
   // תשובה שמחזירה את רשימת החברים, ולכן הסינון אינו עולה אף בקשה נוספת.
   const mpRow = document.getElementById('sync-minposts-row');
-  if (mpRow) mpRow.style.display = (plat === 'xenforo' && picked.length === 1) ? 'flex' : 'none';
+  // מוצג כשכל הפורומים המסומנים הם XenForo — עכשיו שהערך עובר גם לסריקה
+  // מרובת-פורומים, אין סיבה להסתיר אותו שם.
+  const allXf = picked.length &&
+    picked.every(c => (c.dataset.platform || 'nodebb') === 'xenforo');
+  if (mpRow) mpRow.style.display = allXf ? 'flex' : 'none';
   if (!SCRAPABLE_PLATFORMS.has(plat)) {
     hint.innerHTML = `⛔ פלטפורמת ${esc(PLATFORM_LABELS[plat] || plat)} — אין API ציבורי לרשימת משתמשים, ` +
                      `לכן אין סריקה אוטומטית. אפשר להוסיף ולנהל ניקים בפורום זה ידנית.`;
     hint.style.color = 'var(--danger)';
   } else if (plat === 'xenforo') {
-    hint.innerHTML = 'ℹ️ פורום XenForo — נסרקים שם משתמש, מספר הודעות ומוניטין. ' +
+    // שרשרת if/else: בלי החלק הזה פורום XenForo שדורש התחברות היה מקבל
+    // רק את רמז הפלטפורמה, ואף פעם לא את ההנחיה על העוגייה.
+    hint.innerHTML = (opt.dataset.login === '1'
+        ? `🔒 פורום זה דורש התחברות — הזן את עוגיית <span dir="ltr">${cookieName}</span> למטה. `
+        : 'ℹ️ פורום XenForo — ') +
+      'נסרקים שם משתמש, מספר הודעות ומוניטין. ' +
       'תאריך הצטרפות ומייל אינם מופיעים ברשימת החברים ולכן אינם נסרקים.';
-    hint.style.color = 'var(--subtext)';
+    hint.style.color = opt.dataset.login === '1' ? 'var(--accent-2)' : 'var(--subtext)';
   } else if (opt.dataset.login === '1') {
     hint.innerHTML = `🔒 פורום זה דורש התחברות — הזן את עוגיית <span dir="ltr">${cookieName}</span> למטה (ראה "🍪 איך משיגים?").`;
     hint.style.color = 'var(--accent-2)';
@@ -5743,6 +5768,45 @@ async function stopScrape() {
 // מבין איך להשתמש בפיצ'ר". לכן: המסלול הרגיל הוא פורום + שם + כפתור, וכל
 // השאר יושב מקופל. **הקיפול ויזואלי בלבד** — השדות נשארים ב-DOM ונקראים
 // כרגיל, ולכן `runChazonishnik` לא השתנה.
+
+// שני הכלים קוראים את **נתיבי הפוסטים של NodeBB** (‎/api/user/<slug>/posts).
+// אין להם מקבילה ב-XenForo או ב-phpBB, ולכן פורום שאינו NodeBB אינו "עוד
+// מקרה" אלא היעדר מוחלט של מקור הנתונים. עד כאן זה התבטא בבורר ריק
+// ובנפילה ל-mitmachim.top — כלומר דוח מלא ומשכנע על אדם אחר.
+function noNodebbForumHtml(toolName) {
+  const others = (S.forums || [])
+    .filter(f => (f.url || '').trim() && (f.platform || 'nodebb') !== 'nodebb');
+  const list = others.length
+    ? '<div style="margin:10px 0">' + others.map(f =>
+        `<div style="display:flex;gap:8px;align-items:baseline;padding:5px 0;font-size:13px">
+           <span>•</span><b style="flex:1"><bdi>${esc(f.name)}</bdi></b>
+           <span style="color:var(--subtext);font-size:12px">${esc(PLATFORM_LABELS[f.platform] || f.platform)}</span>
+         </div>`).join('') + '</div>'
+    : '';
+  return `
+    <div style="text-align:center;padding:10px 4px 4px">
+      <div style="font-size:40px;margin-bottom:10px">📕</div>
+      <h3 style="font-size:15.5px;margin-bottom:10px">${esc(toolName)} עובד על פורומי NodeBB בלבד</h3>
+    </div>
+    <p style="font-size:13.5px;line-height:1.85;color:var(--text)">
+      הכלי קורא את היסטוריית הפוסטים דרך ממשק שקיים ב-NodeBB בלבד.
+      בפורומים מהסוג האחר פשוט אין מאיפה לקרוא אותה — לא בעוגייה ולא בלעדיה.
+    </p>
+    ${list ? '<p style="font-size:13px;color:var(--subtext);margin-top:12px">הפורומים שיש לך:</p>' + list : ''}
+    <p style="font-size:13px;line-height:1.8;color:var(--subtext);margin-top:12px">
+      אפשר להוסיף פורום NodeBB ב"ניהול פורומים" — יש שם רשימה מוכנה.
+      סריקת המשתמשים עצמה כן עובדת על הפורומים שלך.
+    </p>`;
+}
+
+function openNoNodebb(toolName) {
+  openModal(esc(toolName), noNodebbForumHtml(toolName), [
+    { label: '🏛️ לניהול פורומים', cls: 'btn-primary',
+      action: () => { closeModal(); openForumMgr(); } },
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
+}
+
 async function openChazonishnik() {
   const forums = await api('get_scrapable_forums') || [];
   const known  = await api('get_known_forums') || [];
@@ -5753,6 +5817,7 @@ async function openChazonishnik() {
     .map(f => `<option value="${esc(f.url)}" data-login="${loginOf[f.name] ? '1' : '0'}"` +
               `${/mitmachim/.test(f.url) ? ' selected' : ''}>${esc(f.name)}</option>`)
     .join('');
+  if (!opts) { openNoNodebb('📖 Chazonishnik'); return; }
   openModal('📖 Chazonishnik — ניתוח פעילות משתמש', `
     <div style="font-size:13.5px;line-height:1.7">
       <div style="color:var(--subtext);font-size:12.5px;margin-bottom:16px">
@@ -5761,7 +5826,7 @@ async function openChazonishnik() {
 
       <div class="form-group" style="margin-bottom:12px">
         <label class="form-label">פורום</label>
-        <select id="chz-forum" class="form-select" onchange="chzPrefillCookie()">${opts || '<option value="https://mitmachim.top">מתמחים טופ</option>'}</select>
+        <select id="chz-forum" class="form-select" onchange="chzPrefillCookie()">${opts}</select>
       </div>
 
       <div class="form-group" style="margin-bottom:12px">
@@ -5847,7 +5912,8 @@ async function runChazonishnik() {
   const username = document.getElementById('chz-user')?.value.trim();
   const second   = document.getElementById('chz-user2')?.value.trim() || '';
   const cookie   = document.getElementById('chz-cookie')?.value.trim() || '';
-  const baseUrl  = document.getElementById('chz-forum')?.value || 'https://mitmachim.top';
+  const baseUrl  = document.getElementById('chz-forum')?.value || '';
+  if (!baseUrl) { toast('לא נבחר פורום', 'error'); return; }
   const maxPosts = parseInt(document.getElementById('chz-maxposts')?.value) || null;
   if (!username) { toast('הזן שם משתמש', 'error'); return; }
   // שם שני מלא = השוואה. אותו מצב רקע ואותו ביטול, כדי שהבאנר וההתקדמות
@@ -6010,6 +6076,7 @@ async function openStinknik() {
   // Stinknik מסתמך על נתיבי הפוסטים של NodeBB בלבד
   const opts = forums.filter(f => (f.url||'').trim() && (f.platform || 'nodebb') === 'nodebb')
     .map(f => `<option value="${esc(f.url)}">${esc(f.name)}</option>`).join('');
+  if (!opts) { openNoNodebb('🦨 Stinknik'); return; }
   openModal('🦨 Stinknik — כל הדיסלייקים של ניק', `
     <div style="font-size:13.5px;line-height:1.7">
       <div style="color:var(--subtext);font-size:12.5px;margin-bottom:16px">
@@ -6066,16 +6133,40 @@ async function stinkPrefillCookie() {
   input.value = await api('get_saved_cookie', url) || '';
 }
 
+function originOf(u) {
+  try { return new URL(u).origin; } catch (e) { return ''; }
+}
+
 async function runStinknik() {
   const user = document.getElementById('stink-user')?.value.trim();
-  const cookie = document.getElementById('stink-cookie')?.value.trim() || '';
+  let cookie = document.getElementById('stink-cookie')?.value.trim() || '';
   const maxPosts = parseInt(document.getElementById('stink-maxposts')?.value) || null;
-  let baseUrl = document.getElementById('stink-forum')?.value || 'https://mitmachim.top';
-  // אם הודבק קישור מלא — נחלץ ממנו את הדומיין
-  if (user && /^https?:\/\//i.test(user)) {
-    try { const u = new URL(user); baseUrl = u.origin; } catch (e) {}
-  }
+  let baseUrl = document.getElementById('stink-forum')?.value || '';
+  if (!baseUrl) { toast('לא נבחר פורום', 'error'); return; }
   if (!user) { toast('הזן שם משתמש או קישור', 'error'); return; }
+  // אם הודבק קישור מלא — הדומיין שלו גובר על הבורר. זה נוח, ובדיוק כאן
+  // היו שלושה חורים: הקישור יכול להצביע לכל מארח שהוא, גם כזה שאינו
+  // NodeBB ושהכלי לא יכול לקרוא, וגם כזה שאינו הפורום שהעוגייה שייכת לו.
+  if (/^https?:\/\//i.test(user)) {
+    const target = originOf(user);
+    if (!target) { toast('הקישור אינו תקין', 'error'); return; }
+    const known = (S.forums || []).find(f => f.url && originOf(f.url) === target);
+    if (!known) {
+      toast('הקישור מפנה לפורום שאינו ברשימת הפורומים שלך', 'error');
+      return;
+    }
+    if ((known.platform || 'nodebb') !== 'nodebb') {
+      toast(`${known.name} אינו פורום NodeBB — הכלי לא יכול לקרוא ממנו פוסטים`, 'error');
+      return;
+    }
+    if (target !== originOf(baseUrl)) {
+      // 🚨 כלל הפרטיות מ-0.8.3: עוגייה של פורום אחד לעולם לא נשלחת לאחר.
+      // מה שבשדה שייך לפורום שבבורר; לפורום החדש משמשת רק העוגייה השמורה
+      // שלו עצמו (main.py טוען אותה כשמגיעה מחרוזת ריקה).
+      baseUrl = target;
+      cookie = '';
+    }
+  }
   const start = await api('run_stinknik', user, cookie, baseUrl, maxPosts);
   if (!start?.ok) { toast('שגיאה: ' + (start?.error || ''), 'error'); return; }
   showStinknikProgress(user);

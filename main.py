@@ -678,7 +678,10 @@ class API:
         """בדיקה מקדימה של הפורום — מזהה פלטפורמה (NodeBB/Discourse) ושומר עוגייה+פלטפורמה"""
         try:
             res = scraper.check_forum(forum_url, cookie=cookie or None)
-            if res.get("platform") and res["platform"] != "unknown":
+            # 🚨 רק בדיקה שהצליחה כותבת. קודם גם כישלון שמר את הפלטפורמה
+            # שנוחשה, ולכן בדיקה אחת שנחסמה בהרשאה קיבעה את הפורום לסוג
+            # הלא נכון — וכל שאר התוכנה נגזרת מהערך הזה.
+            if res.get("ok") and res.get("platform") not in (None, "", "unknown"):
                 db.set_forum_platform_by_url(forum_url, res["platform"])
             if (cookie or "").strip():
                 db.save_cookie_for_url(forum_url, cookie)
@@ -774,7 +777,8 @@ class API:
     def get_scrape_progress(self):
         return dict(_scrape_state)
 
-    def start_scrape_all(self, cookie="", max_pages=None, only_forums=None):
+    def start_scrape_all(self, cookie="", max_pages=None, only_forums=None,
+                         min_posts=0):
         """סורק את כל הפורומים ברצף, עם דילוג אוטומטי על פורום שנכשל.
         cookie אינו בשימוש כאן במכוון — כל פורום משתמש רק בעוגייה השמורה שלו.
         only_forums — רשימת שמות לסריקה חוזרת של תת-קבוצה (למשל הפורומים שדולגו)."""
@@ -838,6 +842,7 @@ class API:
                             max_pages=mp,
                             platform=f.get("platform") or "nodebb",
                             run_id=run_id,
+                            min_posts=int(min_posts or 0),
                         )
                     except Exception:
                         db.finish_scan_run(run_id, {})   # פורום שנכשל — הרשומה נסגרת
@@ -933,6 +938,9 @@ class API:
             "forum": None, "cancelled": False,
             "all_mode": False, "selected_mode": True, "run_id": None, "auto": False, "user_skipped": False, "aborted": False,
             "forum_index": 0, "forum_total": 0, "skipped": [], "failed_pages": 0,
+            # חייב להתאפס כאן כמו בשני מסלולי הסריקה: בלעדיו פער עוגייה
+            # מסריקה קודמת שורד וקופץ כנדנוד בסוף סנכרון שהצליח לגמרי.
+            "cookie_gaps": [],
         })
 
         # מפת URL ופלטפורמה לכל פורום (קריאת get_forums אחת)
@@ -966,11 +974,22 @@ class API:
                 except Exception as e:
                     _scrape_state["skipped"].append({"forum": str(nid), "error": str(e)})
                     continue
+                if plat not in ("nodebb", "discourse"):
+                    # רענון ניק בודד קיים רק בפלטפורמות שיש בהן נתיב לפי שם.
+                    # ב-XenForo הפרופיל מאותר לפי מזהה מספרי בלבד, ולכן אין
+                    # מה לשאול — וזה לא "לא נמצא".
+                    _scrape_state["skipped"].append({
+                        "forum": nick["username"],
+                        "error": "רענון ניק בודד אינו נתמך ב-%s — סרוק את הפורום כולו"
+                                 % {"xenforo": "XenForo", "phpbb": "phpBB"}.get(plat, plat)})
+                    continue
                 try:
                     mapped = scraper.scrape_single_user(url, nick["username"],
                                                         cookie=fcookie, platform=plat)
                     if not mapped:
-                        _scrape_state["skipped"].append({"forum": nick["username"], "error": "לא נמצא"})
+                        _scrape_state["skipped"].append(
+                            {"forum": nick["username"],
+                             "error": "לא הוחזר מידע מהפורום עבור השם הזה"})
                         continue
                     # בחירה מפורשת → ערך הסריקה מנצח בתצוגה (הכול בחיבור DB אחד)
                     db.force_scraped_values(nid, mapped)
@@ -1069,7 +1088,7 @@ class API:
             return {"ok": False, "error": str(e)}
 
     def run_chazonishnik_compare(self, user_a, user_b, cookie="",
-                                 base_url="https://mitmachim.top", max_posts=None):
+                                 base_url="", max_posts=None):
         """
         השוואת שני משתמשים. משתמש באותו מצב רקע ובאותו ביטול כמו הניתוח הרגיל,
         כדי שהבאנר, ההתקדמות וכפתור הביטול הקיימים ימשיכו לעבוד בלי שינוי.
@@ -1081,7 +1100,12 @@ class API:
             return {"ok": False, "error": "הזן שני שמות משתמש"}
         if a.lower() == b.lower():
             return {"ok": False, "error": "אלה אותו משתמש"}
-        base_url = base_url or "https://mitmachim.top"
+        if not (base_url or "").strip():
+            # 🚨 בלי זה נפלנו ל-mitmachim.top והפקנו דוח מלא ומשכנע על
+            # **אדם אחר בפורום שהמשתמש לא בחר**. פורום ברירת מחדל כאן
+            # אינו נוחות — הוא המצאה של נתונים.
+            return {"ok": False, "error": "לא נבחר פורום"}
+
         cookie = (cookie or "").strip()
         if cookie:
             db.save_cookie_for_url(base_url, cookie)
@@ -1136,7 +1160,7 @@ class API:
         threading.Thread(target=_run, daemon=True).start()
         return {"ok": True, "started": True}
 
-    def run_chazonishnik(self, username, cookie="", base_url="https://mitmachim.top",
+    def run_chazonishnik(self, username, cookie="", base_url="",
                          max_posts=None):
         """מתחיל ניתוח פעילות ברקע. התקדמות דרך get_chazonishnik_progress.
         עוגייה אופציונלית — פורומים ציבוריים חושפים היסטוריית פוסטים גם בלעדיה.
@@ -1145,7 +1169,12 @@ class API:
             return {"ok": False, "error": "ניתוח כבר רץ"}
         if not username or not username.strip():
             return {"ok": False, "error": "הזן שם משתמש"}
-        base_url = base_url or "https://mitmachim.top"
+        if not (base_url or "").strip():
+            # 🚨 בלי זה נפלנו ל-mitmachim.top והפקנו דוח מלא ומשכנע על
+            # **אדם אחר בפורום שהמשתמש לא בחר**. פורום ברירת מחדל כאן
+            # אינו נוחות — הוא המצאה של נתונים.
+            return {"ok": False, "error": "לא נבחר פורום"}
+
         cookie = (cookie or "").strip()
         if cookie:
             db.save_cookie_for_url(base_url, cookie)
@@ -1223,6 +1252,13 @@ class API:
             if not url:
                 continue
             ck = (t.get("cookie") or "").strip() or (db.get_cookie_for_url(url) or "")
+            # 🚨 שם העוגייה תלוי פלטפורמה, ו-forumstats שלח תמיד express.sid.
+            # עוגיית xf_user תקינה — בדיוק זו שהנדנוד של 0.9.4 ביקש — נשלחה
+            # בשם של פורום אחר, והשרת התעלם ממנה בשקט. הנרמול נעשה כאן, כי
+            # forumstats במכוון אינו מכיר את המאגר.
+            if ck:
+                ck = scraper.normalize_cookie(
+                    ck, db.get_forum_platform_by_url(url) or "nodebb")
             item = {"name": t.get("name") or url, "url": url, "cookie": ck or None,
                     "known": [], "local": {}}
             try:
@@ -1269,7 +1305,7 @@ class API:
             return {"ok": False, "html": "", "stats": {}, "error": str(e)}
 
     # ── Stinknik — ניתוח דיסלייקים ─────────────────────────────────
-    def run_stinknik(self, user_input, cookie="", base_url="https://mitmachim.top",
+    def run_stinknik(self, user_input, cookie="", base_url="",
                      max_posts=None):
         """מתחיל ניתוח דיסלייקים ברקע. התקדמות דרך get_stinknik_progress.
         max_posts — הגבלת מספר הפוסטים הנסרקים (None = הכל)."""
@@ -1277,7 +1313,12 @@ class API:
             return {"ok": False, "error": "ניתוח כבר רץ"}
         if not user_input or not user_input.strip():
             return {"ok": False, "error": "הזן שם משתמש או קישור לפרופיל"}
-        base_url = base_url or "https://mitmachim.top"
+        if not (base_url or "").strip():
+            # 🚨 בלי זה נפלנו ל-mitmachim.top והפקנו דוח מלא ומשכנע על
+            # **אדם אחר בפורום שהמשתמש לא בחר**. פורום ברירת מחדל כאן
+            # אינו נוחות — הוא המצאה של נתונים.
+            return {"ok": False, "error": "לא נבחר פורום"}
+
         cookie = (cookie or "").strip()
         if cookie:
             db.save_cookie_for_url(base_url, cookie)
