@@ -114,13 +114,18 @@ ok("הפורום נשאר בתזמון תחת השם החדש", "חדש" in db.g
 # ══ התזמון לא מציע פלטפורמה שהסורק מסרב לה ════════════════════════════════
 fresh("plat.db")
 db.add_forum("נודבב", "#111", "https://a.example")
-db.add_forum("זנפורו", "#222", "https://b.example")
+db.add_forum("פיאיצ'פיבב", "#222", "https://b.example")
+db.add_forum("זנפורו", "#333", "https://c.example")
 with db.get_connection() as conn:
+    conn.execute("UPDATE forums SET platform='phpbb' WHERE name=?", ("פיאיצ'פיבב",))
     conn.execute("UPDATE forums SET platform='xenforo' WHERE name='זנפורו'")
-db.set_schedule(enabled=True, forums=["נודבב", "זנפורו"], mode="interval", every_hours=12)
+db.set_schedule(enabled=True, forums=["נודבב", "פיאיצ'פיבב", "זנפורו"],
+                mode="interval", every_hours=12)
 due = db.sched_due_forums()
-ok("XenForo לא נכנס לתור הסריקה", "זנפורו" not in due, str(due))
+ok("phpBB לא נכנס לתור הסריקה", "פיאיצ'פיבב" not in due, str(due))
 ok("NodeBB כן", "נודבב" in due, str(due))
+# מ-0.9.3 XenForo נסרק, ולכן הוא כן אמור להגיע לתור המתוזמן
+ok("XenForo כן נכנס לתור", "זנפורו" in due, str(due))
 
 # ══ הגיליון המודפס: הכותרת מוברחת ═════════════════════════════════════════
 evil = "</title><img src=https://forum/track.png>"

@@ -67,11 +67,13 @@ finally:
     scraper._fetch_json = _orig_fetch
 
 # ── 4. דיספאטץ' פלטפורמה לא נתמכת ────────────────────────────────────
+# XenForo נתמך מ-0.9.3 (רשימת החברים היא HTML ציבורי); phpBB עדיין לא —
+# ל-memberlist.php אין מבנה קריא, ובשני הפורומים שנבדקו הוא חסום.
 try:
-    scraper.scrape_forum("פורום לתורה", "https://tora-forum.co.il", db, platform="xenforo")
-    check("xenforo raises", False, "no exception")
+    scraper.scrape_forum("פורום אוצר החכמה", "https://forum.otzar.org", db, platform="phpbb")
+    check("phpbb raises", False, "no exception")
 except scraper.ScrapeError as e:
-    check("xenforo raises ScrapeError", "XenForo" in str(e) or "אוטומטית" in str(e), str(e))
+    check("phpbb raises ScrapeError", "phpBB" in str(e) or "אוטומטית" in str(e), str(e))
 
 # ── 5. תצוגת משתמש מאוחדת ────────────────────────────────────────────
 db.add_forum("פורום א", "#111", "https://a.example")
