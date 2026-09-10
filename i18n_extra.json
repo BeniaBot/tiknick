@@ -1027,5 +1027,68 @@
   "kind": "static",
   "where": "manual",
   "context": "XenForo member scraping (0.9.3)"
+ },
+ {
+  "he": "🍪 צריך עוגייה כדי לסרוק",
+  "en": "🍪 A cookie is needed to scrape",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "🍪 הוסף עוגייה עכשיו",
+  "en": "🍪 Add the cookie now",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "לא עכשיו",
+  "en": "Not now",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "בלחיצה על הכפתור למטה ההסבר המלא ייפתח מעצמו, שלב אחר שלב, עם השם המדויק שצריך לחפש.",
+  "en": "Pressing the button below opens the full step-by-step explanation by itself, with the exact name to look for.",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "הוא מציג",
+  "en": "it shows",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "הם מציגים",
+  "en": "they show",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "הפורום ייסרק",
+  "en": "the forum will be scraped",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "הפורומים ייסרקו",
+  "en": "the forums will be scraped",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "פורום אחד לא נסרק",
+  "en": "one forum was not scraped",
+  "kind": "static",
+  "where": "manual",
+  "context": "cookie nudge after a scrape (0.9.4)"
  }
 ]
