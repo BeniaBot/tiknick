@@ -118,8 +118,10 @@ def _get_json(url, cookie=None, timeout=REQ_TIMEOUT, retries=2, budget=None):
         req.add_header("User-Agent", _UA)
         req.add_header("Accept", "application/json")
         if cookie:
-            val = cookie if cookie.startswith("express.sid=") else "express.sid=" + cookie
-            req.add_header("Cookie", val)
+            # מגיעה כבר מנורמלת ("שם=ערך") מ-main.py, לפי הפלטפורמה של
+            # הפורום. עד 0.9.5 השם נכפה כאן ל-express.sid, ולכן עוגייה של
+            # XenForo נשלחה בשם שגוי ונענתה כאורח.
+            req.add_header("Cookie", cookie)
         try:
             with net.urlopen(req, timeout=t) as resp:
                 raw = resp.read().decode("utf-8", "replace")

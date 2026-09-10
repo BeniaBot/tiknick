@@ -530,6 +530,13 @@ def check_forum(forum_url, cookie=None):
     except ScrapeError as e:
         return {"ok": False, "user_count": None, "title": None, "platform": "unknown", "error": str(e)}
 
+    # 🚨 חסימת הרשאה **אינה** זיהוי. 401/403 מוכיח שמשהו סירב לנו, לא איזו
+    # תוכנה רצה שם — ולכן היא נזכרת וההרצה ממשיכה, בדיוק כמו ב-detect_platform.
+    # קודם הבדיקה חזרה על ה-AuthRequired הראשון עם "platform": "nodebb",
+    # ו-main.py שמר את זה במאגר: פורום XenForo מאחורי התחברות נרשם כ-NodeBB
+    # לתמיד, והמשתמש נשלח לחפש עוגייה שהשרת מתעלם משמה.
+    blocked = None
+
     # NodeBB
     try:
         res = _try_nodebb(base, cookie)
@@ -538,8 +545,8 @@ def check_forum(forum_url, cookie=None):
             return {"ok": True, "user_count": count, "title": title,
                     "platform": "nodebb", "error": None}
     except AuthRequired:
-        return {"ok": False, "user_count": None, "title": None, "platform": "nodebb",
-                "error": "הפורום דורש התחברות לצפייה במשתמשים — הזן עוגיית express.sid (ראה '🍪 איך משיגים?')"}
+        blocked = ("nodebb", "הפורום דורש התחברות לצפייה במשתמשים — "
+                             "הזן עוגיית express.sid (ראה '🍪 איך משיגים?')")
     except ScrapeError:
         pass
 
@@ -551,8 +558,8 @@ def check_forum(forum_url, cookie=None):
             return {"ok": True, "user_count": count, "title": title,
                     "platform": "discourse", "error": None}
     except AuthRequired:
-        return {"ok": False, "user_count": None, "title": None, "platform": "discourse",
-                "error": "הפורום דורש התחברות לצפייה במשתמשים — הזן עוגייה מתאימה"}
+        blocked = blocked or ("discourse", "הפורום דורש התחברות לצפייה במשתמשים — "
+                                           "הזן עוגייה מתאימה")
     except ScrapeError:
         pass
 
@@ -564,10 +571,17 @@ def check_forum(forum_url, cookie=None):
             return {"ok": True, "user_count": count, "title": title,
                     "platform": "xenforo", "error": None}
     except AuthRequired:
-        return {"ok": False, "user_count": None, "title": None, "platform": "xenforo",
-                "error": "רשימת החברים בפורום זה דורשת התחברות — הזן עוגיית xf_user"}
+        # XenForo גובר על חסימה קודמת: הוא נבדק אחרון, וחסימה שלו היא הראיה
+        # הספציפית ביותר שיש לנו (ה-probe שלו מכוון לעמוד חברים ולא ל-API).
+        blocked = ("xenforo", "רשימת החברים בפורום זה דורשת התחברות — "
+                              "הזן עוגיית xf_user")
     except ScrapeError:
         pass
+
+    if blocked:
+        plat, msg = blocked
+        return {"ok": False, "user_count": None, "title": None,
+                "platform": plat, "error": msg}
 
     return {"ok": False, "user_count": None, "title": None, "platform": "unknown",
             "error": "לא נמצאה בכתובת זו רשימת משתמשים שניתן לקרוא אוטומטית "
@@ -802,7 +816,8 @@ def _scrape_nodebb(forum_name, base, db, cookie, progress_cb,
         if not pairs:
             return
         page_stats = db.merge_scraped_users(
-            forum_name, pairs, source_label=f"NodeBB:{forum_name}", run_id=run_id)
+            forum_name, pairs, source_label=f"NodeBB:{forum_name}", run_id=run_id,
+            platform="nodebb")
         for key in ("added", "updated", "unchanged"):
             stats[key] += page_stats.get(key, 0)
 
@@ -906,7 +921,8 @@ def _scrape_xenforo(forum_name, base, db, cookie, progress_cb,
         if not pairs:
             return
         page_stats = db.merge_scraped_users(
-            forum_name, pairs, source_label="XenForo:%s" % forum_name, run_id=run_id)
+            forum_name, pairs, source_label="XenForo:%s" % forum_name, run_id=run_id,
+            platform="xenforo")
         for key in ("added", "updated", "unchanged"):
             stats[key] += page_stats.get(key, 0)
 
@@ -1041,7 +1057,8 @@ def _scrape_discourse(forum_name, base, db, cookie, progress_cb,
         if not pairs:
             return
         page_stats = db.merge_scraped_users(
-            forum_name, pairs, source_label=f"Discourse:{forum_name}", run_id=run_id)
+            forum_name, pairs, source_label=f"Discourse:{forum_name}", run_id=run_id,
+            platform="discourse")
         for key in ("added", "updated", "unchanged"):
             stats[key] += page_stats.get(key, 0)
 

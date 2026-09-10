@@ -924,6 +924,25 @@ def set_forum_platform_by_url(url, platform):
     with get_connection() as conn:
         conn.execute("UPDATE forums SET platform=? WHERE url=?", (platform, url))
 
+def get_forum_platform_by_url(url):
+    """
+    הפלטפורמה של פורום לפי כתובתו, או "" אם אינה ידועה.
+
+    ההשוואה היא לפי origin ולא לפי המחרוזת המלאה: הכתובת השמורה יכולה
+    להיות עם סלאש בסוף או בלעדיו, וההתאמה המדויקת הייתה מחטיאה.
+    """
+    if not (url or "").strip():
+        return ""
+    target = _origin(url)
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT url, platform FROM forums WHERE COALESCE(url,'') != ''").fetchall()
+    for r in rows:
+        if _origin(r["url"]) == target:
+            return r["platform"] or ""
+    return ""
+
+
 # ── עוגיות התחברות שמורות (לפי דומיין) ───────────────────────────────
 def _origin(url):
     """מחזיר את ה-origin (scheme://host[:port]) של כתובת, לשיוך עוגייה."""
@@ -1385,7 +1404,14 @@ _SCRAPE_MERGE_FIELDS = ["groups", "reputation", "full_name", "email", "address",
                         "status", "join_date", "post_count", "avatar_url", "last_seen",
                         "nick_color", "avatar_image", "extra_info", "forum_uid"]
 
-def merge_scraped_users(forum, users, source_label="סריקה", run_id=None):
+# פלטפורמות שהסריקה שלהן באמת בודקת הרחקה. ב-NodeBB ו-Discourse "לא
+# מורחק" הוא מדידה; ב-XenForo אין ברשימת החברים סימון הרחקה כלל, ולכן
+# "פעיל" שם הוא ניחוש שנראה כמו עובדה.
+_STATUS_MEASURED = ("nodebb", "discourse")
+
+
+def merge_scraped_users(forum, users, source_label="סריקה", run_id=None,
+                        platform="nodebb"):
     """
     ממזג עמוד שלם של משתמשים סרוקים — חיבור וטרנזקציה אחת לכל העמוד,
     במקום שני חיבורים לכל שדה של כל משתמש (עשרות אלפי חיבורים בסריקה מלאה).
@@ -1495,9 +1521,14 @@ def merge_scraped_users(forum, users, source_label="סריקה", run_id=None):
 
             if row is None:
                 cur = conn.execute(
-                    "INSERT INTO nicks (forum, username, source, trust_level, scraped_email) "
-                    "VALUES (?,?,?,4,?)",
-                    (forum, username, source_label, scraped.get("email", "") or ""))
+                    "INSERT INTO nicks (forum, username, source, trust_level, "
+                    "scraped_email, status) VALUES (?,?,?,4,?,?)",
+                    (forum, username, source_label,
+                     scraped.get("email", "") or "",
+                     # 🚨 בלי העמודה הזו חלה ברירת המחדל 'פעיל' — כלומר
+                     # הטענה שהסורק סירב לומר נכתבת בכל זאת, ומיוחסת
+                     # לפורום בשמו בתצוגה המאוחדת.
+                     "פעיל" if platform in _STATUS_MEASURED else ""))
                 nid = cur.lastrowid
                 for f, v in new_vals.items():
                     _upsert_field_value(conn, nid, f, v, scrape_sid)
@@ -1572,6 +1603,15 @@ def update_nick(nick_id, data):
     ניק מחקה אותם בשקט, ומאז email != scraped_email הפך כל ניק שנערך ל"ניק עם
     מידע". מפתח שקיים עם ערך ריק עדיין מנקה — זה הריקון הידני.
     """
+    # 🚨 forum_uid הוא מזהה **בתוך פורום מסוים**. ניק שעובר פורום ושומר
+    # אותו פותח פרופיל של אדם אחר (ב-XenForo הקישור נבנה ממנו), והסריקה
+    # הבאה מתאימה לפיו — משנה את שם הניק לשם הזר וממזגת אליו את הנתונים שלו.
+    # חייב לקרות **לפני** בניית upd_fields, אחרת השדה שנוסף כאן לא ייכתב.
+    if "forum" in data:
+        with get_connection() as _c:
+            _cur = _c.execute("SELECT forum FROM nicks WHERE id=?", (nick_id,)).fetchone()
+        if _cur and (_cur["forum"] or "") != (data.get("forum") or ""):
+            data = dict(data, forum_uid="")
     upd_fields = [f for f in _NICK_FIELDS if f != "source" and f in data]
     if not upd_fields:
         return
@@ -3292,8 +3332,10 @@ def bulk_move_forum(nick_ids, forum):
                     taken.add(r["username"])
         for chunk in _chunks(movable, 400):
             ph = ",".join("?" * len(chunk))
+            # forum_uid מתאפס יחד עם הפורום — ראו ההסבר ב-update_nick.
             cur = conn.execute(
-                f"UPDATE nicks SET forum=?, updated_at=datetime('now') WHERE id IN ({ph})",
+                f"UPDATE nicks SET forum=?, forum_uid='', "
+                f"updated_at=datetime('now') WHERE id IN ({ph})",
                 [forum] + list(chunk))
             moved += cur.rowcount
     return {"moved": moved, "skipped": skipped}
