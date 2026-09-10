@@ -76,7 +76,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.9.3"
+APP_VERSION = "0.9.4"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -134,6 +134,24 @@ def resource_path(rel):
     """נתיב למשאבים ארוזים (web/). ב-EXE הם ב-sys._MEIPASS."""
     base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base, rel)
+
+def _cookie_gap(forum, url, platform, err):
+    """
+    מתאר פורום שנעצר **רק** בגלל עוגייה חסרה.
+
+    זה נשמר כמצב מובנה ולא כמחרוזת שגיאה: הממשק צריך לדעת לאיזה פורום
+    לפתוח את השדה ואיזה שם עוגייה להציג, ולנחש את זה מתוך טקסט השגיאה
+    היה שביר בדיוק במקום שבו ההודעה נועדה לעזור.
+    """
+    plat = platform or "nodebb"
+    return {
+        "forum": forum,
+        "url": url or "",
+        "platform": plat,
+        "cookie_name": scraper.COOKIE_NAMES.get(plat, "express.sid"),
+        "error": str(err),
+    }
+
 
 def data_dir():
     """
@@ -693,6 +711,9 @@ class API:
             # "עצור" מיידי) ירשה את מונה הכישלונות של הריצה הקודמת ודיווחה
             # "הסתיימה חלקית — N עמודים נכשלו" על סריקה שלא ניסתה עמוד אחד.
             "failed_pages": 0, "limited": False,
+            # חייב להתאפס: אחרת נדנוד על עוגייה מסריקה קודמת היה חוזר
+            # בסוף סריקה שהצליחה לגמרי.
+            "cookie_gaps": [],
             # אפס מצב רב-פורומי שנותר מ'סרוק הכל'/'סנכרן נבחרים' קודמים
             "all_mode": False, "selected_mode": False,
             "forum_index": 0, "forum_total": 0, "skipped": [],
@@ -735,6 +756,12 @@ class API:
                     # UTC — הממשק מפרש את הערך הזה כ-UTC (כמו datetime('now') של SQLite)
                     db.set_setting(f"last_scrape_{forum_name}",
                                    _dt.datetime.utcnow().isoformat(timespec="minutes"))
+            except scraper.AuthRequired as e:
+                # לא "שגיאה" סתמית: זה חסם שהמשתמש יכול להסיר בהדבקה אחת,
+                # ולכן הוא נרשם כפער עוגייה שהממשק יודע לפעול לפיו.
+                _scrape_state["error"] = str(e)
+                _scrape_state["cookie_gaps"] = [
+                    _cookie_gap(forum_name, forum_url, platform, e)]
             except Exception as e:
                 _scrape_state["error"] = str(e)
             finally:
@@ -768,7 +795,7 @@ class API:
             "forum": None, "cancelled": False,
             "all_mode": True, "selected_mode": False, "run_id": None, "auto": False, "user_skipped": False, "aborted": False,   # אפס מצב מ'סנכרן נבחרים' קודם
             "forum_index": 0, "forum_total": len(forums),
-            "skipped": [], "failed_pages": 0,
+            "skipped": [], "failed_pages": 0, "cookie_gaps": [],
         })
 
         # מצטבר מהפורומים שהסתיימו; ההתקדמות מציגה מצטבר + הפורום הרץ כרגע
@@ -828,6 +855,15 @@ class API:
                                        _dt.datetime.utcnow().isoformat(timespec="minutes"))
                     _scrape_state["added"]   = base["added"]
                     _scrape_state["updated"] = base["updated"]
+                except scraper.AuthRequired as e:
+                    # פורום שכל מה שחסר לו הוא התחברות. הוא נספר כמדולג כמו
+                    # קודם, **ובנוסף** נרשם בנפרד — כדי שבסוף סריקה שהצליחה
+                    # אפשר יהיה לומר בדיוק מה חסר ולהציע לתקן.
+                    gap = _cookie_gap(f["name"], f.get("url"), f.get("platform"), e)
+                    _scrape_state["skipped"].append(
+                        {"forum": f["name"], "error": str(e), "needs_cookie": True})
+                    _scrape_state["cookie_gaps"].append(gap)
+                    continue
                 except Exception as e:
                     # דילוג אוטומטי על פורום שנכשל
                     _scrape_state["skipped"].append({"forum": f["name"], "error": str(e)})

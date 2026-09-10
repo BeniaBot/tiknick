@@ -5156,8 +5156,15 @@ async function doNetTest() {
     : `<span style="color:var(--danger)">❌ ${esc(r?.error || 'הבדיקה נכשלה')}</span>`;
 }
 
-async function openInternetSync() {
+async function openInternetSync(openWith) {
+  // `opts` כבר תפוס בהמשך הפונקציה (שורות תיבות הסימון), ושם זהה כאן היה
+  // מפיל את כל app.js על SyntaxError בטעינה — כלומר חלון לבן, לא באג נקודתי.
+  let focus = (openWith || {}).cookieFor || null;   // פורום שממתין לעוגייה
   const forums = await api('get_scrapable_forums') || [];
+  // הפורום שממתין לעוגייה נמחק או שונה שמו בין הסריקה ללחיצה? בלי הבדיקה
+  // הזו אף תיבה לא הייתה מסומנת — כי הסימון של פורום ממוקד **מחליף** את
+  // ברירת המחדל — והמשתמש היה מגיע לחלון ריק שאומר "לא סומן אף פורום".
+  if (focus && !forums.some(f => f.name === focus.forum)) focus = null;
   const known = await api('get_known_forums') || [];
   // נדרש כבר בבניית השורות — כל שורה מציגה מתי הפורום שלה נסרק
   S.lastScrapes = await api('get_last_scrapes') || {};
@@ -5175,7 +5182,8 @@ async function openInternetSync() {
       <input type="checkbox" class="sync-forum-cb" id="sync-f-${i}"
              value="${esc(f.name)}" data-url="${esc(f.url || '')}"
              data-platform="${esc(plat)}" data-login="${needsLogin ? '1' : '0'}"
-             ${i === 0 ? 'checked' : ''} onchange="onSyncForumChange()">
+             ${(focus ? f.name === focus.forum : i === 0) ? 'checked' : ''}
+             onchange="onSyncForumChange()">
       <label for="sync-f-${i}" style="flex:1;display:flex;gap:8px;align-items:baseline">
         <span><bdi>${esc(f.name)}</bdi>${tag}</span>
         <span style="margin-inline-start:auto;font-size:11px;color:var(--subtext)"
@@ -5218,7 +5226,7 @@ async function openInternetSync() {
         עוגיית התחברות (<span id="sync-cookie-name" dir="ltr">express.sid</span>) — רק אם הפורום דורש התחברות לצפייה במשתמשים (לא חובה). נשמרת לפעם הבאה.
       </label>
       <button class="btn btn-ghost btn-sm" style="white-space:nowrap;flex-shrink:0"
-              onclick="toggleCookieHelp('sync-cookie-help')" title="איך משיגים עוגיות?">🍪 איך משיגים?</button>
+              onclick="toggleCookieHelp('sync-cookie-help', syncCookieCtx())" title="איך משיגים עוגיות?">🍪 איך משיגים?</button>
     </div>
     <input id="sync-cookie" class="form-input" style="width:100%;margin-bottom:12px" dir="ltr"
            placeholder="הדבק כאן את ערך העוגייה (השאר ריק אם הפורום ציבורי)">
@@ -5269,6 +5277,23 @@ async function openInternetSync() {
     { label: 'סגור',        cls: 'btn-ghost',   action: closeSyncModal },
   ], 'modal-lg');
   onSyncForumChange();
+  if (focus) {
+    // onSyncForumChange כבר רץ, אבל שם העוגייה והרמז נגזרים מהפורום המסומן —
+    // ולכן חייבים לרוץ **אחרי** שהסימון נקבע, אחרת התווית אומרת express.sid
+    // בזמן שהשדה ממתין ל-xf_user.
+    updateSyncHint();
+    // הגענו לכאן מהודעת "צריך עוגייה", ולכן פורשים מיד את מה שבשבילו באנו
+    // במקום להשאיר את המשתמש לחפש איזה כפתור ללחוץ. זו החריגה היחידה
+    // מכלל "הכול מקופל" — כאן הפעולה ידועה מראש.
+    toggleCookieHelp('sync-cookie-help',
+                     { url: focus.url, cookieName: focus.cookie_name });
+    const ck = document.getElementById('sync-cookie');
+    if (ck) {
+      ck.placeholder = 'הדבק כאן את ערך העוגייה של ' + focus.forum;
+      ck.focus();
+      ck.scrollIntoView({ block: 'center' });
+    }
+  }
   // אם סריקה כבר רצה ברקע — הראה זאת במקום דיאלוג שנראה "רדום"
   api('get_scrape_progress').then(p => {
     if (!p || !p.running) return;
@@ -5453,7 +5478,10 @@ function startScrapeMonitor() {
       clearInterval(_scrapePoll); _scrapePoll = null;
       if (banner) banner.style.display = 'none';
       if (p.error) {
-        toast('שגיאת סריקה: ' + p.error, 'error');
+        // חוסם שהמשתמש יכול להסיר בהדבקה אחת אינו "שגיאת סריקה" סתם.
+        const gaps = cookieGapsOf(p);
+        if (gaps.length && !p.auto) promptForCookie(gaps);
+        else toast('שגיאת סריקה: ' + p.error, 'error');
       } else {
         const partial = (p.failed_pages || 0) > 0;
         // "הוגבלה" = נעצרה בגלל מקסימום עמודים שהמשתמש הגדיר. עד 0.8.5 זה דווח
@@ -5464,7 +5492,11 @@ function startScrapeMonitor() {
         let extra = '';
         if (partial) extra += ` · ${p.failed_pages} עמודים נכשלו`;
         if (p.limited && !partial) extra += ` · ${p.pages} עמודים`;
-        if (p.skipped && p.skipped.length) extra += ` · דולגו ${p.skipped.length} פורומים`;
+        if (p.skipped && p.skipped.length) {
+          const need = (p.cookie_gaps || []).length;
+          extra += ` · דולגו ${p.skipped.length} פורומים`;
+          if (need) extra += ` (${need} מחכים לעוגייה)`;
+        }
         // בסריקת "הכל" יש רשומת סריקה לכל פורום — מפנים ליומן ולא לרשומה האחרונה
         const act = p.all_mode ? { actionLabel: '📋 מה השתנה', onAction: openScanRuns, ms: 8000 }
                   : (p.run_id ? { actionLabel: '📋 מה השתנה',
@@ -5480,9 +5512,16 @@ function startScrapeMonitor() {
           toast(`${msg} — נוספו ${p.added}, עודכנו ${p.updated}${extra}`,
                 partial ? 'error' : 'success', act);
         }
-        // אילו פורומים דולגו ולמה — רק בסריקת "הכל" (ב"סנכרן נבחרים" אלה שמות ניקים)
-        if (p.all_mode && p.skipped && p.skipped.length && !p.cancelled && !isModalOpen()) {
-          showSkippedForums(p.skipped);
+        // 🍪 מה שחסר לו רק עוגייה מקבל הודעה משלו — **גם כשחלון הסנכרון
+        // פתוח**, כי הוא נשאר פתוח לאורך כל הסריקה וה-isModalOpen שמתחתיו
+        // הסתיר את זה בדיוק במקרה הנפוץ. ההודעה הזו גם מחליפה אותו במקום
+        // ראוי: היא מובילה בדיוק לשדה שצריך למלא.
+        const gaps = cookieGapsOf(p);
+        const other = (p.skipped || []).filter(x => !x.needs_cookie);
+        if (gaps.length && !p.cancelled && !p.auto) {
+          promptForCookie(gaps);
+        } else if (p.all_mode && other.length && !p.cancelled && !isModalOpen()) {
+          showSkippedForums(other);
         }
       }
       await _yieldPaint();   // תן לבאנר להיעלם לפני הטעינה הכבדה
@@ -5503,7 +5542,15 @@ function startScrapeMonitor() {
   }, 700);
 }
 
-function cookieHelpHtml() {
+function cookieHelpHtml(ctx) {
+  const c = ctx || {};
+  const host = (c.url || 'https://mitmachim.top').replace(/^https?:\/\//, '')
+                 .replace(/\/+$/, '');
+  const ck = c.cookieName || 'express.sid';
+  // XenForo מציג לפעמים כמה עוגיות; xf_user היא זו ששורדת סגירת דפדפן.
+  const sample = ck === 'express.sid' ? 's%3A' : '';
+  const startsWith = sample
+    ? ` (המחרוזת הארוכה שמתחילה ב-<code>${esc(sample)}</code>)` : '';
   return `
       <div style="margin-bottom:14px;padding:14px;border:1px solid var(--accent-2);border-radius:10px">
         <b style="font-size:13px">✅ דרך מומלצת: תוסף Get cookies.txt</b>
@@ -5512,23 +5559,23 @@ function cookieHelpHtml() {
             <b style="color:var(--accent-2);cursor:pointer;text-decoration:underline"
                onclick="openExt('https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc')">Get cookies.txt LOCALLY</b>
             ← בחלון שנפתח לחץ "Add to Chrome" / "הוסף ל-Chrome" ואשר.</li>
-          <li>היכנס לפורום <b>mitmachim.top</b> והתחבר לחשבון שלך (אם עדיין לא).</li>
+          <li>היכנס לפורום <b>${esc(host)}</b> והתחבר לחשבון שלך (אם עדיין לא).</li>
           <li>לחץ על אייקון התוסף (בפינה הימנית-עליונה של הדפדפן, ליד סרגל הכתובת. אם לא רואים — לחץ על אייקון הפאזל 🧩 ואז על התוסף).</li>
           <li>בחלון שנפתח לחץ על הכפתור <b>"Export"</b> — ייווצר קובץ טקסט, או שהתוכן יועתק.</li>
-          <li>בקובץ/טקסט חפש את השורה שכתוב בה <code>express.sid</code>, והעתק את <b>הערך שאחריה</b> (המחרוזת הארוכה שמתחילה ב-<code>s%3A</code>).</li>
-          <li>הדבק אותו בשדה "עוגיית express.sid" למטה.</li>
+          <li>בקובץ/טקסט חפש את השורה שכתוב בה <code>${esc(ck)}</code>, והעתק את <b>הערך שאחריה</b>${startsWith}.</li>
+          <li>הדבק אותו בשדה "עוגיית <span dir="ltr">${esc(ck)}</span>" למטה.</li>
         </ol>
       </div>
 
       <details style="margin-bottom:14px">
         <summary style="cursor:pointer;font-size:12.5px;font-weight:600">🔧 דרך חלופית: ידנית דרך כלי מפתחים (למתקדמים)</summary>
         <ol style="margin:8px 0 0;padding-inline-start:20px;font-size:12px;line-height:1.9;color:var(--subtext)">
-          <li>היכנס לפורום mitmachim.top והתחבר.</li>
+          <li>היכנס לפורום ${esc(host)} והתחבר.</li>
           <li>הקש <b>F12</b> לפתיחת כלי המפתחים.</li>
           <li>עבור ללשונית <b>Application</b> (או "אחסון"/Storage בדפדפנים מסוימים).</li>
-          <li>בתפריט הצד: <b>Cookies</b> ← לחץ על הכתובת <code>https://mitmachim.top</code>.</li>
-          <li>ברשימה שתופיע, מצא את השורה בשם <code>express.sid</code>.</li>
-          <li>לחץ עליה, העתק את הערך שבעמודת <b>Value</b> (מתחיל ב-<code>s%3A</code>), והדבק למטה.</li>
+          <li>בתפריט הצד: <b>Cookies</b> ← לחץ על הכתובת <code>${esc(c.url || 'https://mitmachim.top')}</code>.</li>
+          <li>ברשימה שתופיע, מצא את השורה בשם <code>${esc(ck)}</code>.</li>
+          <li>לחץ עליה, העתק את הערך שבעמודת <b>Value</b>, והדבק למטה.</li>
         </ol>
       </details>
 
@@ -5538,11 +5585,25 @@ function cookieHelpHtml() {
 }
 
 // מציג/מסתיר את ההסבר בתוך החלון הפתוח, בלי לסגור אותו
-function toggleCookieHelp(containerId) {
+function toggleCookieHelp(containerId, ctx) {
   const box = document.getElementById(containerId);
   if (!box) return;
-  if (!box.dataset.filled) { box.innerHTML = cookieHelpHtml(); box.dataset.filled = '1'; }
+  // ההדרכה נבנית מחדש כשההקשר משתנה — אחרת מי שפתח אותה פעם אחת היה מקבל
+  // לנצח את שם הפורום ואת שם העוגייה של הפורום הראשון שהסתכל עליו.
+  const key = ctx ? ((ctx.url || '') + '|' + (ctx.cookieName || '')) : 'default';
+  if (box.dataset.filled !== key) {
+    box.innerHTML = cookieHelpHtml(ctx);
+    box.dataset.filled = key;
+  }
   box.style.display = box.style.display === 'none' ? '' : 'none';
+}
+
+// ההקשר של החלון הפתוח, כדי שכפתור "איך משיגים?" ידבר על הפורום הנבחר
+function syncCookieCtx() {
+  const opt = syncActive();
+  return opt ? { url: opt.dataset.url || '',
+                 cookieName: (document.getElementById('sync-cookie-name') || {}).textContent }
+             : null;
 }
 
 function updateSyncHint() {
@@ -5590,6 +5651,50 @@ function updateSyncHint() {
 function onSyncForumChange() {
   updateSyncHint();
   syncPrefillCookie();
+}
+
+
+// ══ "חסרה עוגייה" — נאמר בסוף הסריקה שהצליחה ════════════════════════════
+// בנימין: "אם צריך עוגיה — שתבוא הודעה על כך עם דחיפה לעשות את זה, בסיום
+// הסריקה שכן הצליחה."
+//
+// עד כאן זה נבלע בשלושה מקומות בבת אחת: הטוסט אמר רק "דולגו N פורומים" בלי
+// לומר למה, רשימת המדולגים נפתחה **רק** כשאין חלון פתוח — וחלון הסנכרון
+// דווקא נשאר פתוח לאורך כל הסריקה, כי פס ההתקדמות יושב בתוכו — והדיאלוג
+// עצמו הציע "נסה שוב", שנכשל שוב באותו אופן בדיוק.
+function cookieGapsOf(p) {
+  const gaps = (p && p.cookie_gaps) || [];
+  const seen = new Set();
+  return gaps.filter(g => g && g.forum && !seen.has(g.forum) && seen.add(g.forum));
+}
+
+function promptForCookie(gaps) {
+  const one = gaps.length === 1;
+  const rows = gaps.map(g => `
+    <div style="display:flex;gap:10px;align-items:baseline;padding:7px 0;
+                border-bottom:1px solid var(--border-soft);font-size:13px">
+      <span>🔒</span><b style="flex:1"><bdi>${esc(g.forum)}</bdi></b>
+      <code dir="ltr" style="font-size:11.5px;color:var(--subtext)">${esc(g.cookie_name || '')}</code>
+    </div>`).join('');
+  openModal('🍪 צריך עוגייה כדי לסרוק', `
+    <p style="font-size:13.5px;line-height:1.85;margin-bottom:12px">
+      הסריקה הסתיימה, אבל ${one ? 'פורום אחד לא נסרק' : `${gaps.length} פורומים לא נסרקו`}:
+      ${one ? 'הוא מציג' : 'הם מציגים'} את רשימת החברים רק למי שמחובר.
+    </p>
+    ${rows}
+    <p style="font-size:13px;line-height:1.85;margin-top:12px;color:var(--subtext)">
+      זה נפתר פעם אחת ונשמר: מדביקים את העוגייה, ומכאן והלאה
+      ${one ? 'הפורום ייסרק' : 'הפורומים ייסרקו'} כרגיל בלי לגעת בזה שוב.
+    </p>
+    <p style="font-size:12.5px;line-height:1.8;margin-top:8px;
+              padding:9px 11px;background:var(--card2);border-radius:7px">
+      בלחיצה על הכפתור למטה ההסבר המלא ייפתח מעצמו, שלב אחר שלב,
+      עם השם המדויק שצריך לחפש.
+    </p>`, [
+    { label: '🍪 הוסף עוגייה עכשיו', cls: 'btn-primary',
+      action: () => { closeModal(); openInternetSync({ cookieFor: gaps[0] }); } },
+    { label: 'לא עכשיו', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-sm');
 }
 
 function showSkippedForums(skipped) {
