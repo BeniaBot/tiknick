@@ -187,6 +187,19 @@ ok("main מחבר את השפה לצד הפייתון",
    'i18n.set_lang(db.get_setting("display_lang", "he"))' in
    io.open(os.path.join(ROOT, "main.py"), encoding="utf-8").read())
 
+# ── תרגום עם גרש שובר את ה-JS שהוא יושב בתוכו ────────────────────────────
+# `translate_template` מחליף טקסט גם **בתוך** מחרוזות ב-<script>, ולכן ערך
+# אנגלי שמכיל ' או " סוגר את הליטרל ומפיל את כל הסקריפט. זה קרה בפועל עם
+# "the voters' names", והדוח באנגלית נשבר לגמרי בלי שום שגיאה נראית.
+import chazonishnik as _CZ    # noqa: E402
+import stinknik as _SK        # noqa: E402
+for _name, _map in (("chazonishnik", _CZ._TPL_EN), ("stinknik", _SK._TPL_EN)):
+    # הסכנה היא הגרש הבודד: מחרוזות ה-JS בדוחות עטופות ב-'...', וגרש בתוך
+    # הערך סוגר אותן. גרשיים כפולות בתוך מחרוזת בגרש בודד תקינות לגמרי,
+    # ויש גם החלפות של שורת JS שלמה שמכילות אותן בדין.
+    _bad = [k for k, v in _map.items() if "'" in v]
+    ok("%s: אין גרש בודד בערכי התרגום" % _name, not _bad, _bad[:3])
+
 print()
 if fails:
     print("FAILED:", fails)

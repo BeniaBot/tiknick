@@ -42,8 +42,11 @@ def post(i, ts, hour, likes, tid, title, votes_ok=True,
           for m in (mentions or [])]
     return {"pid": i, "title": title, "tid": tid, "ts": ts,
             "date": "2025-01-01", "hour": hour, "dow": 2, "day": "רביעי",
-            "month": "2025-01", "likes": likes, "voters": voters or [],
-            "votes_ok": votes_ok, "mentions": ms, "words": 40}
+            "month": "2025-01", "likes": likes, "down": 0, "voters": voters or [],
+            "votes_ok": votes_ok, "mentions": ms, "words": 40,
+            # השדות שמגיעים חינם עם הפוסט
+            "is_main": False, "replies": 0, "to_pid": None, "reply_uid": None,
+            "topic_uid": 55, "topic_posts": 10, "cat": "כללי"}
 
 
 def build(posts):
@@ -61,7 +64,8 @@ const mk = () => ({ _h: '', set innerHTML(v){ this._h = v; },
                     get innerHTML(){ return this._h; }, innerText: '',
                     title: '', style: {} });
 for (const id of ['list-gaps','list-sharp','list-threads','list-social','list-fans','list-best',
-                  'stat-posts','stat-likes','stat-words','stat-time'])
+                  'list-replyto','list-hosts','list-role','list-cats','list-spark',
+                  'stat-posts','stat-posts-sub','stat-likes','stat-words','stat-time'])
   boxes[id] = mk();
 globalThis.document = { getElementById: id => boxes[id] || mk() };
 globalThis.Chart = function(){ return {}; };
@@ -70,7 +74,14 @@ Chart.defaults = {};
 console.log(JSON.stringify({ gaps: boxes['list-gaps'].innerHTML,
                              sharp: boxes['list-sharp'].innerHTML,
                              social: boxes['list-social'].innerHTML,
-                             threads: boxes['list-threads'].innerHTML }));
+                             threads: boxes['list-threads'].innerHTML,
+                             replyto: boxes['list-replyto'].innerHTML,
+                             hosts: boxes['list-hosts'].innerHTML,
+                             role: boxes['list-role'].innerHTML,
+                             cats: boxes['list-cats'].innerHTML,
+                             spark: boxes['list-spark'].innerHTML,
+                             likes: boxes['stat-likes'].innerHTML
+                                    || boxes['stat-likes'].innerText }));
 """ % body
     p = os.path.join(tempfile.mkdtemp(), "r.js")
     io.open(p, "w", encoding="utf-8").write(js)
@@ -128,11 +139,17 @@ tiny = [post(i, BASE_TS + i * DAY, i % 24, i, 400 + i, "x") for i in range(6)]
 out = render(build(tiny), "sharp")
 ok("מדגם קטן לא מפיק מסקנה", "אין מספיק פוסטים בשעה" in out, out[:200])
 
-# ספירת לייקים חלקית — המקטע מושבת במקום לשקר
-broken = [post(i, BASE_TS + i * DAY, 23, 0, 500 + i, "x", votes_ok=(i > 8))
-          for i in range(10)]
-out = render(build(broken), "sharp")
-ok("ספירה חלקית משביתה את המקטע", "מושבת" in out, out[:220])
+# ספירת הלייקים מגיעה חינם עם הפוסט, ולכן המקטע הזה כבר **אינו** תלוי
+# בעוגייה ואינו משבית את עצמו. נמדד: סכום `upvotes` על 36 פוסטים = 41,
+# בדיוק כמו 36 בקשות הצבעה עם עוגייה.
+# שתי שעות, כדי שיהיה מה להשוות — בלי שמות מצביעים בכלל
+nonames = ([post(i, BASE_TS + i * DAY, 23, 9, 500 + i, "x", votes_ok=False)
+            for i in range(6)]
+           + [post(60 + i, BASE_TS + i * DAY, 8, 1, 560 + i, "x", votes_ok=False)
+              for i in range(6)])
+out = render(build(nonames), "sharp")
+ok("בלי שמות מצביעים המקטע עדיין עובד", "מושבת" not in out, out[:220])
+ok("והוא מציג לייקים לפוסט", "לייקים לפוסט" in out, out[:220])
 
 
 # ══ 💬 כמה הוא נשאר בשרשור ════════════════════════════════════════════════
@@ -334,7 +351,7 @@ ok("הקישור נבנה מהסלאג",
 part = [dict(p, votes_ok=False) for p in soc]
 out2 = render(build(part), "social")
 ok("בלי ספירת לייקים אין קבוצה שלילית", "🙊 פונה אליהם" not in out2)
-ok("והמשתמש מקבל הסבר", "ספירת הלייקים הייתה חלקית" in out2)
+ok("והמשתמש מקבל הסבר", "שמות של מי שעשה לייק" in out2, out2[-220:])
 
 # בלי כלום — מצב ריק מפורש
 out3 = render(build([post(1, BASE_TS, 10, 0, 1, "א")]), "social")
@@ -345,6 +362,87 @@ bad = [post(1, BASE_TS, 10, 1, 1, "א", mentions=["x"],
             voters=[voter(9, '<img src=x onerror=alert(1)>', "x")])]
 out4 = render(build(bad), "social")
 ok("שם עוין עובר בריחה", "<img src=x" not in out4)
+
+# ══ חמשת המקטעים מהשדות שכבר הגיעו — אפס בקשות ═══════════════════════════
+# `isMainPost`, `replies`, `category`, `topic.uid` — כולם היו בתשובה מהיום
+# הראשון ואיש לא נגע בהם. נמדד על בנימין: 98% מהפוסטים שלו הם תגובות,
+# הוא חי בשרשורים של 431 אנשים, ו-1,433 תגובות נענו לפוסטים שלו.
+def rich(i, **kw):
+    p = post(i, BASE_TS + i * DAY, 10, kw.pop("likes", 0), kw.pop("tid", 100 + i), "נושא %d" % i)
+    p.update(kw)
+    return p
+
+
+def build_meta(posts, meta):
+    return CZ._build_html("someone", "https://forum.example", 7, posts, meta)
+
+
+def render_meta(posts, meta, section):
+    return render(build_meta(posts, meta), section)
+
+
+NAMES = {"names": {"99": {"name": "דוד כהן", "slug": "דוד-כהן"},
+                   "88": {"name": "שרה", "slug": "שרה"},
+                   "77": {"name": "המארח", "slug": "המארח"}},
+         "reply_resolved": 8, "reply_total": 20}
+
+rows = ([rich(i, reply_uid=99, to_pid=900 + i, topic_uid=77, cat="מחשבים",
+              replies=(3 if i == 1 else 0)) for i in range(1, 6)]
+        + [rich(i, reply_uid=88, to_pid=900 + i, topic_uid=55, cat="סלולרי")
+           for i in range(6, 9)]
+        + [rich(9, is_main=True, topic_uid=7, cat="מחשבים")])
+
+# 🎭 יוזם או מגיב
+out = render_meta(rows, NAMES, "role")
+ok("נספרו שרשורים שנפתחו", ">1<" in out, out[:200])
+ok("ונספרו תגובות", ">8<" in out, out[:200])
+ok("והאחוז מוצג", "89%" in out, out[-160:])
+
+# 📍 קטגוריות
+out = render_meta(rows, NAMES, "cats")
+ok("הקטגוריה השכיחה ראשונה", out.index("מחשבים") < out.index("סלולרי"), out[:200])
+ok("מספר הקטגוריות מוצג", "2 קטגוריות" in out, out[-120:])
+
+# 🏠 בשרשורים של מי
+out = render_meta(rows, NAMES, "hosts")
+ok("המארח המוביל מוצג בשמו", "המארח" in out, out[:200])
+ok("שרשורים שלו עצמו נספרים בנפרד", "פתח: 1" in out, out[-160:])
+ok("המשתמש עצמו אינו מארח של עצמו ברשימה",
+   out.index("המארח") < (out.index("פתח: 1")), out[:80])
+
+# 💥 מה הצית שיחה
+out = render_meta(rows, NAMES, "spark")
+ok("הפוסט שעורר תגובות מוצג", "3 תגובות" in out, out[:200])
+ok("והממוצע מחושב", "0.33" in out, out[-160:])
+
+# 🗣️ למי הוא עונה — **וכיסוי חלקי נאמר במפורש**
+out = render_meta(rows, NAMES, "replyto")
+ok("היעד המוביל מוצג בשמו", "דוד כהן" in out, out[:200])
+ok("והשני אחריו", out.index("דוד כהן") < out.index("שרה"), out[:200])
+ok("הכיסוי מוצהר", "8 מתוך 20" in out and "40%" in out, out[-260:])
+ok("ונאמר שזה החלון האחרון", "עכשיו" in out, out[-260:])
+
+# בלי תגובות בכלל — מצב ריק מפורש, לא כרטיס ריק
+out = render_meta([rich(1)], {"reply_total": 0}, "replyto")
+ok("בלי תגובות נאמר במפורש", "אינו תגובה לפוסט מסוים" in out, out[:160])
+
+# המשתמש עצמו לא נספר כמי שהוא עונה לו
+out = render_meta([rich(1, reply_uid=7, to_pid=901)], NAMES, "replyto")
+ok("תגובה לעצמו אינה נספרת", "לא הצלחנו לזהות" in out, out[:160])
+
+
+# ══ ספירת הלייקים חופשית מהעוגייה ════════════════════════════════════════
+# נמדד מול הפורום: סכום `upvotes` על 36 פוסטים = 41, ובדיוק 41 נספרו
+# ב-36 בקשות הצבעה עם עוגייה. הדוח הציג "—" על מספר שכבר היה בידיים.
+out = render_meta([rich(i, likes=2, votes_ok=False) for i in range(1, 6)],
+                  {}, "likes")
+ok("לייקים מוצגים גם בלי שמות מצביעים", "10" in out, out)
+ok("ולא מוצג מקף", out.strip() != "—", out)
+
+src2 = io.open(CZ.__file__, encoding="utf-8").read()
+ok("הספירה נלקחת מהפוסט עצמו", 'int(post.get("upvotes") or 0)' in src2)
+ok("בלי עוגייה לא נשלחת בקשת הצבעה", "if not cookie:" in src2)
+ok("ופוסט בלי לייקים לא נשאל בכלל", "if not give_up and likes:" in src2)
 
 print()
 if fails:
