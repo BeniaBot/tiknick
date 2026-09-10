@@ -1,6 +1,6 @@
 # Tik-Nick — מסמך הקשרים (מקור אמת יחיד)
 
-> נכתב מקריאה מלאה של כל הקוד; עודכן לגרסה **0.9.2** (2026-09).
+> נכתב מקריאה מלאה של כל הקוד; עודכן לגרסה **0.9.3** (2026-09).
 > **`context_compress.md` ו-`project_map.md` מיושנים** (מתארים 0.2.5) — אל תסתמך עליהם.
 
 ## מהות
@@ -1785,7 +1785,8 @@ CLAUDE.md ציין "אין בדיקות UI", והתוכנה היא חלון PyWe
 | ימות המשיח | f2.freeivr.co.il | NodeBB (13,576 משתמשים) | ✅ |
 | נטפרי | forum.netfree.link | NodeBB (לעיתים במצב תחזוקה 503) | ✅ |
 | חרדים נעייס | charedim-neyes.onrender.com | NodeBB (Render — נרדם, מתעורר לאט) | ✅ |
-| לתורה / פרוג / אוצר התורה | tora-forum / prog.co.il / forum-otzar-hatorah | **XenForo** (REST דורש API key) | ❌ |
+| פרוג / לתורה | prog.co.il / tora-forum | **XenForo** — ה-REST דורש API key, אבל `/members/list/` הוא HTML ציבורי | ✅ (מ-0.9.3) |
+| אוצר התורה | forum-otzar-hatorah | XenForo — רשימת החברים מאחורי התחברות (403) | 🔒 דורש עוגייה |
 | אוצר החכמה / אייוועלט / אידטיש | forum.otzar.org / ivelt.com / yidtish | **phpBB** (memberlist HTML בלבד) | ❌ |
 | בחדרי חרדים | forums.bhol.co.il | ASP ייחודי | ❌ |
 | קדם (נשים) | kedemcenter.co.il | WordPress+BuddyBoss (יש `/wp-json/buddyboss/v1/members`) | לא נוסף |
