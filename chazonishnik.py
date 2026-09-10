@@ -196,7 +196,7 @@ _TPL_EN = {
     "בלי עוגיית התחברות אין שמות של מי שעשה לייק, ולכן לא מוצגת הקבוצה השלישית": "Without a login cookie there are no voter names, so the third group is not shown",
     " תגובות לכל פוסט": " replies per post",
     "% מהפוסטים שנסרקו הם תגובות": "% of the scanned posts are replies",
-    " פוסטים שנסרקו)": " posts scanned)",
+    " שבפרופיל)": " on the profile)",
     "אף פוסט שנסרק אינו תגובה לאדם אחר":
         "No scanned post is a reply to another person",
     "כל התגובות שנפתרו היו לפוסטים שלו עצמו":
@@ -1323,7 +1323,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   const basis = (meta.limited || meta.partial)
     ? ' <span style="opacity:.8">(' + data.length.toLocaleString() +
       (meta.postcount ? ' מתוך ' + Number(meta.postcount).toLocaleString() : '') +
-      ' פוסטים שנסרקו)</span>'
+      ' שבפרופיל)</span>'
     : '';
   const count = (arr, key) => {
     const c = {}; arr.forEach(x => { const k = key(x); if (k || k === 0) c[k] = (c[k]||0)+1; });
