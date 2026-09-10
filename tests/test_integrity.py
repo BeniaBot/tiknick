@@ -149,7 +149,7 @@ ok("קריאת גשר מתחת ל-3ms (בלי בריכה זה היה ~3.4ms)", p
 # ── סריקת NodeBB לא סומכת על pageCount ────────────────────────────────
 class _FakeDB:
     def __init__(self): self.seen = []
-    def merge_scraped_users(self, forum, pairs, source_label=None, run_id=None):
+    def merge_scraped_users(self, forum, pairs, source_label=None, run_id=None, platform="nodebb"):
         self.seen += [u for u, _ in pairs]
         return {"added": len(pairs), "updated": 0, "unchanged": 0}
 

@@ -255,21 +255,35 @@ finally:
     FS.net.urlopen = _real
 ok("בלי עוגייה לא נשלחת כותרת", seen.get("cookie") is None, seen)
 
+# 🚨 מ-0.9.5 השם **אינו** נכפה כאן. הוא היה מקובע ל-express.sid, ולכן
+# עוגיית xf_user תקינה — בדיוק זו שהנדנוד של 0.9.4 מבקש מהמשתמש — נשלחה
+# בשם של פורום אחר והשרת התעלם ממנה בשקט. הנרמול נעשה ב-main.py, שם
+# ידועה הפלטפורמה; forumstats במכוון אינו מכיר את המאגר.
 FS.net.urlopen = _spy
 try:
-    FS.analyze_forum(BASE, "s%3Aabc")
+    FS.analyze_forum(BASE, "xf_user=ABC")
 finally:
     FS.net.urlopen = _real
-ok("ערך גולמי מקבל את שם העוגייה",
-   seen.get("cookie") == "express.sid=s%3Aabc", seen)
+ok("העוגייה נשלחת כפי שהתקבלה, בלי לכפות שם",
+   seen.get("cookie") == "xf_user=ABC", seen)
 
 FS.net.urlopen = _spy
 try:
     FS.analyze_forum(BASE, "express.sid=s%3Aabc")
 finally:
     FS.net.urlopen = _real
-ok("ושם שכבר קיים לא מוכפל",
+ok("וגם עוגיית NodeBB עוברת כמות שהיא",
    seen.get("cookie") == "express.sid=s%3Aabc", seen)
+
+src_fs = io.open(FS.__file__, encoding="utf-8").read()
+ok("אין יותר כפיית express.sid במודול",
+   'express.sid=" + cookie' not in src_fs and "startswith(\"express.sid=\")" not in src_fs)
+
+# והנרמול אכן קורה בצד שיודע את הפלטפורמה
+_m = io.open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "main.py"), encoding="utf-8").read()
+ok("main.py מנרמל לפי הפלטפורמה לפני שהוא מוסר ל-forumstats",
+   "scraper.normalize_cookie(" in _m and "get_forum_platform_by_url(url)" in _m)
 
 
 # ══ נימוס: יש השהיה בין בקשות ════════════════════════════════════════════

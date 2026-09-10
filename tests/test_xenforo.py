@@ -37,7 +37,8 @@ class DummyDB(object):
     def __init__(self):
         self.rows = {}
 
-    def merge_scraped_users(self, forum, users, source_label="", run_id=None):
+    def merge_scraped_users(self, forum, users, source_label="", run_id=None,
+                            platform="nodebb"):
         added = 0
         for name, mapped in users:
             key = mapped.get("forum_uid") or name

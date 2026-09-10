@@ -65,8 +65,14 @@ for fn, swallow in (("start_scrape", '_scrape_state["error"] = str(e)'),
             generic = m.start()
             break
     ok("%s: AuthRequired נתפס לפני הבולע" % fn, 0 <= auth < generic, (auth, generic))
-ok("שני המסלולים מאפסים את cookie_gaps",
-   src.count('"cookie_gaps": []') == 2, src.count('"cookie_gaps": []'))
+# שלושה מסלולים כותבים ל-_scrape_state, ושלושתם חייבים לאפס: פורום בודד,
+# "סרוק הכל", ו"סנכרן נבחרים". האחרון נשכח ב-0.9.4, ולכן פער עוגייה מסריקה
+# קודמת קפץ כנדנוד בסוף סנכרון שהצליח לגמרי.
+ok("שלושת המסלולים מאפסים את cookie_gaps",
+   src.count('"cookie_gaps": []') == 3, src.count('"cookie_gaps": []'))
+for fn in ("start_scrape", "start_scrape_all", "sync_selected_online"):
+    i = src.index("def %s(" % fn)
+    ok("  %s מאפס" % fn, '"cookie_gaps": []' in src[i:i + 3000])
 
 
 # ══ 2. הצד-לקוחי, מתוך app.js האמיתי ═════════════════════════════════════
