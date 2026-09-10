@@ -76,7 +76,7 @@ class _ChzCancelled(Exception):
 
 
 # ── גרסה נוכחית (לבדיקת עדכונים) ────────────────────────────────────
-APP_VERSION = "0.9.2"
+APP_VERSION = "0.9.3"
 GITHUB_REPO = "BeniaBot/tiknick"
 
 def _looks_like_inno_setup(path):
@@ -669,7 +669,8 @@ class API:
             return {"ok": False, "user_count": None, "title": None,
                     "platform": "unknown", "error": str(e)}
 
-    def start_scrape(self, forum_name, forum_url, cookie="", max_pages=None):
+    def start_scrape(self, forum_name, forum_url, cookie="", max_pages=None,
+                     min_posts=0):
         """מתחיל סריקה ברקע. הממשק יסקור התקדמות דרך get_scrape_progress."""
         if _scrape_state["running"]:
             return {"ok": False, "error": "סריקה כבר רצה"}
@@ -719,6 +720,7 @@ class API:
                         max_pages=mp,
                         platform=platform,
                         run_id=run_id,
+                        min_posts=int(min_posts or 0),
                     )
                 finally:
                     # תמיד סוגרים את רשומת הסריקה — גם בביטול או בשגיאה

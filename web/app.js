@@ -1340,9 +1340,17 @@ function renderOpenBtn(td, n) {
   td.appendChild(btn);
 }
 
-function buildProfileUrl(forum, username) {
+function buildProfileUrl(forum, username, forumUid) {
   const base = (forum.url || '').replace(/\/+$/, '');
   const uname = (username || '').trim();
+  // XenForo מאתר פרופיל לפי **מזהה מספרי**, לא לפי שם: /members/<uid>/.
+  // אין ב-XenForo שום נתיב GET לפי שם משתמש, ולכן תבנית {user} לא יכולה
+  // לעבוד כאן בכלל. המזהה נאסף בסריקה (forum_uid), ובלעדיו עדיף לפתוח את
+  // הפורום עצמו מאשר לשלוח את המשתמש לכתובת שתחזיר 404.
+  if ((forum.platform || '') === 'xenforo') {
+    const uid = String(forumUid || '').trim();
+    return uid ? `${base}/members/${encodeURIComponent(uid)}/` : (base || '#');
+  }
   // תבנית מפורשת (למשל phpBB: /memberlist.php?...&un={user})
   if (forum.profile_pattern) {
     return base + forum.profile_pattern.replace('{user}', encodeURIComponent(uname));
@@ -1372,7 +1380,7 @@ function openNickProfile(n) {
     toast(`לא הוגדר קישור לפורום "${n.forum}" — ניתן להוסיפו בניהול פורומים`, 'info');
     return;
   }
-  const profileUrl = buildProfileUrl(forum, n.username);
+  const profileUrl = buildProfileUrl(forum, n.username, n.forum_uid);
   api('open_url', profileUrl);
 }
 
@@ -5022,7 +5030,7 @@ let _scrapePoll = null;
 
 const PLATFORM_LABELS = { nodebb: 'NodeBB', discourse: 'Discourse',
   xenforo: 'XenForo', phpbb: 'phpBB', custom: 'מערכת ייחודית' };
-const SCRAPABLE_PLATFORMS = new Set(['nodebb', 'discourse']);
+const SCRAPABLE_PLATFORMS = new Set(['nodebb', 'discourse', 'xenforo']);
 
 // ══ רשת ופרוקסי ══════════════════════════════════════════════════════════
 // לא כפתור בתפריט: זו הגדרה שנוגעים בה פעם אחת, והמקום הטבעי שלה הוא ליד
@@ -5223,6 +5231,13 @@ async function openInternetSync() {
       <span style="font-size:11px;color:var(--subtext)">~50 משתמשים בעמוד</span>
     </div>
 
+    <div id="sync-minposts-row" style="display:none;align-items:center;gap:8px;margin-bottom:12px">
+      <label style="font-size:12px;color:var(--subtext);white-space:nowrap">מינימום הודעות:</label>
+      <input id="sync-minposts" type="number" min="0" value="1" class="form-input" style="width:120px"
+             title="ניק ייכנס למאגר רק אם כתב לפחות כך וכך הודעות. 0 = הכול, כולל מי שנרשם ומעולם לא כתב.">
+      <span style="font-size:11px;color:var(--subtext)">0 = כולל מי שמעולם לא כתב</span>
+    </div>
+
     <div class="section-hdr">אוטומציה ותיעוד</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
       <button class="btn btn-ghost btn-sm" onclick="openScheduler(openInternetSync)"
@@ -5368,7 +5383,23 @@ async function doStartScrape() {
       toast(`פלטפורמת ${PLATFORM_LABELS[plat] || plat} אינה נתמכת לסריקה אוטומטית`, 'error');
       return;
     }
-    start = await api('start_scrape', opt.value, url, cookie, maxPages);
+    // מינימום הודעות: בפורומי XenForo כ-60% מהחשבונות מעולם לא כתבו דבר,
+    // ובפרוג זה ~88,000 שורות ריקות. ההחלטה של המשתמש, בכל סריקה מחדש.
+    const minPosts = parseInt(document.getElementById('sync-minposts')?.value);
+    // סריקת XenForo היא HTML ולא API — עמוד לעמוד, ובפורום גדול זו כמעט
+    // שעה. עדיף לומר את זה מראש מאשר להשאיר את המשתמש מול פס שלא זז.
+    if (plat === 'xenforo' && !maxPages) {
+      const est = await api('check_forum', url, cookie);
+      const n = est && est.user_count;
+      const mins = n ? Math.max(1, Math.round(n / 250 * 2.7 / 60)) : null;
+      if (!confirm('סריקת פורום XenForo קוראת את רשימת החברים עמוד אחר עמוד.' +
+            (n ? '\n\nבפורום הזה יש כ-' + n.toLocaleString() + ' חברים, ' +
+                 'והסריקה תימשך כ-' + mins + ' דקות.' : '') +
+            '\n\nאפשר להשאיר את התוכנה פתוחה ולהמשיך לעבוד, ואפשר לעצור באמצע.' +
+            '\n\nלהתחיל?')) return;
+    }
+    start = await api('start_scrape', opt.value, url, cookie, maxPages,
+                      Number.isFinite(minPosts) && minPosts > 0 ? minPosts : 0);
   }
   if (!start || !start.ok) { toast(start?.error || 'לא ניתן להתחיל סריקה', 'error'); return; }
 
@@ -5520,14 +5551,25 @@ function updateSyncHint() {
   if (!opt || !hint) return;
   const picked = syncPicked();
   const plat = opt.dataset.platform || 'nodebb';
-  // שם העוגייה תלוי בפלטפורמה: NodeBB → express.sid, Discourse → _t
-  const cookieName = plat === 'discourse' ? '_t' : 'express.sid';
+  // שם העוגייה תלוי בפלטפורמה: NodeBB → express.sid, Discourse → _t,
+  // XenForo → xf_user (זו עוגיית ה"זכור אותי" ארוכת החיים; xf_session פגה
+  // תוך שעות ולא תשרוד סריקה של 40 דקות).
+  const COOKIE_BY_PLAT = { discourse: '_t', xenforo: 'xf_user' };
+  const cookieName = COOKIE_BY_PLAT[plat] || 'express.sid';
   const ckEl = document.getElementById('sync-cookie-name');
   if (ckEl) ckEl.textContent = cookieName;
+  // "מינימום הודעות" מוצג רק ב-XenForo: רק שם ספירת ההודעות מגיעה באותה
+  // תשובה שמחזירה את רשימת החברים, ולכן הסינון אינו עולה אף בקשה נוספת.
+  const mpRow = document.getElementById('sync-minposts-row');
+  if (mpRow) mpRow.style.display = (plat === 'xenforo' && picked.length === 1) ? 'flex' : 'none';
   if (!SCRAPABLE_PLATFORMS.has(plat)) {
     hint.innerHTML = `⛔ פלטפורמת ${esc(PLATFORM_LABELS[plat] || plat)} — אין API ציבורי לרשימת משתמשים, ` +
                      `לכן אין סריקה אוטומטית. אפשר להוסיף ולנהל ניקים בפורום זה ידנית.`;
     hint.style.color = 'var(--danger)';
+  } else if (plat === 'xenforo') {
+    hint.innerHTML = 'ℹ️ פורום XenForo — נסרקים שם משתמש, מספר הודעות ומוניטין. ' +
+      'תאריך הצטרפות ומייל אינם מופיעים ברשימת החברים ולכן אינם נסרקים.';
+    hint.style.color = 'var(--subtext)';
   } else if (opt.dataset.login === '1') {
     hint.innerHTML = `🔒 פורום זה דורש התחברות — הזן את עוגיית <span dir="ltr">${cookieName}</span> למטה (ראה "🍪 איך משיגים?").`;
     hint.style.color = 'var(--accent-2)';

@@ -2130,9 +2130,9 @@ def sched_due_forums(now=None):
         name = f["name"]
         if name not in cfg["forums"]:
             continue
-        # פורום שהסורק מסרב לו (XenForo/phpBB/custom) נכשל מיד, וכל טיק היה
-        # סופר עוד כישלון — חמש דקות וכל התזמון נכבה בגלל פורום אחד.
-        if (f.get("platform") or "nodebb") not in ("nodebb", "discourse"):
+        # פורום שהסורק מסרב לו (phpBB/custom) נכשל מיד, וכל טיק היה סופר
+        # עוד כישלון — חמש דקות וכל התזמון נכבה בגלל פורום אחד.
+        if (f.get("platform") or "nodebb") not in ("nodebb", "discourse", "xenforo"):
             continue
         if not (f.get("url") or "").strip():
             continue
