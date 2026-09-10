@@ -445,6 +445,44 @@ ok("הספירה נלקחת מהפוסט עצמו", 'int(post.get("upvotes") or 
 ok("בלי עוגייה לא נשלחת בקשת הצבעה", "if not cookie:" in src2)
 ok("ופוסט בלי לייקים לא נשאל בכלל", "if not give_up and likes:" in src2)
 
+
+# ══ המוניטין ומספר השרשורים מדף האודות, לא מהנסרק ════════════════════════
+# בנימין: "חישבת פוסטים מהמקור הגלוי בפרופיל וכללת מחוקים וזה טוב. אבל
+# בלייקים (מוניטין) כללת רק גלויים ולא לקחת את המספר המלא שגלוי בדף האודות."
+# שני מונים סמוכים חייבים לדבר באותה מטבע — אחרת אחד מהם נראה כמו טעות.
+ok("מוניטין ומספר שרשורים נקראים מהפרופיל",
+   CZ._official_counts({"reputation": 2115, "topiccount": 41, "postcount": 1988})
+   == {"reputation": 2115, "topiccount": 41})
+ok("ופרופיל שלא חושף אותם מחזיר אפס",
+   CZ._official_counts({}) == {"reputation": 0, "topiccount": 0})
+ok("וערך פגום אינו מפיל את הדוח",
+   CZ._official_counts({"reputation": "לא מספר", "topiccount": None})
+   == {"reputation": 0, "topiccount": 0})
+ok("גם None עצמו נסבל", CZ._official_counts(None)["reputation"] == 0)
+
+five = [post(i, BASE_TS + i * DAY, 10, 3, 100 + i, "נושא") for i in range(1, 6)]
+
+k = kpi(five, {"postcount": 1988, "reputation": 2115})
+ok("ה-KPI מציג את המוניטין הרשמי", k["likes"] == "2,115", k)
+
+# בלי מוניטין בפרופיל נשארת ההתנהגות הישנה — הסכום מהפוסטים שנסרקו
+k0 = kpi(five, {"postcount": 1988})
+ok("ובלי מוניטין נופלים ללייקים שנספרו", k0["likes"] == "15", k0)
+
+# 🎭 שתי השורות מאותו מקור. postcount סופר גם את הפוסט הפותח, ולכן
+# התגובות הרשמיות הן ההפרש — והסכום חייב לצאת בדיוק postcount.
+mixed = [rich(1, is_main=True, topic_uid=7)] + [rich(i, topic_uid=7) for i in range(2, 6)]
+out = render_meta(mixed, {"postcount": 1988, "topiccount": 41}, "role")
+ok("פתח שרשורים לפי דף האודות", ">41<" in out, out[:300])
+ok("והתגובות הן ההפרש", ">1,947<" in out, out[:300])
+ok("ושתי השורות מציינות כמה נסרק", out.count("לפי דף הפרופיל") == 2, out[:300])
+ok("והאחוז מחושב מהמספרים הרשמיים", "98%" in out, out[-200:])
+
+# פרופיל שאינו חושף topiccount ממשיך בדיוק כמו קודם
+out0 = render_meta(mixed, {"postcount": 1988}, "role")
+ok("בלי topiccount נספר מה שנסרק", ">1<" in out0 and ">4<" in out0, out0[:300])
+ok("ואז לא נטען שזה מדף הפרופיל", "לפי דף הפרופיל" not in out0, out0[:300])
+
 print()
 if fails:
     print("FAILED (%d): %s" % (len(fails), ", ".join(fails)))

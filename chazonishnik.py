@@ -255,6 +255,16 @@ _TPL_EN = {
     " פוסטים לא נכללו — ספירת הלייקים שלהם נכשלה":
         " posts were excluded — their like counts failed",
     "נסרקו ": "scanned ",
+    "מוניטין הוא לייקים פחות דיסלייקים, כפי שהפורום מציג בדף האודות":
+        "Reputation is upvotes minus downvotes, exactly as the forum shows it "
+        "on the About page",
+    "נמדדו ": "Measured ",
+    " לייקים בנסרקים": " upvotes among the scanned posts",
+    "ההפרש הוא פוסטים שהסריקה אינה יכולה לקרוא — מחוקים, או בקטגוריות שדורשות הרשאה":
+        "The gap is posts the scan cannot read — deleted, or in categories that "
+        "require permission",
+    "לפי דף הפרופיל · ": "From the profile page · ",
+    "% מהפוסטים שלו הם תגובות": "% of his posts are replies",
     "הפער הוא פוסטים שהסריקה אינה יכולה לקרוא: מחוקים, או בקטגוריות שדורשות הרשאה. כל שאר הנתונים בדוח מחושבים מהפוסטים שנסרקו.":
         "The gap is posts the scan cannot read: deleted, or in categories that require permission. Everything else in this report is computed from the posts that were scanned.",
     "ספירת הלייקים נכשלה בכל הפוסטים שנסרקו":
@@ -536,6 +546,25 @@ def _norm_key(s):
     return re.sub(r"[\s_\-]+", "", _unesc(str(s or ""))).strip().lower()
 
 
+def _official_counts(udata):
+    """
+    המונים כפי שהפורום עצמו מציג אותם בדף האודות.
+
+    `reputation` הוא **לייקים פחות דיסלייקים** — לא ספירת לייקים גולמית —
+    ולכן הכותרת בדוח אומרת "מוניטין" ולא "לייקים שהתקבלו". `topiccount`
+    הוא מספר השרשורים שפתח, כולל אלה שהסריקה אינה יכולה לקרוא.
+    """
+    u = udata or {}
+
+    def num(k):
+        try:
+            return int(u.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    return {"reputation": num("reputation"), "topiccount": num("topiccount")}
+
+
 def _fetch_detail(base, cookie, post, me=""):
     try:
         time.sleep(DETAIL_DELAY)   # נימוס: 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
@@ -754,6 +783,7 @@ def _collect(username, cookie, base, progress=None, cancel_flag=None,
     try:
         uid, slug, udata = _fetch_user(base, username, cookie)
         postcount = int((udata or {}).get("postcount") or 0)
+        official = _official_counts(udata)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return None, None, None, {"error": f"{label}נדרשת עוגייה תקינה (שגיאת הרשאה)"}
@@ -802,6 +832,7 @@ def _collect(username, cookie, base, progress=None, cancel_flag=None,
         "partial": scan_stats["stopped_early"] or (
             bool(postcount) and len(raw) < postcount * 0.95 and not limited),
     }
+    meta.update(official)
     meta.update(extra)
     return slug, uid, processed, meta
 
@@ -908,6 +939,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     try:
         my_uid, slug, _udata = _fetch_user(base, username, cookie)
         postcount = int((_udata or {}).get("postcount") or 0)
+        official = _official_counts(_udata)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return {"ok": False, "error": "נדרשת עוגייה תקינה (שגיאת הרשאה)"}
@@ -959,6 +991,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
         "postcount": postcount,
         "names_missing": _vote_failures(),
     }
+    meta.update(official)
     meta.update(extra)
     html = _build_html(slug, base, my_uid, processed, meta)
 
@@ -1060,6 +1093,8 @@ def _build_html(user_slug, base_url, my_uid, posts_data, meta=None):
             "names": dict(m.get("names") or {}),
             "reply_resolved": int(m.get("reply_resolved") or 0),
             "reply_total": int(m.get("reply_total") or 0),
+            "reputation": int(m.get("reputation") or 0),
+            "topiccount": int(m.get("topiccount") or 0),
         }),
     })
 
@@ -1106,7 +1141,7 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 </div>
 <div class="grid">
 <div class="card col-3"><div class="kpi-title">סה"כ פוסטים</div><div class="kpi-value" id="stat-posts">0</div><div class="kpi-sub" id="stat-posts-sub"></div></div>
-<div class="card col-3"><div class="kpi-title">לייקים שהתקבלו</div><div class="kpi-value" id="stat-likes" style="color:#10b981">0</div></div>
+<div class="card col-3"><div class="kpi-title">מוניטין</div><div class="kpi-value" id="stat-likes" style="color:#10b981">0</div><div class="kpi-sub" id="stat-likes-sub"></div></div>
 <div class="card col-3"><div class="kpi-title">מילים שנכתבו</div><div class="kpi-value" id="stat-words">0</div></div>
 <div class="card col-3"><div class="kpi-title">זמן קריאה כולל</div><div class="kpi-value" id="stat-time" style="color:#f59e0b">0</div></div>
 <div class="card col-8"><h3>📈 מגמת פרסום חודשית</h3><div class="chart-box"><canvas id="chart-monthly"></canvas></div></div>
@@ -1173,12 +1208,23 @@ if(psub && officialPosts>scannedPosts){
   psub.innerText='‏'+'נסרקו '+scannedPosts.toLocaleString()+' מתוך '+officialPosts.toLocaleString();
   psub.title='הפער הוא פוסטים שהסריקה אינה יכולה לקרוא: מחוקים, או בקטגוריות שדורשות הרשאה. כל שאר הנתונים בדוח מחושבים מהפוסטים שנסרקו.';
 }
-document.getElementById('stat-likes').innerText=totalLikes.toLocaleString();
+// המספר הרשמי מדף האודות, בדיוק כמו במונה הפוסטים לידו. מה שנמדד
+// בפוסטים שנסרקו יושב בשורת המשנה — שני מונים סמוכים חייבים לדבר באותה
+// מטבע, אחרת אחד מהם נראה כמו טעות.
 {
+  const rep=Number(meta.reputation||0);
   const el=document.getElementById('stat-likes');
-  el.title=totalDowns
-    ? ('ומולם '+totalDowns.toLocaleString()+' דיסלייקים בפוסטים שנסרקו')
-    : 'בפוסטים שנסרקו';
+  el.innerText=(rep||totalLikes).toLocaleString();
+  el.title=rep
+    ? 'מוניטין הוא לייקים פחות דיסלייקים, כפי שהפורום מציג בדף האודות'
+    : (totalDowns?('ומולם '+totalDowns.toLocaleString()+' דיסלייקים בפוסטים שנסרקו'):'בפוסטים שנסרקו');
+  const sub=document.getElementById('stat-likes-sub');
+  if(sub){
+    sub.innerText = rep
+      ? '\u200f'+'נמדדו '+totalLikes.toLocaleString()+' לייקים בנסרקים'
+      : '';
+    if(rep) sub.title='ההפרש הוא פוסטים שהסריקה אינה יכולה לקרוא — מחוקים, או בקטגוריות שדורשות הרשאה';
+  }
 }
 document.getElementById('stat-words').innerText=totalWords.toLocaleString();
 document.getElementById('stat-time').innerText=Math.ceil(totalWords/200)+" דק'";
@@ -1338,13 +1384,27 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   };
 
   // 🎭 יוזם או מגיב — האם הוא פותח שיחות או מצטרף אליהן
-  const opened = data.filter(d => d.is_main).length;
-  const replied = data.length - opened;
+  const openedScanned = data.filter(d => d.is_main).length;
+  const repliedScanned = data.length - openedScanned;
+  // המספרים הרשמיים מדף האודות, כולל מה שהסריקה אינה יכולה לקרוא.
+  // postcount סופר גם את הפוסט הפותח, ולכן התגובות הן ההפרש בין השניים —
+  // שתי השורות חייבות לבוא מאותו מקור, אחרת הסכום שלהן סותר את ה-KPI.
+  const oTopics = Number(meta.topiccount || 0);
+  const useOfficial = oTopics > 0 && officialPosts > oTopics;
+  const opened  = useOfficial ? oTopics : openedScanned;
+  const replied = useOfficial ? officialPosts - oTopics : repliedScanned;
+  const fromProfile = n => 'לפי דף הפרופיל · ' + 'נסרקו ' + n.toLocaleString();
+  const total = opened + replied;
   put('list-role',
-    row('<b>פתח שרשורים</b>', 'הוא זה שהתחיל את השיחה', opened.toLocaleString()) +
-    row('<b>הגיב בשרשור של מישהו</b>', 'הצטרף לשיחה קיימת', replied.toLocaleString()) +
-    (data.length ? '<div class="note-sm">' +
-      Math.round(100 * replied / data.length) + '% מהפוסטים שנסרקו הם תגובות' + basis + '</div>' : ''));
+    row('<b>פתח שרשורים</b>',
+        useOfficial ? fromProfile(openedScanned) : 'הוא זה שהתחיל את השיחה',
+        opened.toLocaleString()) +
+    row('<b>הגיב בשרשור של מישהו</b>',
+        useOfficial ? fromProfile(repliedScanned) : 'הצטרף לשיחה קיימת',
+        replied.toLocaleString()) +
+    (total ? '<div class="note-sm">' + Math.round(100 * replied / total) +
+      (useOfficial ? '% מהפוסטים שלו הם תגובות' : '% מהפוסטים שנסרקו הם תגובות' + basis) +
+      '</div>' : ''));
 
   // 📍 איפה בפורום הוא חי
   const cats = count(data, d => d.cat);
