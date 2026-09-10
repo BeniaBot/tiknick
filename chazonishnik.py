@@ -383,7 +383,9 @@ def _vote_failures():
 # **`content` הוא HTML, ובאזכור ה-@ והשם מופרדים בתגית.** NodeBB שולח
 #
 #   <a class="plugin-mentions-user" href="/user/%D7%A6%D7%95%D7%9C-%D7%92%D7%90%D7%94"
-#      aria-label="Profile: צול גאה">@<bdi>צול גאה</bdi></a>
+#      aria-label="Profile: צול-גאה">@<bdi>צול-גאה</bdi></a>
+#
+# (שלושת המקומות נושאים את ה-**slug**; שם התצוגה אינו בסימון האזכור כלל, והוא מגיע מרשימת המצביעים.)
 #
 # ולכן רגקס שמחפש שם **מיד אחרי** ה-@ לא מוצא כלום. נמדד על החשבון של
 # בנימין: 0 אזכורים ב-26 פוסטים שכולם מזכירים מישהו, ובהם `צול-גאה` —
@@ -1023,8 +1025,13 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   if (!box) return;
   const norm = s => String(s==null?'':s).replace(/[\s_\-]+/g,'').trim().toLowerCase();
   const disp = {}, slugOf = {};
-  const remember = (k, name, slug) => {
-    if (!disp[k]) disp[k] = name || slug || k;
+  // **שם התצוגה מגיע מרשימת המצביעים, לא מהאזכור.** נמדד על mitmachim:
+  // בסימון האזכור ה-slug יושב בכל שלושת המקומות (href, aria-label וה-<bdi>),
+  // ולכן מי שרק הוזכר יוצג בכתיב של הקישור — וזה מה שהפורום עצמו מראה שם.
+  // מי שגם עשה לייק מקבל את השם האמיתי, ו-`strong` דואג שהוא יגבר.
+  const remember = (k, name, slug, strong) => {
+    if (name && (strong || !disp[k])) disp[k] = name;
+    if (!disp[k]) disp[k] = slug || k;
     if (slug && !slugOf[k]) slugOf[k] = slug;
   };
 
@@ -1034,7 +1041,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     const k = m.k || norm(m.slug || m.name);
     if (!k) return;
     said[k] = (said[k]||0) + 1;
-    remember(k, m.name, m.slug);
+    remember(k, m.name, m.slug, false);
   }));
 
   // מי עושה לו לייקים — רק מהפוסטים שספירת הלייקים שלהם הצליחה
@@ -1044,7 +1051,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     const k = norm(v.userslug || v.username);
     if (!k) return;
     liked[k] = (liked[k]||0) + 1;
-    remember(k, _U(v.username), v.userslug);
+    remember(k, _U(v.username), v.userslug, true);
   }));
 
   const link = k => baseUrl + '/user/' + encodeURIComponent(slugOf[k] || k);
