@@ -194,6 +194,19 @@ _TPL_EN = {
     "ומולם ": "and against them ",
     " דיסלייקים בפוסטים שנסרקו": " downvotes in the scanned posts",
     "בלי עוגיית התחברות אין שמות של מי שעשה לייק, ולכן לא מוצגת הקבוצה השלישית": "Without a login cookie there are no voter names, so the third group is not shown",
+    " תגובות לכל פוסט": " replies per post",
+    "% מהפוסטים שנסרקו הם תגובות": "% of the scanned posts are replies",
+    " פוסטים שנסרקו)": " posts scanned)",
+    "אף פוסט שנסרק אינו תגובה לאדם אחר":
+        "No scanned post is a reply to another person",
+    "כל התגובות שנפתרו היו לפוסטים שלו עצמו":
+        "Every resolved reply was to one of his own posts",
+    "שמות המצביעים ידועים רק לחלק מהלייקים, ולכן לא מוצגת הקבוצה של מי שלא החזיר לייק":
+        "The voter names are known for only part of the upvotes, so the group of those who did not upvote back is not shown",
+    "הלייקים נספרו, אבל שמות המצביעים לא הגיעו":
+        "The upvotes were counted, but the voter names did not arrive",
+    "מבוסס על ": "Based on ",
+    " הלייקים — לשאר לא הגיעו שמות": " of the upvotes — no names arrived for the rest",
     "בשרשורים של מי הוא חי": "Whose threads he lives in",
     "מה הצית שיחה": "What sparked conversation",
     "למי הוא באמת עונה": "Whom he actually answers",
@@ -356,9 +369,33 @@ MAX_MENTIONS_PER_POST = 8
 # כשיהיה מול מה לאמת אותו.
 
 _BLOCKQUOTE_RX = re.compile(r"<blockquote[^>]*>.*?</blockquote>", re.I | re.S)
+_BQ_TAG_RX = re.compile(r"</?blockquote[^>]*>", re.I)
 # כותרת הציטוט של NodeBB ("@שם said in ...") היא כן פנייה שלו — היא נשמרת.
 _QUOTE_HEAD_RX = re.compile(
     r"<blockquote[^>]*>(?P<head>.{0,200}?)(?:</p>|</blockquote>)", re.I | re.S)
+
+
+def _drop_blockquotes(s):
+    """
+    מסיר בלוקי ציטוט כולל מקוננים, בסריקה אחת עם מונה עומק.
+
+    רגקס לא-חמדני נכשל כאן: על ציטוט בתוך ציטוט הוא מתחיל בפותח החיצוני
+    ונעצר בסוגר ה**פנימי**, ומשאיר את שארית הציטוט החיצוני כאילו הנבדק
+    כתב אותה. ציטוט-של-ציטוט הוא המצב הרגיל בשרשור.
+    """
+    out, i, depth = [], 0, 0
+    for m in _BQ_TAG_RX.finditer(s):
+        if depth == 0:
+            out.append(s[i:m.start()])
+        if m.group(0).lower().startswith("</"):
+            depth = max(0, depth - 1)
+            if depth == 0:
+                i = m.end()
+        else:
+            depth += 1
+    if depth == 0:
+        out.append(s[i:])
+    return " ".join(out)
 
 
 def _strip_quotes(raw_html):
@@ -372,8 +409,21 @@ def _strip_quotes(raw_html):
     גם צורת המרקדאון (שורה שמתחילה ב->) מטופלת.
     """
     s = raw_html or ""
-    heads = [m.group("head") for m in _QUOTE_HEAD_RX.finditer(s)]
-    s = _BLOCKQUOTE_RX.sub(" ", s)
+    # **רק כותרת הציטוט החיצוני** היא פנייה שלו. בציטוט-של-ציטוט, הכותרת
+    # הפנימית ("@פלוני said in") שייכת למי שהוא ציטט, לא לו — וספירתה
+    # זקפה לו פניות לאנשים שמעולם לא פנה אליהם.
+    heads = []
+    depth = 0
+    for m in _BQ_TAG_RX.finditer(s):
+        if m.group(0).lower().startswith("</"):
+            depth = max(0, depth - 1)
+            continue
+        if depth == 0:
+            h = _QUOTE_HEAD_RX.match(s, m.start())
+            if h:
+                heads.append(h.group("head"))
+        depth += 1
+    s = _drop_blockquotes(s)
     lines = [ln for ln in s.split(chr(10))
              if not ln.lstrip().startswith(">") and not ln.lstrip().startswith("&gt;")]
     return chr(10).join(lines) + " " + " ".join(heads)
@@ -434,8 +484,9 @@ def _vote_failures():
 # החילוץ הזה אינו ניחוש: ה-href הוא ה-slug עצמו, וזה **אותו מפתח** שרשימת
 # המצביעים מפתחת לפיו. אין כאן מיילים, אין ו' החיבור, ואין דומיינים.
 _MENTION_A_RX = re.compile(
-    r'<a[^>]*class="[^"]*plugin-mentions-user[^"]*"[^>]*href="/user/([^"#?]+)"',
-    re.I)
+    r'<a[^>]+>', re.I)
+_MENTION_CLASS_RX = re.compile(r'class="[^"]*plugin-mentions-user', re.I)
+_MENTION_HREF_RX = re.compile(r'href="[^"]*?/user/([^"#?]+)"', re.I)
 _ARIA_NAME_RX = re.compile(r'aria-label="Profile:\s*([^"]+)"', re.I)
 
 
@@ -452,13 +503,19 @@ def _mentions_from_html(raw_html, me_slug=""):
     out, seen = [], set()
     low_me = (me_slug or "").strip().lower()
     for m in _MENTION_A_RX.finditer(body):
-        slug = urllib.parse.unquote(m.group(1)).strip()
+        tag = m.group(0)
+        # סדר המאפיינים אינו מובטח, וההתקנה יכולה לשבת בתת-תיקייה
+        if not _MENTION_CLASS_RX.search(tag):
+            continue
+        href = _MENTION_HREF_RX.search(tag)
+        if not href:
+            continue
+        slug = urllib.parse.unquote(href.group(1)).strip()
         key = _norm_key(slug)
         if not key or key == _norm_key(low_me) or key in seen:
             continue
         seen.add(key)
-        tail = body[m.end():m.end() + 260]
-        nm = _ARIA_NAME_RX.search(m.group(0) + tail)
+        nm = _ARIA_NAME_RX.search(tag)
         out.append((slug, _unesc(nm.group(1)).strip() if nm else slug.replace("-", " ")))
         if len(out) >= MAX_MENTIONS_PER_POST:
             break
@@ -481,7 +538,10 @@ def _fetch_detail(base, cookie, post, me=""):
         time.sleep(DETAIL_DELAY)   # נימוס: 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
         pid = post["pid"]
         raw = post.get("content", "") or ""
-        clean = re.sub(r"<[^<]+?>", "", raw)
+        # ציטוט הוא טקסט שאדם אחר כתב. עד כאן הוא נספר כמילים **שלו**,
+        # וניפח את "מילים שנכתבו", "זמן קריאה" ואת גרף אורך התוכן. אותו
+        # `_strip_quotes` שכבר משמש לאזכורים משמש עכשיו גם כאן.
+        clean = re.sub(r"<[^<]+?>", "", _strip_quotes(raw))
         words = len(clean.split())
         # `me` הוא ה-slug (ראו הקריאה ב-_collect), וזה בדיוק מה שצריך כאן:
         # האזכור נושא slug, ולכן ההשוואה נעשית באותה מטבע.
@@ -567,13 +627,53 @@ def _fetch_detail(base, cookie, post, me=""):
 REPLY_RESOLVE_MAX = 900
 
 
+def _reply_layer(base, cookie, processed, my_uid, cancel_flag=None, progress=None):
+    """
+    פותר "למי הוא ענה" ומביא שמות תצוגה. מחזיר dict ל-meta, או None אם בוטל.
+
+    **שני המסלולים חייבים לעבור כאן.** כשזה ישב בתוך `_collect` בלבד, הדוח
+    שהמשתמש מפעיל (analyze_user) לא הריץ את זה כלל: הכרטיס הכריז "אף פוסט
+    שנסרק אינו תגובה לפוסט מסוים" על מי שכל הפוסטים שלו תגובות, והשמות
+    הוצגו כ-"uid 4211".
+    """
+    if progress:
+        progress({"phase": "replies", "done": 0, "total": 0})
+    r_ok, r_tot, r_req = _resolve_replies(
+        base, cookie, processed, cancel_flag,
+        lambda d, t: progress and progress({"phase": "replies", "done": d, "total": t}))
+    if cancel_flag is not None and cancel_flag.is_set():
+        return None
+
+    # מונה הכיסוי חייב לספור בדיוק את מה שהשורות מציגות — כלומר בלי תגובות
+    # של המשתמש לעצמו, שהכרטיס מסנן החוצה. אחרת נכתב "30 מתוך 30" מעל
+    # רשימה שסכומה 20.
+    r_ok = sum(1 for p in processed
+               if p.get("reply_uid") and p.get("reply_uid") != my_uid)
+    r_tot = sum(1 for p in processed
+                if p.get("to_pid") and p.get("reply_uid") != my_uid)
+
+    # שם תצוגה רק למי שבאמת יוצג. המיון כאן והמיון ב-JS חייבים לשבור שוויון
+    # באותה צורה, אחרת שורה שמוצגת נשארת בלי שם ונופלת ל-"uid N".
+    top_reply = _top_uids([p.get("reply_uid") for p in processed
+                           if p.get("reply_uid") != my_uid], 10)
+    top_host = _top_uids([p.get("topic_uid") for p in processed
+                          if p.get("topic_uid") != my_uid], 10)
+    names = _names_for_uids(base, cookie, list(dict.fromkeys(top_reply + top_host)),
+                            limit=20)
+    return {"names": {str(k): v for k, v in names.items()},
+            "reply_resolved": r_ok, "reply_total": r_tot, "reply_requests": r_req}
+
+
 def _top_uids(uids, n):
     """ה-uid-ים השכיחים ביותר, בלי ריקים."""
     c = {}
     for u in uids:
         if u:
             c[u] = c.get(u, 0) + 1
-    return [u for u, _ in sorted(c.items(), key=lambda x: -x[1])[:n]]
+    # שובר שוויון לפי uid, כדי שהבחירה כאן והדירוג ב-JS יסכימו. בלי זה
+    # `processed` מגיע בסדר as_completed (שרירותי) ושורה שמוצגת יכולה
+    # להישאר בלי שם.
+    return [u for u, _ in sorted(c.items(), key=lambda x: (-x[1], x[0]))[:n]]
 
 
 def _resolve_replies(base, cookie, posts, cancel_flag=None, progress=None):
@@ -641,7 +741,7 @@ def _names_for_uids(base, cookie, uids, limit=12):
 
 
 def _collect(username, cookie, base, progress=None, cancel_flag=None,
-             max_posts=None, label=""):
+             max_posts=None, label="", with_replies=False):
     """
     סורק ומעבד משתמש אחד ומחזיר (slug, uid, posts, meta) — או (None, None, None, err).
     הוצא מ-analyze_user כדי שההשוואה תשתמש בדיוק באותו מסלול, כולל ההשהיות
@@ -682,32 +782,24 @@ def _collect(username, cookie, base, progress=None, cancel_flag=None,
                 progress({"phase": "analyze", "done": done, "total": total})
             if r:
                 processed.append(r)
-    # ── מי ענה למי, ובאיזה כיסוי ────────────────────────────────────────
-    if progress:
-        progress({"phase": "replies", "done": 0, "total": 0})
-    r_ok, r_tot, r_req = _resolve_replies(
-        base, cookie, processed, cancel_flag,
-        lambda d, t: progress and progress({"phase": "replies", "done": d, "total": t}))
-
-    # שם תצוגה רק למי שבאמת יוצג — לא לכל 431 האנשים
-    top_reply = _top_uids([p.get("reply_uid") for p in processed], 10)
-    top_host = _top_uids([p.get("topic_uid") for p in processed
-                          if p.get("topic_uid") != uid], 10)
-    names = _names_for_uids(base, cookie, set(top_reply) | set(top_host), limit=20)
+    # דוח ההשוואה אינו מציג את הכרטיסים האלה, ולכן אינו משלם עליהם.
+    extra = (_reply_layer(base, cookie, processed, uid, cancel_flag, progress)
+             if with_replies else {})
+    if extra is None:
+        return None, None, None, {"cancelled": True, "error": "בוטל"}
 
     processed.sort(key=lambda x: x["ts"])
     limited = bool(max_posts and len(raw) >= max_posts)
     meta = {
-        "names": {str(k): v for k, v in names.items()},
-        "reply_resolved": r_ok, "reply_total": r_tot, "reply_requests": r_req,
         "postcount": postcount, "limited": limited,
         "stopped_early": scan_stats["stopped_early"],
         # ספירת הלייקים מגיעה מבקשה נפרדת לכל פוסט. כשל שם החזיר 0 בשקט
         # ודוח ירוק ששיקר בדיוק ב-KPI הראשי שלו.
-        "likes_incomplete": _vote_failures(),
+        "names_missing": _vote_failures(),
         "partial": scan_stats["stopped_early"] or (
             bool(postcount) and len(raw) < postcount * 0.95 and not limited),
     }
+    meta.update(extra)
     return slug, uid, processed, meta
 
 
@@ -849,16 +941,23 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
             if r:
                 processed.append(r)
 
+    # שכבת התגובות והשמות — אותה שכבה בדיוק שמריץ מסלול ההשוואה
+    extra = _reply_layer(base, cookie, processed, my_uid, cancel_flag, progress)
+    if extra is None:
+        return {"ok": False, "cancelled": True, "error": "בוטל"}
+
     processed.sort(key=lambda x: x["ts"])
     _limited = bool(max_posts and len(raw_posts) >= max_posts)
-    html = _build_html(slug, base, my_uid, processed, {
+    meta = {
         "limited": _limited,
         "stopped_early": scan_stats["stopped_early"],
         "partial": scan_stats["stopped_early"] or (
             bool(postcount) and len(raw_posts) < postcount * 0.95 and not _limited),
         "postcount": postcount,
-        "likes_incomplete": _vote_failures(),
-    })
+        "names_missing": _vote_failures(),
+    }
+    meta.update(extra)
+    html = _build_html(slug, base, my_uid, processed, meta)
 
     path = None
     if save_path:
@@ -953,7 +1052,7 @@ def _build_html(user_slug, base_url, my_uid, posts_data, meta=None):
             "stopped_early": bool(m.get("stopped_early")),
             "partial": bool(m.get("partial")),
             "postcount": int(m.get("postcount") or 0),
-            "likes_incomplete": int(m.get("likes_incomplete") or 0),
+            "likes_incomplete": int(m.get("names_missing") or m.get("likes_incomplete") or 0),
             # שמות תצוגה ל-uid-ים שיוצגו בפועל, וכיסוי שכבת התגובות
             "names": dict(m.get("names") or {}),
             "reply_resolved": int(m.get("reply_resolved") or 0),
@@ -1047,7 +1146,12 @@ const totalDowns=data.reduce((a,b)=>a+(b.down||0),0);
 const named=data.filter(d=>d.votes_ok===true);
 const withLikes=data.filter(d=>d.likes>0);
 const namesMissing=withLikes.length-named.length;
+// כמה מהלייקים באמת יש להם שמות. פוסט אחד מתוך 1,800 אינו "יש שמות":
+// הקבוצה השלילית מאשימה אנשים, ולכן היא נפתחת רק כשכמעט הכול נמדד.
+const likedNamed=named.reduce((a,b)=>a+b.likes,0);
+const nameCover=totalLikes?likedNamed/totalLikes:0;
 const anyNames=named.length>0;
+const namesSolid=nameCover>=0.9;
 // לכל פוסט יש ספירת לייקים אמיתית
 const measured=data;
 const totalWords=data.reduce((a,b)=>a+b.words,0);
@@ -1080,7 +1184,9 @@ const monthCounts={};data.forEach(d=>monthCounts[d.month]=(monthCounts[d.month]|
 new Chart(document.getElementById('chart-monthly'),{type:'line',data:{labels:Object.keys(monthCounts),datasets:[{label:'פוסטים',data:Object.values(monthCounts),borderColor:'#38bdf8',backgroundColor:'rgba(56,189,248,.1)',fill:true,tension:.4}]},options:{responsive:true,maintainAspectRatio:false}});
 const hourlyData=Array(24).fill(0);data.forEach(d=>hourlyData[d.hour]++);
 new Chart(document.getElementById('chart-hourly'),{type:'bar',data:{labels:Array.from({length:24},(_,i)=>i+":00"),datasets:[{label:'פוסטים',data:hourlyData,backgroundColor:'#8b5cf6'}]},options:{responsive:true,maintainAspectRatio:false}});
-const fans={},fanSlug={};named.forEach(p=>p.voters.forEach(v=>{if(v.uid!=myUid){fans[v.username]=(fans[v.username]||0)+1;fanSlug[v.username]=v.userslug||String(v.username||'').trim().toLowerCase().replace(/\s+/g,'-');}}));
+// _U מפענח ישויות HTML — NodeBB מחזיר שמות מקודדים. בלי זה אותו אדם
+// מופיע פעמיים בשני כתיבים שונים בין הכרטיסים.
+const fans={},fanSlug={};named.forEach(p=>p.voters.forEach(v=>{if(v.uid!=myUid){const nm=_U(v.username);fans[nm]=(fans[nm]||0)+1;fanSlug[nm]=v.userslug||String(nm||'').trim().toLowerCase().replace(/\s+/g,'-');}}));
 Object.entries(fans).sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(([name,count])=>{document.getElementById('list-fans').innerHTML+=`<div class="list-item"><a href="${esc(baseUrl)}/user/${escAttr(fanSlug[name]||name)}" target="_blank">${esc(name)}</a><span class="badge">${esc(count)}</span></div>`;});
 // כרטיס ריק נקרא כ"אף אחד לא אהב אותו" — טענה על אדם. כשהספירה נכשלה
 // אומרים זאת במפורש, וכשהיא הצליחה והוא באמת לא קיבל לייקים — גם כן.
@@ -1088,8 +1194,13 @@ Object.entries(fans).sort((a,b)=>b[1]-a[1]).slice(0,10).forEach(([name,count])=>
 // דורשים עוגייה, וכשאין אחת אומרים בדיוק את זה במקום להשתמע.
 if(!Object.keys(fans).length){document.getElementById('list-fans').innerHTML=
   '<div class="list-item" style="opacity:.75">'+(!anyNames&&totalLikes
-    ? 'הלייקים נספרו, אבל שמות המצביעים דורשים עוגיית התחברות'
+    ? 'הלייקים נספרו, אבל שמות המצביעים לא הגיעו'
     : (totalLikes? 'לא נמצאו שמות מצביעים' : 'לא התקבלו לייקים על הפוסטים שנסרקו'))+'</div>';}
+// הרשימה נבנית משמות שהגיעו בלבד. בלי השורה הזו היא נראית כמו דירוג מלא
+// בזמן שמקורם של רוב הלייקים אינו ידוע.
+else if(!namesSolid){document.getElementById('list-fans').innerHTML+=
+  '<div class="note-sm">מבוסס על '+likedNamed.toLocaleString()+' מתוך '+
+  totalLikes.toLocaleString()+' הלייקים — לשאר לא הגיעו שמות</div>';}
 const dayOrder=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];
 // קיבוץ לפי מספר היום ולא לפי שמו: השם מתורגם בזמן הבנייה בעוד
 // הנתונים נאספו קודם, והשוואת המחרוזות ביניהם החזירה גרף ריק.
@@ -1199,7 +1310,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
 (function(){
   const N   = meta.names || {};
   const who = uid => (N[String(uid)] || {}).name || ('uid ' + uid);
-  const lnk = uid => baseUrl + '/user/' +
+  const lnk = uid => esc(baseUrl) + '/user/' +
         encodeURIComponent((N[String(uid)] || {}).slug || String(uid));
   const row = (label, sub, num, href) =>
     '<div class="list-item"><div>' +
@@ -1208,6 +1319,12 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     '</div><span class="badge">' + num + '</span></div>';
   const empty = t => '<div class="list-item" style="opacity:.75">' + t + '</div>';
   const put = (id, html) => { const b = document.getElementById(id); if (b) b.innerHTML = html; };
+  // כשהסריקה חלקית, כל מספר כאן הוא על תת-קבוצה — ונאמר בדיוק זה.
+  const basis = (meta.limited || meta.partial)
+    ? ' <span style="opacity:.8">(' + data.length.toLocaleString() +
+      (meta.postcount ? ' מתוך ' + Number(meta.postcount).toLocaleString() : '') +
+      ' פוסטים שנסרקו)</span>'
+    : '';
   const count = (arr, key) => {
     const c = {}; arr.forEach(x => { const k = key(x); if (k || k === 0) c[k] = (c[k]||0)+1; });
     return Object.entries(c).sort((a,b)=>b[1]-a[1]);
@@ -1220,13 +1337,13 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     row('<b>פתח שרשורים</b>', 'הוא זה שהתחיל את השיחה', opened.toLocaleString()) +
     row('<b>הגיב בשרשור של מישהו</b>', 'הצטרף לשיחה קיימת', replied.toLocaleString()) +
     (data.length ? '<div class="note-sm">' +
-      Math.round(100 * replied / data.length) + '% מהפוסטים שלו הם תגובות</div>' : ''));
+      Math.round(100 * replied / data.length) + '% מהפוסטים שנסרקו הם תגובות' + basis + '</div>' : ''));
 
   // 📍 איפה בפורום הוא חי
   const cats = count(data, d => d.cat);
   put('list-cats', cats.length
     ? cats.slice(0,8).map(([c,n]) => row(_E(c), '', n.toLocaleString())).join('')
-      + '<div class="note-sm">' + cats.length + ' קטגוריות שונות בסך הכול</div>'
+      + '<div class="note-sm">' + cats.length + ' קטגוריות שונות בסך הכול' + basis + '</div>'
     : empty('אין מידע על קטגוריות בפוסטים שנסרקו'));
 
   // 🏠 בשרשורים של מי הוא חי — topic.uid, בלי אף בקשה
@@ -1244,10 +1361,10 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   const totalRep = data.reduce((a,b)=>a+(b.replies||0),0);
   put('list-spark', sparks.length
     ? sparks.slice(0,8).map(d => row(_E(d.title), _E(d.date) + ' · תגובות ישירות לפוסט הזה',
-        String(d.replies), baseUrl + '/post/' + encodeURIComponent(d.pid))).join('')
+        String(d.replies), esc(baseUrl) + '/post/' + encodeURIComponent(d.pid))).join('')
       + '<div class="note-sm">' + totalRep.toLocaleString()
       + ' תגובות שהפוסטים שלו עוררו · ממוצע '
-      + (data.length ? (totalRep/data.length).toFixed(2) : '0') + ' לפוסט</div>'
+      + (data.length ? (totalRep/data.length).toFixed(2) : '0') + ' תגובות לכל פוסט' + basis + '</div>'
     : empty('אף פוסט שנסרק לא קיבל תגובה ישירה'));
 
   // 🗣️ למי הוא באמת עונה — toPid, וזה החלק שעולה בקשות ולכן מוגבל
@@ -1262,8 +1379,9 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   put('list-replyto', tgt.length
     ? tgt.slice(0,8).map(([u,n]) =>
         row(_E(who(u)), 'תגובות ישירות שלו אליו', n.toLocaleString(), lnk(u))).join('') + note
-    : empty(tot ? 'לא הצלחנו לזהות למי הוא ענה' :
-                  'אף פוסט שנסרק אינו תגובה לפוסט מסוים'));
+    : empty(!tot ? 'אף פוסט שנסרק אינו תגובה לאדם אחר'
+                 : (res ? 'כל התגובות שנפתרו היו לפוסטים שלו עצמו'
+                        : 'לא הצלחנו לזהות למי הוא ענה')));
 })();
 
 // 👥 עם מי הוא מדבר — הצלבה של שני צדדים שכבר ירדו ולא דיברו זה עם זה:
@@ -1306,7 +1424,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     remember(k, _U(v.username), v.userslug, true);
   }));
 
-  const link = k => baseUrl + '/user/' + encodeURIComponent(slugOf[k] || k);
+  const link = k => esc(baseUrl) + '/user/' + encodeURIComponent(slugOf[k] || k);
   const row = (k, right, left) =>
     '<div class="list-item"><div><a href="' + link(k) + '" target="_blank" class="who">'
     + _E(disp[k]) + '</a><div class="sub">' + right + '</div></div>'
@@ -1321,7 +1439,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   // "פונה אליהם ולא הגיע מהם לייק" מוצג **רק** כשספירת הלייקים הייתה
   // שלמה. חלקית = אנחנו לא יודעים שלא הגיע לייק, רק שלא מדדנו.
   // הקבוצה השלילית תלויה ב**שמות** המצביעים, ולכן בעוגייה — לא בספירה.
-  const oneWay = !anyNames ? [] :
+  const oneWay = !namesSolid ? [] :
     Object.keys(said).filter(k => said[k] >= 3 && !liked[k])
           .sort((a,b) => said[b]-said[a]).slice(0,8);
 
@@ -1337,7 +1455,7 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
     + quiet.map(k => row(k, 'עושים לו לייק, והוא לא מזכיר אותם', liked[k])).join('');
   if (oneWay.length) h += '<div class="grp">🙊 מזכיר אותם, ולא הגיע מהם לייק</div>'
     + oneWay.map(k => row(k, 'אזכורים בפוסטים שנסרקו', said[k])).join('');
-  if (!anyNames) h += '<div class="note-sm">⚠️ בלי עוגיית התחברות אין שמות של מי שעשה לייק, ולכן לא מוצגת הקבוצה השלישית</div>';
+  if (!namesSolid) h += '<div class="note-sm">⚠️ שמות המצביעים ידועים רק לחלק מהלייקים, ולכן לא מוצגת הקבוצה של מי שלא החזיר לייק</div>';
   h += '<div class="note-sm">נספר רק @אזכור או ציטוט — כפי שהפורום עצמו מסמן אותם. תגובה בשרשור בלי תיוג אינה נספרת, וזו הדרך הנפוצה לדבר כאן: אפשר לשוחח עם מישהו מאות פעמים ולהופיע כאן עם מספר חד-ספרתי.</div>';
   box.innerHTML = h;
 })();

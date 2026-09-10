@@ -5769,8 +5769,8 @@ function startChazonishnikMonitor() {
                                 p.limited, p.likes_incomplete);
         if (mine || !isModalOpen()) {
           showChazonishnikReport(p.html, p.count);
-          toast(msg, (p.partial || p.likes_incomplete) ? 'error' : 'success',
-                { ms: (p.partial || p.likes_incomplete) ? 9000 : 4000 });
+          toast(msg, p.partial ? 'error' : 'success',
+                { ms: p.partial ? 9000 : 4000 });
         } else {
           // אל תגנוב את המסך מעבודה פתוחה — הדוח נשמר וזמין לפתיחה
           toast('📊 הדוח מוכן — פתח דרך Chazonishnik · ' + msg, p.partial ? 'error' : 'success');
@@ -5784,11 +5784,13 @@ function startChazonishnikMonitor() {
 // דיווח כן על היקף הסריקה: כמה נסרק מתוך כמה, ולמה חסר
 function scanSummary(verb, done, postcount, partial, stoppedEarly, limited, likesIncomplete) {
   const d = (done || 0).toLocaleString();
-  // ספירת הלייקים היא בקשה נפרדת לכל פוסט. כשהיא נכשלת הדוח מציג 0 לייקים
-  // כאילו כך באמת קרה — וזה ה-KPI הראשי שלו. אומרים את זה במפורש.
+  // מאז שהלייקים מגיעים מהפוסט עצמו (`upvotes`), הבקשה הנפרדת מביאה רק את
+  // **שמות** המצביעים — והמונה הזה סופר את כשליה. ההודעה הישנה אמרה
+  // "ספירת הלייקים חלקית" והפחידה על נתון שהיה מדויק לגמרי. בנוסף המונה
+  // חסום ב-10 (ויתור אחרי _VOTE_FAIL_GIVEUP), ולכן אינו כמות אמיתית.
   const likes = likesIncomplete
-    ? ` · ⚠️ ספירת הלייקים חלקית (${likesIncomplete.toLocaleString()} בקשות נכשלו)` : '';
-  if (!postcount) return `${verb} ${d} פוסטים ✓` + likes;
+    ? ' · שמות המצביעים לא הגיעו לכל הפוסטים (הלייקים עצמם מדויקים)' : '';
+if (!postcount) return `${verb} ${d} פוסטים ✓` + likes;
   const base = `${verb} ${d} מתוך ${postcount.toLocaleString()} פוסטים`;
   if (limited) return base + ' (לפי ההגבלה שהגדרת)' + likes;
   if (stoppedEarly) return base + ' — נעצר בגלל תקלת רשת, הדוח חלקי' + likes;
