@@ -103,7 +103,7 @@ Tik-Nick בנוי על **PyWebView** — הממשק (הכפתורים, הטבל�
 tiknick/
 ├── main.py           # Backend + PyWebView + API
 ├── database.py       # לוגיקת SQLite ומנגנון המקורות
-├── scraper.py        # סריקת פורומי NodeBB
+├── scraper.py        # סריקת פורומי NodeBB ו-Discourse
 ├── chazonishnik.py   # ניתוח פעילות משתמש
 ├── stinknik.py       # איתור דיסלייקים
 ├── web/
