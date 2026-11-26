@@ -1352,15 +1352,6 @@ def get_nick_ids(search="", conditions=None, sort_col="has_info", sort_dir=1):
                 params += cp
             return ("WHERE " + " AND ".join(parts)) if parts else "", params
 
-        where, params = build(False)
-        fuzzy = False
-        if term and len(term) >= 2:
-            n = conn.execute(f"SELECT COUNT(*) FROM nicks n {where}", params).fetchone()[0]
-            if n < 5:
-                # כמעט בלי תוצאות: חיפוש תת-מחרוזת, כמו ב-get_all_nicks
-                where, params = build(True)
-                fuzzy = True
-
         order_params = []
         expr, ep = _sort_expr(sort_col) if sort_col and sort_col != "has_info" else (None, [])
         if expr:
@@ -1381,12 +1372,20 @@ def get_nick_ids(search="", conditions=None, sort_col="has_info", sort_dir=1):
         else:
             order = f"ORDER BY _hi DESC, n.trust_level DESC, n.updated_at DESC, n.id"
 
-        limit = " LIMIT 500" if fuzzy else ""
-        rows = conn.execute(
-            # הכינוי _hi: SQLite מחשב את הביטוי (שתי תת-שאילתות לשורה) פעם
-            # אחת ולא פעמיים — לשדה ולמפתח המיון. נמדד: 0.83 → 0.67 שניות.
-            f"SELECT n.id, {hi} AS _hi FROM nicks n {where} {order}{limit}",
-            params + order_params).fetchall()
+        # הכינוי _hi: SQLite מחשב את הביטוי (שתי תת-שאילתות לשורה) פעם אחת ולא
+        # פעמיים — לשדה ולמפתח המיון. נמדד: 0.83 → 0.67 שניות.
+        sql = "SELECT n.id, %s AS _hi FROM nicks n {where} %s{limit}" % (hi, order)
+        where, params = build(False)
+        fuzzy = False
+        rows = conn.execute(sql.format(where=where, limit=""), params + order_params).fetchall()
+        # כמעט בלי תוצאות → חיפוש תת-מחרוזת, כמו ב-get_all_nicks. ההחלטה מתוך
+        # התוצאה עצמה ולא מ-COUNT נפרד שקדם לה — זה היה מעבר שלם נוסף על
+        # הטבלה בכל הקשה בשדה החיפוש.
+        if term and len(term) >= 2 and len(rows) < 5:
+            where, params = build(True)
+            fuzzy = True
+            rows = conn.execute(sql.format(where=where, limit=" LIMIT 500"),
+                                params + order_params).fetchall()
         ids = [r[0] for r in rows]
         with_info = sum(1 for r in rows if r[1])
         total = len(ids)
