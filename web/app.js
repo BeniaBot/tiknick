@@ -725,6 +725,17 @@ async function loadForums() {
   S.forums = Array.isArray(res) ? res : [];
   S.forumColors = {};
   S.forums.forEach(f => { S.forumColors[f.name] = f.color; });
+  // הסדר מהשרת הוא הסדר הקנוני (מתמחים ראשון). כל רשימה שממוינת כאן בצד
+  // הלקוח משתמשת במפה הזו, כדי לא להחזיר אותה בשקט לסדר אלפביתי.
+  S.forumRank = {};
+  S.forums.forEach((f, i) => { S.forumRank[f.name] = i; });
+}
+
+// השוואת שמות פורומים לפי הסדר הקנוני; פורום שאינו ברשימה — אחרי כולם, באלפבית.
+function forumCmp(a, b) {
+  const ra = (S.forumRank || {})[a], rb = (S.forumRank || {})[b];
+  const ka = ra == null ? 1e9 : ra, kb = rb == null ? 1e9 : rb;
+  return ka !== kb ? ka - kb : HE_COLLATOR.compare(String(a || ''), String(b || ''));
 }
 
 // ══ TABLE ═════════════════════════════════════════════════════════════
@@ -844,6 +855,8 @@ function sortNicks() {
     if (a.has_info !== b.has_info) return b.has_info - a.has_info;
     const va = a[S.sortCol] ?? '';
     const vb = b[S.sortCol] ?? '';
+    // עמודת הפורום ממוינת לפי הסדר הקנוני ולא באלפבית — מתמחים ראשון
+    if (S.sortCol === 'forum') return forumCmp(va, vb) * S.sortDir;
     const n = typeof va === 'number';
     return n ? (va - vb) * S.sortDir
              : HE_COLLATOR.compare(String(va), String(vb)) * S.sortDir;
@@ -3750,7 +3763,7 @@ async function loadIdentityMap() {
     return;
   }
   _idMap = m;
-  const forums = [...new Set(m.groups.flatMap(g => g.forums))].sort(HE_COLLATOR.compare);
+  const forums = [...new Set(m.groups.flatMap(g => g.forums))].sort(forumCmp);
   box.innerHTML = `
     <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--subtext);
                 margin-bottom:10px">

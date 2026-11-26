@@ -845,10 +845,36 @@ def resolve_forum_data(name, color=None, url=None):
         "profile_pattern": "",
     }
 
+# מתמחים טופ הוא הפורום הראשי של המשתמשים, ובנימין ביקש שבכל רשימת פורומים
+# בתוכנה הוא יופיע ראשון. זיהוי לפי **כתובת** ולא רק לפי שם: את השם אפשר
+# לשנות בניהול פורומים, והכתובת היא מה שמגדיר את הפורום באמת.
+_PRIMARY_FORUM_HOST = "mitmachim.top"
+
+
+def _is_primary_forum(name, url=""):
+    u = (url or "").strip()
+    if u:
+        host = _origin(u).split("://", 1)[-1].lower()
+        if host == _PRIMARY_FORUM_HOST or host.endswith("." + _PRIMARY_FORUM_HOST):
+            return True
+    return "מתמחים" in (name or "")
+
+
+def _primary_forum_names(conn):
+    """שמות הפורומים שהם מתמחים — לרשימות שמחזיקות רק שם פורום ולא כתובת."""
+    return {r["name"] for r in conn.execute("SELECT name, url FROM forums")
+            if _is_primary_forum(r["name"], r["url"])}
+
+
 def get_forums():
     with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM forums ORDER BY sort_order, name").fetchall()
-        return [dict(r) for r in rows]
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM forums ORDER BY sort_order, name").fetchall()]
+    # מיון יציב: מתמחים קופץ לראש, וכל השאר שומרים על הסדר שהיה להם.
+    # כל רשימה בממשק שנבנית מכאן — בוררים, ניהול פורומים, הסנכרון, מיפוי
+    # הייבוא — יורשת את הסדר הזה בלי לגעת בה.
+    rows.sort(key=lambda f: 0 if _is_primary_forum(f["name"], f.get("url")) else 1)
+    return rows
 
 def get_forum_colors():
     return {f["name"]: f["color"] for f in get_forums()}
@@ -1369,6 +1395,8 @@ def get_merged_profile(nick_id):
             f"SELECT * FROM nicks WHERE id IN ({ph}) ORDER BY trust_level DESC, id", group
         ).fetchall()
         members = [dict(r) for r in rows]
+        _prim = _primary_forum_names(conn)
+        members.sort(key=lambda m: 0 if m.get("forum") in _prim else 1)
 
         member_meta = [{
             "id": m["id"], "forum": m["forum"], "username": m["username"],
@@ -2287,6 +2315,7 @@ def get_identity_map(limit=IDENTITY_MAP_LIMIT):
         total_groups = len(groups_ids)
         linked = sum(len(m) for m in groups_ids)
         groups_ids.sort(key=len, reverse=True)
+        _prim = _primary_forum_names(conn)
         truncated = len(groups_ids) > limit
         groups_ids = groups_ids[:limit]
 
@@ -2305,7 +2334,8 @@ def get_identity_map(limit=IDENTITY_MAP_LIMIT):
         ms = [rows[i] for i in members if i in rows]
         if len(ms) < 2:
             continue                       # ניק שנמחק והשאיר קישור יתום
-        ms.sort(key=lambda r: (r["forum"] or "", r["username"] or ""))
+        ms.sort(key=lambda r: (0 if r["forum"] in _prim else 1,
+                               r["forum"] or "", r["username"] or ""))
         conflicts = []
         for key, label in _IDENTITY_CONFLICT_FIELDS:
             vals = {str(r.get(key) or "").strip() for r in ms}
@@ -3378,6 +3408,10 @@ def get_stats():
                    SUM(CASE WHEN n.status='מורחק' THEN 1 ELSE 0 END) AS banned,
                    SUM(CASE WHEN {_HAS_INFO_SQL} THEN 1 ELSE 0 END) AS with_info
             FROM nicks n GROUP BY n.forum ORDER BY total DESC""")]
+        # גם בדירוג: מתמחים ראשון, והשאר לפי גודל. כל שורה נושאת את המספר
+        # שלה, ולכן המיקום אינו משנה אף מספר.
+        _prim = _primary_forum_names(conn)
+        by_forum.sort(key=lambda r: 0 if r["forum"] in _prim else 1)
         totals = {
             "total": total,
             "banned": conn.execute("SELECT COUNT(*) FROM nicks WHERE status='מורחק'").fetchone()[0],
