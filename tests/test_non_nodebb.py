@@ -190,6 +190,14 @@ ok("כל מסלולי הסריקה מוסרים פלטפורמה",
    io.open(os.path.join(ROOT, "scraper.py"), encoding="utf-8").read()
    .count("platform=\"") >= 3)
 
+# ══ 11. 🚨 והתצוגה לא משלימה "פעיל" במקום המאגר ═════════════════════════
+# 0.9.5 תיקן שניק XenForo נשמר בלי סטטוס. הטבלה כבר לא ציירה לו תגית, אבל
+# הכרטיס עשה `n.status || 'פעיל'` — וחזר על הטענה שהסורק סירב לומר.
+ok("🚨 כרטיס בלי סטטוס אינו מוצג 'פעיל'",
+   "const st = n.status || '';" in app and "n.status || 'פעיל'" not in app)
+ok("ותגית הסטטוס בכרטיס מצוירת רק כשיש סטטוס",
+   "${st ? `<span class=\"card-badge ${stCls}\">" in app)
+
 print()
 if fails:
     print("FAILED (%d): %s" % (len(fails), ", ".join(fails)))

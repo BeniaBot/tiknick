@@ -6535,7 +6535,10 @@ function buildCardElement(n) {
     card.style.setProperty('--card-accent', color);
     card.dataset.id = n.id;
 
-    const st = n.status || 'פעיל';
+    // סטטוס ריק הוא "לא נמדד" (פורום XenForo: ברשימת החברים אין סימון הרחקה),
+    // לא "פעיל". הטבלה כבר לא מציירת לו תגית; הכרטיס השלים "פעיל" וחזר בדיוק
+    // על הטענה שהסורק סירב במפורש לומר.
+    const st = n.status || '';
     const stCls = {'פעיל':'status-active','מורחק':'status-banned','מושעה':'status-suspended'}[st] || '';
     const initial = (n.username || '?').trim().charAt(0).toUpperCase();
     // safeColor ולא רק esc: esc משאיר ; : ( ) על כנם, כך שערך מהפורום כמו
@@ -6581,7 +6584,7 @@ function buildCardElement(n) {
       </div>
       ${bodyHtml}
       <div class="card-footer">
-        <span class="card-badge ${stCls}">● ${esc(st)}</span>
+        ${st ? `<span class="card-badge ${stCls}">● ${esc(st)}</span>` : ''}
         ${n.has_identity ? '<span class="card-badge card-identity-badge" style="background:var(--accent-soft);color:var(--accent-2);cursor:help">👤 זהות</span>' : ''}
         <span style="flex:1"></span>
         <button class="card-action-btn" title="פתח פרופיל בפורום"
