@@ -2188,7 +2188,7 @@ del "%~f0"
 
         result = webview.windows[0].create_file_dialog(
             open_dialog,
-            file_types=("קובץ Tik-Nick (*.tiknick;*.json)", "טבלה (*.csv;*.tsv;*.txt)",
+            file_types=("קובץ TikNick (*.tiknick;*.json)", "טבלה (*.csv;*.tsv;*.txt)",
                         "All files (*.*)")
         )
         if not result:
@@ -2370,7 +2370,7 @@ del "%~f0"
         default = f"tiknick_backup_{_dt.datetime.now():%Y-%m-%d_%H-%M}.db"
         result = webview.windows[0].create_file_dialog(
             save_dialog, save_filename=default,
-            file_types=("Tik-Nick backup (*.db)", "All files (*.*)"))
+            file_types=("TikNick backup (*.db)", "All files (*.*)"))
         if not result:
             return {"ok": False, "error": "בוטל"}
         dest = result[0] if isinstance(result, (list, tuple)) else result
@@ -2398,7 +2398,7 @@ del "%~f0"
             except ImportError:
                 open_dialog = webview.OPEN_DIALOG
             result = webview.windows[0].create_file_dialog(
-                open_dialog, file_types=("Tik-Nick backup (*.db)", "All files (*.*)"))
+                open_dialog, file_types=("TikNick backup (*.db)", "All files (*.*)"))
             if not result:
                 return {"ok": False, "error": "בוטל"}
             path = result[0] if isinstance(result, (list, tuple)) else result
