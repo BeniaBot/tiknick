@@ -1220,6 +1220,7 @@ def filter_nicks_multi(conditions):
     conds = [c for c in (conditions or []) if c.get("field") in _FILTERABLE_KEYS]
     if not conds:
         return []
+    clauses, params = _filter_clauses(conds)
     computed = """
         , (SELECT COUNT(*) FROM nick_conflicts c WHERE c.nick_id = n.id) as conflict_count,
         (SELECT COUNT(*) FROM nick_identities i WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id) as has_identity,
@@ -1227,6 +1228,20 @@ def filter_nicks_multi(conditions):
         (SELECT GROUP_CONCAT(field_name) FROM (
             SELECT field_name FROM field_values fv WHERE fv.nick_id = n.id
             GROUP BY field_name HAVING COUNT(DISTINCT value) > 1)) as conflict_fields
+    """
+    where = "WHERE " + " AND ".join(clauses)
+    order = conds[0]["field"]
+    with get_connection() as conn:
+        rows = conn.execute(
+            f"SELECT {_list_cols_sql()} {computed} FROM nicks n {where} "
+            f"ORDER BY n.{order}", params).fetchall()
+        return [dict(r) for r in rows]
+
+
+def _filter_clauses(conds):
+    """
+    תנאי הסינון המתקדם כ-(רשימת תנאים, פרמטרים). שמות השדות כבר סוננו
+    מול _FILTERABLE_KEYS אצל הקורא — זו הרשימה הלבנה שמגינה על ה-SQL הדינמי.
     """
     clauses, params = [], []
     for c in conds:
@@ -1245,13 +1260,181 @@ def filter_nicks_multi(conditions):
         else:
             clauses.append(_like_clause(f"n.{f}"))
             params.append("%" + _like_escape(val) + "%")
-    where = "WHERE " + " AND ".join(clauses)
-    order = conds[0]["field"]
+    return clauses, params
+
+
+# ══ הטבלה כחלון על רשימת מזהים ═══════════════════════════════════════════
+# בנימין: "התוכנה עובדת מאוד לאט כשיש בה יותר מ-100K ניקים." נמדד על המאגר
+# שלו (250,420 ניקים): כל טעינה של הטבלה שלחה את **כל** השורות — 5.3 שניות
+# שאילתה, 2.4 שניות JSON, ו-**162MB** שעוברים לממשק ומתפענחים שם. וזה קרה
+# אחרי כל עריכה, מחיקה, ייבוא וסריקה.
+#
+# הטבלה כבר ציירה רק את השורות שבחלון. מה שחסר היה להפריד בין **הסדר** —
+# כל המזהים, 1.9MB ו-0.33 שניות — לבין **התוכן**, שנמשך רק לחלון הנראה
+# (48KB ל-200 שורות, 0.01 שניות). "בחר הכול", ייצוא התצוגה, המונים והניווט
+# ממשיכים לראות את כל הניקים; רק הנתונים נטענים לפי הצורך. בלי עימוד —
+# בנימין ביקש בעבר שהכול יהיה זמין בגלילה, וזה נשמר.
+
+# עמודות שאפשר למיין לפיהן מכותרת הטבלה, וכיצד. כל מה שלא כאן — מיון ברירת
+# המחדל. שמות העמודות נכנסים ל-SQL רק מתוך הקבוצות האלה.
+_SORT_NUM = {"post_count", "reputation", "trust_level"}
+_SORT_TEXT = {"username", "full_name", "real_name", "groups", "phone", "email",
+              "address", "status", "extra_info", "notes", "private_notes"}
+_SORT_DATE = {"last_seen", "join_date", "updated_at"}
+
+# הגנה על הגשר: חלון גלילה מבקש מאות שורות, לא עשרות אלפים
+_ROWS_PER_CALL_MAX = 5000
+
+
+def _row_computed_sql():
+    """הדגלים המחושבים שהטבלה מציגה — אותם בדיוק כמו ב-get_all_nicks."""
+    return f"""
+        (SELECT COUNT(*) FROM nick_conflicts c WHERE c.nick_id = n.id) as conflict_count,
+        CASE WHEN {_HAS_INFO_SQL} THEN 1 ELSE 0 END as has_info,
+        (SELECT COUNT(*) FROM nick_identities i
+         WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id) as has_identity,
+        (SELECT COUNT(*) FROM nick_contacts ct WHERE ct.nick_id=n.id) as extra_contacts,
+        (SELECT GROUP_CONCAT(field_name) FROM (
+            SELECT field_name FROM field_values fv WHERE fv.nick_id = n.id
+            GROUP BY field_name HAVING COUNT(DISTINCT value) > 1
+         )) as conflict_fields"""
+
+
+def _sort_expr(col):
+    """(ביטוי SQL, פרמטרים) למיון לפי עמודה, או (None, []) לברירת המחדל."""
+    if col in _SORT_NUM:
+        # TEXT בסכימה: מיון טקסטואלי שם "-9" לפני "-347" ו-"10" לפני "9"
+        return f"CAST(NULLIF(n.{col},'') AS INTEGER)", []
+    if col in _SORT_TEXT:
+        return f"n.{col} COLLATE NOCASE", []
+    if col in _SORT_DATE:
+        return f"n.{col}", []
+    if col == "forum":
+        # הסדר הקנוני של get_forums — מתמחים ראשון — ולא אלפבית
+        names = [f["name"] for f in get_forums()]
+        if not names:
+            return "n.forum", []
+        whens = " ".join("WHEN ? THEN %d" % i for i in range(len(names)))
+        return f"(CASE n.forum {whens} ELSE {len(names)} END), n.forum", names
+    if col == "identity":
+        return ("(SELECT COUNT(*) FROM nick_identities i "
+                "WHERE i.nick_id_a=n.id OR i.nick_id_b=n.id)"), []
+    return None, []
+
+
+def get_nick_ids(search="", conditions=None, sort_col="has_info", sort_dir=1):
+    """
+    סדר כל הניקים שבתצוגה — מספרים בלבד — ומה שהמונים צריכים.
+    מחזיר {"ids": [...], "total": N, "with_info": M, "fuzzy": bool}.
+
+    הסדר זהה למה שהטבלה הציגה עד כה:
+      • בלי מיון מפורש: חיפוש → רלוונטיות, ואז has_info/אמינות/עדכון;
+        סינון מתקדם → לפי השדה של התנאי הראשון; אחרת has_info/אמינות/עדכון.
+      • מיון מפורש (לחיצה על כותרת): has_info תמיד ראשון — הכלל של הטבלה —
+        ואחריו העמודה, בכיוון שנבחר.
+    """
+    term = (search or "").strip()
+    conds = [c for c in (conditions or [])
+             if isinstance(c, dict) and c.get("field") in _FILTERABLE_KEYS]
+    hi = f"(CASE WHEN {_HAS_INFO_SQL} THEN 1 ELSE 0 END)"
+    desc = "DESC" if (sort_dir or 1) < 0 else "ASC"
+
     with get_connection() as conn:
+        def build(fuzzy):
+            parts, params = [], []
+            if term:
+                w, p = _search_where(term, _fts_match_query(term), fuzzy=fuzzy)
+                parts.append("(" + w[len("WHERE "):] + ")")
+                params += p
+            if conds:
+                cl, cp = _filter_clauses(conds)
+                parts += cl
+                params += cp
+            return ("WHERE " + " AND ".join(parts)) if parts else "", params
+
+        where, params = build(False)
+        fuzzy = False
+        if term and len(term) >= 2:
+            n = conn.execute(f"SELECT COUNT(*) FROM nicks n {where}", params).fetchone()[0]
+            if n < 5:
+                # כמעט בלי תוצאות: חיפוש תת-מחרוזת, כמו ב-get_all_nicks
+                where, params = build(True)
+                fuzzy = True
+
+        order_params = []
+        expr, ep = _sort_expr(sort_col) if sort_col and sort_col != "has_info" else (None, [])
+        if expr:
+            # מיון בעמודה מורכבת מכמה ביטויים (פורום) — הכיוון לכל אחד
+            cols = ", ".join("%s %s" % (e.strip(), desc) for e in _split_top(expr))
+            order = f"ORDER BY _hi DESC, {cols}, n.id"
+            order_params = ep
+        elif term:
+            order = (f"ORDER BY (CASE WHEN n.username = ? THEN 0 WHEN n.username LIKE ? THEN 1 "
+                     f"WHEN n.username LIKE ? THEN 2 "
+                     f"WHEN n.real_name = ? OR n.full_name = ? THEN 3 "
+                     f"WHEN n.real_name LIKE ? OR n.full_name LIKE ? THEN 4 ELSE 5 END), "
+                     f"_hi DESC, n.trust_level DESC, n.updated_at DESC, n.id")
+            order_params = [term, term + "%", "%" + term + "%",
+                            term, term, term + "%", term + "%"]
+        elif conds:
+            order = f"ORDER BY n.{conds[0]['field']}, n.id"
+        else:
+            order = f"ORDER BY _hi DESC, n.trust_level DESC, n.updated_at DESC, n.id"
+
+        limit = " LIMIT 500" if fuzzy else ""
         rows = conn.execute(
-            f"SELECT {_list_cols_sql()} {computed} FROM nicks n {where} "
-            f"ORDER BY n.{order}", params).fetchall()
-        return [dict(r) for r in rows]
+            # הכינוי _hi: SQLite מחשב את הביטוי (שתי תת-שאילתות לשורה) פעם
+            # אחת ולא פעמיים — לשדה ולמפתח המיון. נמדד: 0.83 → 0.67 שניות.
+            f"SELECT n.id, {hi} AS _hi FROM nicks n {where} {order}{limit}",
+            params + order_params).fetchall()
+        ids = [r[0] for r in rows]
+        with_info = sum(1 for r in rows if r[1])
+        total = len(ids)
+        if fuzzy:
+            total = conn.execute(f"SELECT COUNT(*) FROM nicks n {where}", params).fetchone()[0]
+    return {"ids": ids, "total": total, "with_info": with_info, "fuzzy": fuzzy}
+
+
+def _split_top(expr):
+    """מפצל ביטוי מיון בפסיקים שאינם בתוך סוגריים — "(CASE ...), n.forum"."""
+    out, depth, cur = [], 0, ""
+    for ch in expr:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    if cur.strip():
+        out.append(cur)
+    return out
+
+
+def get_nick_rows(ids):
+    """
+    שורות מלאות לחלון של הטבלה, **בסדר המזהים שהתבקש**. מזהה שנמחק בינתיים
+    פשוט אינו חוזר — הקורא יודע לזהות את החסר.
+    """
+    want = []
+    for i in (ids or [])[:_ROWS_PER_CALL_MAX]:
+        try:
+            want.append(int(i))
+        except (TypeError, ValueError):
+            continue
+    if not want:
+        return []
+    by_id = {}
+    with get_connection() as conn:
+        for chunk in _chunks(want, 400):
+            ph = ",".join("?" * len(chunk))
+            for r in conn.execute(
+                    f"SELECT {_list_cols_sql()}, {_row_computed_sql()} "
+                    f"FROM nicks n WHERE n.id IN ({ph})", list(chunk)):
+                by_id[r["id"]] = dict(r)
+    return [by_id[i] for i in want if i in by_id]
 
 def _existing_ids(conn, ids):
     """מסנן מזהים שכבר נמחקו — אחרת FK מפיל את כל הפעולה על בחירה ישנה."""

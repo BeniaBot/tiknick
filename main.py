@@ -244,6 +244,24 @@ class API:
         lim = int(limit) if limit else None
         return db.get_all_nicks(search or "", limit=lim, offset=int(offset or 0))
 
+    def get_nick_ids(self, view=None):
+        """
+        סדר הניקים שבתצוגה (מספרים בלבד) + המונים. view = {search,
+        conditions, sort_col, sort_dir}. ראו db.get_nick_ids — זה המסלול
+        שמחליף את משיכת כל השורות בבת אחת.
+        """
+        v = view if isinstance(view, dict) else {}
+        try:
+            sd = int(v.get("sort_dir") or 1)
+        except (TypeError, ValueError):
+            sd = 1
+        return db.get_nick_ids(v.get("search") or "", v.get("conditions"),
+                               v.get("sort_col") or "has_info", sd)
+
+    def get_nick_rows(self, ids):
+        """שורות מלאות לחלון הנראה בלבד."""
+        return db.get_nick_rows(ids or [])
+
     def get_avatars(self, nick_ids):
         """תמונות פרופיל לפי דרישה — רק לשורות שמוצגות (הרשימה עצמה לא נושאת אותן)"""
         return db.get_avatars(nick_ids or [])

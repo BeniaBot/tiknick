@@ -164,7 +164,7 @@ function hideDropLine() {
 }
 
 // מדידה לפי מה שנבנה בפועל ב-DOM (עשרות שורות בחלון הווירטואלי) — לעולם לא
-// לעבור על S.nicks, שהוא 90 אלף.
+// לעבור על כל הניקים — עשרות או מאות אלפים.
 function autoFitColumn(key) {
   const cells = document.querySelectorAll(`#tbody td[data-col="${CSS.escape(key)}"]`);
   const probe = document.createElement('span');
@@ -779,14 +779,18 @@ function buildTableHeader() {
   tr.appendChild(filler);
 }
 
-async function loadNicks(search = '') {
+async function loadNicks(search = '', opts = {}) {
   // טוקן ייחודי לבקשה הזו — אם עד שהיא חוזרת כבר יצאה בקשה חדשה יותר
   // (חיפוש נוסף, מחיקה, וכו'), מתעלמים מהתוצאה המיושנת. זה מונע מצב
   // שבו ניק שכבר נמחק "קופץ בחזרה" רגע לפני שנעלם, בעיקר בתצוגת כרטיסים.
   const myToken = ++S.loadToken;
   S.currentSearch = search;
-  S.multiSelected.clear();
-  S.selectedId = null;      // אחרת "ערוך"/"מחק" פעלו על ניק שכבר לא ברשימה
+  // מיון מחדש (keepSelection) אינו משנה *אילו* ניקים בתצוגה, רק את סדרם —
+  // ולכן הבחירה נשמרת, בדיוק כמו כשהמיון היה בזיכרון.
+  if (!opts.keepSelection) {
+    S.multiSelected.clear();
+    S.selectedId = null;    // אחרת "ערוך"/"מחק" פעלו על ניק שכבר לא ברשימה
+  }
   setStatus('טוען…');   // משוב מיידי — במאגר גדול הטעינה נמשכת שניות
   // תמונות פרופיל עלולות להשתנות אחרי סריקה/ייבוא — מטמון טרי לכל טעינה
   S.avatarCache.clear();
@@ -799,40 +803,121 @@ async function loadNicks(search = '') {
     if (fc) fc.textContent = '';
   }
 
-  const res = await api('get_nicks', search);
+  // סדר המזהים בלבד — לא השורות. ראו "הטבלה כחלון על רשימת מזהים" למטה.
+  const res = await api('get_nick_ids',
+                        { search, sort_col: S.sortCol, sort_dir: S.sortDir });
 
   if (myToken !== S.loadToken) return; // תשובה מיושנת — מתעלמים
+  S.viewConds = null;
+  await applyNickList(res, myToken);
+}
 
-  const rows  = res && Array.isArray(res.rows) ? res.rows : (Array.isArray(res) ? res : []);
-  const total = res && typeof res.total === 'number' ? res.total : rows.length;
+// ══ הטבלה כחלון על רשימת מזהים ═══════════════════════════════════════════
+// בנימין: "התוכנה עובדת מאוד לאט כשיש בה יותר מ-100K ניקים." נמדד על המאגר
+// שלו (250,420 ניקים): כל טעינה משכה את **כל** השורות — 7.6 שניות בשרת
+// ו-162MB שעוברים לכאן ומתפענחים כאן — אחרי כל עריכה, מחיקה, ייבוא וסריקה.
+//
+// עכשיו S.ids מחזיק את **סדר** כל הניקים שבתצוגה (מספרים בלבד, 1.9MB), וה-
+// **תוכן** נמשך רק לחלון הנראה (rowAt / ensureRows). כל מה שצריך "את כל
+// הניקים" — בחר הכול, ייצוא התצוגה, ניווט, המונים — עובד מול S.ids, ולכן
+// אין עימוד: הכול נגיש בגלילה, כמו שבנימין ביקש בעבר.
+S.ids = [];
+S.rowCache = new Map();     // id → שורה; null = נמחק בינתיים (לא לבקש שוב)
+S.withInfo = null;
+S.viewConds = null;         // תנאי הסינון המתקדם הפעיל, למיון מחדש
+const ROW_CACHE_MAX = 6000; // ~10MB; חלון של טבלה הוא עשרות שורות
+const _rowsInflight = new Set();
 
-  S.nicks = rows;
-  S.total = total;
-  S.cardsRendered = Math.min(S.cardsChunk, S.nicks.length);
-  // רשימה חדשה — חוזרים לראש הגלילה (גם בכרטיסים) כדי שהחלון הווירטואלי יהיה בטווח
-  const cw = document.getElementById('cards-wrap');
-  if (cw) cw.scrollTop = 0;
-  const tw2 = document.getElementById('table-wrap');
-  if (tw2) tw2.scrollTop = 0;
+// שורה במיקום i בתצוגה, או undefined כשעוד לא נטענה. נגיעה מקדמת אותה בסדר
+// ה-Map — כך הפינוי שבשולי המטמון לעולם לא מוציא את מה שעל המסך עכשיו.
+function rowAt(i) {
+  const id = S.ids[i];
+  if (id == null || !S.rowCache.has(id)) return undefined;
+  const r = S.rowCache.get(id);
+  S.rowCache.delete(id);
+  S.rowCache.set(id, r);
+  return r;
+}
 
-  sortNicks();
+function cacheRows(rows) {
+  for (const r of rows) S.rowCache.set(r.id, r);
+  if (S.rowCache.size > ROW_CACHE_MAX) {
+    // Map שומר סדר הכנסה/נגיעה: הראשונים הם מה שגללו ממנו מזמן
+    let drop = S.rowCache.size - Math.floor(ROW_CACHE_MAX * 0.75);
+    for (const id of S.rowCache.keys()) {
+      if (drop-- <= 0) break;
+      S.rowCache.delete(id);
+    }
+  }
+}
+
+// מושך את השורות החסרות סביב החלון [start, end). מחזיר true אם נוסף משהו.
+async function ensureRows(start, end) {
+  const tok = S.loadToken;
+  const lo = Math.max(0, start - 120), hi = Math.min(S.ids.length, end + 120);
+  const want = [];
+  for (let i = lo; i < hi; i++) {
+    const id = S.ids[i];
+    if (!S.rowCache.has(id) && !_rowsInflight.has(id)) want.push(id);
+  }
+  if (!want.length) return false;
+  want.forEach(id => _rowsInflight.add(id));
+  try {
+    const rows = await api('get_nick_rows', want) || [];
+    if (tok !== S.loadToken) return false;   // בינתיים נטענה רשימה אחרת
+    cacheRows(rows);
+    // מזהה שלא חזר נמחק בינתיים. מסמנים, אחרת החלון היה מבקש אותו שוב ושוב.
+    const got = new Set(rows.map(r => r.id));
+    for (const id of want) if (!got.has(id)) S.rowCache.set(id, null);
+    return true;
+  } finally {
+    want.forEach(id => _rowsInflight.delete(id));
+  }
+}
+
+// שורות מלאות לרשימת מזהים שלמה (העתקה ללוח וכד') — בלי לדחוק מהמטמון את
+// מה שעל המסך.
+async function rowsFor(ids) {
+  const fetched = new Map();
+  const missing = ids.filter(id => !S.rowCache.get(id));
+  for (let i = 0; i < missing.length; i += 2000) {
+    const part = await api('get_nick_rows', missing.slice(i, i + 2000)) || [];
+    part.forEach(r => fetched.set(r.id, r));
+  }
+  return ids.map(id => S.rowCache.get(id) || fetched.get(id)).filter(Boolean);
+}
+
+// השם applyView כבר תפוס (מחליף טבלה/כרטיסים, למטה). ב-JS ההצהרה האחרונה
+// גוברת בשקט, ולכן שם זהה היה מפעיל את מחליף התצוגה במקום לטעון את הרשימה.
+async function applyNickList(res, token) {
+  S.ids = (res && Array.isArray(res.ids)) ? res.ids : [];
+  S.total = (res && typeof res.total === 'number') ? res.total : S.ids.length;
+  S.withInfo = (res && typeof res.with_info === 'number') ? res.with_info : null;
+  S.rowCache = new Map();
+  // ניק שנבחר ואינו עוד בתצוגה — הבחירה עליו מסוכנת ("מחק" על משהו שלא רואים)
+  if (S.selectedId != null && !S.ids.includes(S.selectedId)) S.selectedId = null;
+  resetScroll();
+  // החלון הראשון לפני הציור הראשון — אחרת הטבלה מהבהבת בשורות "טוען"
+  await ensureRows(0, 80);
+  if (token !== S.loadToken) return;
   renderTable();
   updateBulkBar();
+}
+
+// טעינה מחדש של התצוגה הנוכחית — חיפוש או סינון מתקדם — בסדר החדש
+function reloadView() {
+  if (_fieldFilterActive && S.viewConds) return runFieldFilter(S.viewConds, true);
+  return loadNicks(S.currentSearch || '', { keepSelection: true });
 }
 
 function sortBy(col) {
   if (S.sortCol === col) S.sortDir *= -1;
   else { S.sortCol = col; S.sortDir = 1; }
   api('set_display_setting', 'sort', `${S.sortCol}:${S.sortDir}`);   // זיכרון בין הפעלות
-  sortNicks();
-  // גלילה חזרה למעלה — אחרת החלון הווירטואלי מציג את השורות של מיקום הגלילה הישן
-  const tw = document.getElementById('table-wrap');
-  if (tw) tw.scrollTop = 0;
-  const cw = document.getElementById('cards-wrap');
-  if (cw) cw.scrollTop = 0;
-  S.cardsRendered = Math.min(S.cardsChunk, S.nicks.length);
-  renderTable();
   updateSortIcons();
+  // המיון נעשה בשרת: מיון 250 אלף שורות כאן דרש שכולן יהיו כאן. applyView
+  // מחזיר את הגלילה לראש, כמו קודם.
+  reloadView();
 }
 
 function updateSortIcons() {
@@ -847,21 +932,8 @@ function updateSortIcons() {
 // Collator אחד קבוע — localeCompare(...,'he') בכל השוואה היה פי ~2.4 יקר יותר
 const HE_COLLATOR = new Intl.Collator('he', { numeric: true });
 
-function sortNicks() {
-  // ברירת המחדל כבר ממוינת ב-SQL (has_info, trust_level, updated_at) — אין טעם למיין שוב
-  if (S.sortCol === 'has_info') return;
-  S.nicks.sort((a, b) => {
-    // has_info always first
-    if (a.has_info !== b.has_info) return b.has_info - a.has_info;
-    const va = a[S.sortCol] ?? '';
-    const vb = b[S.sortCol] ?? '';
-    // עמודת הפורום ממוינת לפי הסדר הקנוני ולא באלפבית — מתמחים ראשון
-    if (S.sortCol === 'forum') return forumCmp(va, vb) * S.sortDir;
-    const n = typeof va === 'number';
-    return n ? (va - vb) * S.sortDir
-             : HE_COLLATOR.compare(String(va), String(vb)) * S.sortDir;
-  });
-}
+// (sortNicks הוסרה: המיון נעשה בשרת — ראו db.get_nick_ids/_sort_expr.
+//  כולל עמודת הפורום, שממוינת שם לפי הסדר הקנוני — מתמחים ראשון.)
 
 function buildNickRow(n) {
   const tr = document.createElement('tr');
@@ -921,13 +993,13 @@ function resetScroll() {
   if (wrap) wrap.scrollTop = 0;
   const cw = document.getElementById('cards-wrap');
   if (cw) cw.scrollTop = 0;
-  S.cardsRendered = Math.min(S.cardsChunk, S.nicks.length);
+  S.cardsRendered = Math.min(S.cardsChunk, S.ids.length);
 }
 
 function renderTable() {
   const empty = document.getElementById('empty-state');
 
-  if (!S.nicks.length) {
+  if (!S.ids.length) {
     document.getElementById('tbody').innerHTML = '';
     empty.style.display = '';
     renderEmptyState();
@@ -979,7 +1051,7 @@ function renderTableWindow() {
   const wrap  = document.getElementById('table-wrap');
   const tbody = document.getElementById('tbody');
   if (!wrap || !tbody) return;
-  const total = S.nicks.length;
+  const total = S.ids.length;
   if (!total) { tbody.innerHTML = ''; return; }
 
   const buffer = 8;
@@ -1004,8 +1076,18 @@ function renderTableWindow() {
     tbody.appendChild(spTop);
   }
 
+  let missing = false;
   for (let i = start; i < end; i++) {
-    tbody.appendChild(buildNickRow(S.nicks[i]));
+    const n = rowAt(i);
+    if (n) { tbody.appendChild(buildNickRow(n)); continue; }
+    // עוד לא הגיעה (undefined) או נמחקה בינתיים (null): שורה באותו גובה, כדי
+    // שהמרווחים והגלילה יישארו מדויקים
+    const tr = document.createElement('tr');
+    tr.className = 'row-pending';
+    tr.innerHTML = `<td colspan="${cols}" style="height:${rh}px;padding:0 12px;` +
+                   `color:var(--subtext);opacity:.55">${n === null ? 'נמחק' : '…'}</td>`;
+    tbody.appendChild(tr);
+    if (n === undefined) missing = true;
   }
 
   if (end < total) {
@@ -1016,7 +1098,7 @@ function renderTableWindow() {
   }
 
   // מדידת גובה שורה אמיתית פעם אחת (לפי הצפיפות הנוכחית), לחישוב מדויק יותר בהמשך
-  const sample = tbody.querySelector('tr:not(.v-spacer)');
+  const sample = tbody.querySelector('tr:not(.v-spacer):not(.row-pending)');
   if (sample) {
     const h = sample.getBoundingClientRect().height;
     if (h && Math.abs(h - S.rowHeight) > 1 && !_rhRerender) {
@@ -1030,6 +1112,7 @@ function renderTableWindow() {
   }
 
   hydrateAvatars();   // רק לשורות שנבנו כרגע
+  if (missing) ensureRows(start, end).then(ch => { if (ch) renderTableWindow(); });
 }
 let _rhRerender = false;
 
@@ -1418,7 +1501,7 @@ function editSelected() {
 
 async function deleteSelected() {
   if (!S.selectedId) return;
-  const nick = S.nicks.find(n => n.id === S.selectedId);
+  const nick = S.rowCache.get(S.selectedId) || await api('get_nick', S.selectedId);
   if (!nick) return;
   if (!confirm(`להעביר את "${nick.username}" (${nick.forum}) לסל המחזור?\n\n` +
                'אפשר לבטל מיד, או לשחזר מסל המחזור במשך 30 יום.')) return;
@@ -1638,7 +1721,7 @@ function toggleRowSelected(id, checked) {
 }
 
 function toggleSelectAll(checked) {
-  if (checked) S.nicks.forEach(n => S.multiSelected.add(n.id));
+  if (checked) S.ids.forEach(id => S.multiSelected.add(id));
   else S.multiSelected.clear();
   renderTable();
   updateBulkBar();
@@ -1657,7 +1740,9 @@ function updateBulkBar() {
   if (lowerBar) lowerBar.style.display = n > 0 ? 'flex' : 'none';
   if (cnt2) cnt2.textContent = n;
   const selAllCb = document.getElementById('select-all-cb');
-  if (selAllCb) selAllCb.checked = S.nicks.length > 0 && S.nicks.every(n2 => S.multiSelected.has(n2.id));
+  // בדיקת הגודל קודם: ברוב המקרים היא מכריעה בלי לעבור על 250 אלף מזהים
+  if (selAllCb) selAllCb.checked = S.ids.length > 0 && S.multiSelected.size >= S.ids.length
+                                   && S.ids.every(id => S.multiSelected.has(id));
 }
 
 async function deleteBulkSelected() {
@@ -1695,18 +1780,18 @@ document.addEventListener('keydown', (e) => {
   }
   if (modalOpen) return;
   if (e.target === search) {
-    if (e.key === 'Enter' && S.nicks.length) { e.preventDefault(); openNickDialog(S.nicks[0].id); }
-    if (e.key === 'ArrowDown' && S.nicks.length) { e.preventDefault(); search.blur(); selectRow(S.nicks[0].id); }
+    if (e.key === 'Enter' && S.ids.length) { e.preventDefault(); openNickDialog(S.ids[0]); }
+    if (e.key === 'ArrowDown' && S.ids.length) { e.preventDefault(); search.blur(); selectRow(S.ids[0]); }
     return;
   }
   if (inInput) return;
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-    if (!S.nicks.length) return;
+    if (!S.ids.length) return;
     e.preventDefault();
-    const idx = S.nicks.findIndex(n => n.id === S.selectedId);
-    const next = Math.min(S.nicks.length - 1, Math.max(0, idx + (e.key === 'ArrowDown' ? 1 : -1)));
-    selectRow(S.nicks[next].id);
-    document.querySelector(`tr[data-id="${S.nicks[next].id}"], .nick-card[data-id="${S.nicks[next].id}"]`)
+    const idx = S.ids.indexOf(S.selectedId);
+    const next = Math.min(S.ids.length - 1, Math.max(0, idx + (e.key === 'ArrowDown' ? 1 : -1)));
+    selectRow(S.ids[next]);
+    document.querySelector(`tr[data-id="${S.ids[next]}"], .nick-card[data-id="${S.ids[next]}"]`)
       ?.scrollIntoView({ block: 'nearest' });
   } else if (e.key === 'Enter' && S.selectedId) {
     e.preventDefault(); openNickDialog(S.selectedId);
@@ -1726,8 +1811,10 @@ function nickRowText(n, sep = '\t') {
              }).join(sep);
 }
 async function copySelectedRows() {
-  const rows = S.nicks.filter(n => S.multiSelected.has(n.id));
-  if (!rows.length) { toast('לא נבחרו ניקים', 'error'); return; }
+  // הנבחרים שבתצוגה, בסדר התצוגה — והשורות של מי שלא על המסך נמשכות עכשיו
+  const sel = S.ids.filter(id => S.multiSelected.has(id));
+  if (!sel.length) { toast('לא נבחרו ניקים', 'error'); return; }
+  const rows = await rowsFor(sel);
   const hidden = hiddenColsSet();
   const header = COLS.filter(c => c.key !== '_open' && c.key !== 'identity' && !hidden.has(c.key))
                      .map(c => c.label).join('\t');
@@ -1748,13 +1835,13 @@ async function copyMergedProfile(p) {
 
 // ══ STATS ═════════════════════════════════════════════════════════════
 function updateStats() {
-  document.getElementById('stat-total').textContent = S.total || S.nicks.length;
-  // has_info מגיע רק ממסלול get_nicks. filter_nicks_multi לא מחשב אותו, ואז
-  // כל השורות נראו "בלי מידע" והמונה הראה 0 על סינון שהחזיר מאות תוצאות.
+  document.getElementById('stat-total').textContent = S.total || S.ids.length;
+  // "עם מידע" נספר בשרת, באותה שאילתה שמחזירה את הסדר — גם בסינון מתקדם,
+  // שבו עד עכשיו הוא הוצג "—" כי השורות של הסינון לא נשאו את הדגל.
   const el = document.getElementById('stat-info');
-  const known = S.nicks.some(n => n.has_info !== undefined);
-  el.textContent = known ? S.nicks.filter(n => n.has_info).length : '—';
-  el.title = known ? '' : 'לא מחושב בסינון מתקדם';
+  const known = typeof S.withInfo === 'number';
+  el.textContent = known ? S.withInfo : '—';
+  el.title = known ? '' : 'לא מחושב';
 }
 
 // ══ NICK DIALOG ═══════════════════════════════════════════════════════
@@ -3056,19 +3143,29 @@ async function _applyFieldFilterNow() {
     document.getElementById('flt-count').textContent = '';
     return;
   }
+  await runFieldFilter(conditions);
+}
+
+// הסינון המתקדם עובר באותו מסלול כמו הטבלה: סדר מזהים מהשרת, שורות לפי
+// הצורך. "פורום שווה פרוג" היה 143 אלף שורות מלאות בבת אחת (3.7 שניות
+// בשרת לבד); עכשיו 0.36.
+async function runFieldFilter(conditions, keepSelection = false) {
   const seq = ++_filterSeq;
-  const results = await api('filter_nicks_multi', conditions) || [];
+  const res = await api('get_nick_ids',
+                        { conditions, sort_col: S.sortCol, sort_dir: S.sortDir });
   if (seq !== _filterSeq) return;   // סינון חדש יותר כבר יצא
   _fieldFilterActive = true;
-  S.nicks = results;
-  S.total = results.length;
-  S.multiSelected.clear();
-  S.selectedId = null;
-  sortNicks();
-  resetScroll();
-  renderTable();
-  updateBulkBar();
-  document.getElementById('flt-count').textContent = `${results.length} תוצאות`;
+  S.viewConds = conditions;
+  if (!keepSelection) {
+    S.multiSelected.clear();
+    S.selectedId = null;
+  }
+  // טוקן חדש: טעינה רגילה שעוד בדרך לא תדרוס את תוצאות הסינון כשתחזור
+  const tok = ++S.loadToken;
+  await applyNickList(res, tok);
+  if (tok !== S.loadToken) return;
+  const fc = document.getElementById('flt-count');
+  if (fc) fc.textContent = `${S.ids.length} תוצאות`;
 }
 
 async function clearFieldFilter() {
@@ -4056,7 +4153,7 @@ async function restoreDb() {
 async function exportData() {
   const counts = await api('get_export_counts') || { all: 0, has_info: 0, my_info: 0 };
   const selN = S.multiSelected.size;
-  const viewN = S.nicks.length;
+  const viewN = S.ids.length;
   const opt = (mode, icon, title, desc, count, checked) => `
     <label class="policy-opt" style="display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border:1px solid var(--border-soft);border-radius:10px;margin-bottom:8px;cursor:pointer">
       <input type="radio" name="expmode" value="${mode}" ${checked ? 'checked' : ''} style="margin-top:3px">
@@ -4091,7 +4188,7 @@ async function exportData() {
       const fmt = document.querySelector('input[name="expfmt"]:checked')?.value || 'tiknick';
       let ids = null;
       if (mode === 'selected') ids = [...S.multiSelected];
-      if (mode === 'view') { ids = S.nicks.map(n => n.id); mode = 'selected'; }
+      if (mode === 'view') { ids = S.ids.slice(); mode = 'selected'; }
       closeModal();
       const res = await api(fmt === 'csv' ? 'export_csv' : 'export_data', mode, ids);
       if (res?.ok) {
@@ -6339,7 +6436,7 @@ function renderCards() {
   const empty = document.getElementById('cards-empty');
   if (!grid) return;
 
-  if (!S.nicks.length) {
+  if (!S.ids.length) {
     grid.innerHTML = '';
     if (empty) empty.style.display = '';
     return;
@@ -6351,7 +6448,7 @@ function renderCards() {
   // גלילה ארוכה במאגר גדול הגיעה למאות אלפי צמתי DOM.
   const wrap = document.getElementById('cards-wrap');
   const cols = S.cardsCols || 3, rowH = S.cardsRowH || 280;
-  const total = S.nicks.length, totalRows = Math.ceil(total / cols);
+  const total = S.ids.length, totalRows = Math.ceil(total / cols);
   const scrollTop = wrap ? wrap.scrollTop : 0, viewH = wrap ? (wrap.clientHeight || 800) : 800;
   const buffer = 2;
   // clamp — אחרת אחרי חיפוש שמקטין את הרשימה בזמן שגלולים למטה, החלון יוצא מהטווח והגריד נשאר ריק
@@ -6362,7 +6459,20 @@ function renderCards() {
 
   grid.innerHTML = '';
   if (startRow > 0) grid.appendChild(cardsSpacer(startRow * rowH));
-  for (let i = start; i < end; i++) grid.appendChild(buildCardElement(S.nicks[i]));
+  let missing = false;
+  for (let i = start; i < end; i++) {
+    const n = rowAt(i);
+    if (n) { grid.appendChild(buildCardElement(n)); continue; }
+    // כרטיס ממתין באותה מחלקה — וכך באותו גובה קבוע — כדי שהמדידה והרווחים
+    // יישארו מדויקים עד שהשורה מגיעה
+    const d = document.createElement('div');
+    d.className = 'nick-card card-pending';
+    d.style.opacity = '.4';
+    d.textContent = n === null ? 'נמחק' : '…';
+    grid.appendChild(d);
+    if (n === undefined) missing = true;
+  }
+  if (missing) ensureRows(start, end).then(ch => { if (ch) renderCards(); });
   if (endRow < totalRows) grid.appendChild(cardsSpacer((totalRows - endRow) * rowH));
   S.cardsRange = { start, end };
 
@@ -6405,15 +6515,15 @@ function onCardsScroll() {
   if (_cardsScrollRaf) return;
   _cardsScrollRaf = requestAnimationFrame(() => {
     _cardsScrollRaf = null;
-    if (DISPLAY.view !== 'cards' || !S.nicks.length) return;
+    if (DISPLAY.view !== 'cards' || !S.ids.length) return;
     const wrap = document.getElementById('cards-wrap');
     if (!wrap) return;
     // בנה מחדש רק אם החלון הנדרש השתנה
     const cols = S.cardsCols || 3, rowH = S.cardsRowH || 280;
     const startRow = Math.max(0, Math.floor(wrap.scrollTop / rowH) - 2);
-    const endRow = Math.min(Math.ceil(S.nicks.length / cols),
+    const endRow = Math.min(Math.ceil(S.ids.length / cols),
                             Math.ceil((wrap.scrollTop + wrap.clientHeight) / rowH) + 2);
-    const start = startRow * cols, end = Math.min(S.nicks.length, endRow * cols);
+    const start = startRow * cols, end = Math.min(S.ids.length, endRow * cols);
     if (!S.cardsRange || S.cardsRange.start !== start || S.cardsRange.end !== end) renderCards();
   });
 }

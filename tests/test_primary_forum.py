@@ -132,8 +132,15 @@ ok("ופורום שאינו ברשימה — אחרי כולם", res["unknown"][
    and res["unknown"][-1] in ("זר", "אלף"), res["unknown"])
 
 ok("מפת הזהויות ממיינת עם forumCmp", ".sort(forumCmp)" in app)
-ok("מיון הטבלה לפי עמודת הפורום משתמש בסדר הקנוני",
-   "if (S.sortCol === 'forum') return forumCmp(va, vb) * S.sortDir;" in app)
+# מיון הטבלה לפי עמודת הפורום נעשה בשרת (get_nick_ids) — ושם, לא באלפבית
+srt = db.get_nick_ids("", None, "forum", 1)["ids"]
+rows = {r["id"]: r for r in db.get_nick_rows(srt)}
+plain = [rows[i]["forum"] for i in srt if not rows[i]["has_info"]]
+ok("מיון הטבלה לפי עמודת הפורום: מתמחים ראשון",
+   plain and plain[0] == "מתמחים טופ", plain[:3])
+ok("ובכיוון ההפוך — אחרון", db.get_nick_ids("", None, "forum", -1)["ids"]
+   and [rows[i]["forum"] for i in db.get_nick_ids("", None, "forum", -1)["ids"]
+        if not rows[i]["has_info"]][-1] == "מתמחים טופ")
 ok("רשימת הפורומים במפת הזהויות אינה ממוינת עוד באלפבית",
    "flatMap(g => g.forums))].sort(HE_COLLATOR.compare)" not in app)
 

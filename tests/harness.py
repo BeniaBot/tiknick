@@ -62,8 +62,49 @@ STUB = """// גשר מזויף: כל מתודה שלא הוגדרה כאן מח�
 const FORUMS = %(forums)s;
 const ROWS = %(rows)s;
 const SETTINGS = %(settings)s;
+
+// ── הטבלה כחלון על רשימת מזהים ─────────────────────────────────────────
+// השורות נוצרות לפי דרישה (אותם שדות כמו make_rows בפייתון), כך שאפשר לדמות
+// 250 אלף ניקים בלי להטמיע מאה מגה של JSON. ‎window.__rowCalls/__rowsServed
+// סופרים כמה שורות הממשק ביקש בפועל — זה המדד שהשינוי בא לשפר.
+const N_ROWS = %(n)d;
+const _FN = FORUMS.map(f => f.name);
+function rowFor(id) {
+  const i = id - 1;
+  return {
+    id, forum: _FN[i %% _FN.length], username: 'משתמש_' + i, full_name: 'שם מלא ' + i,
+    real_name: i %% 3 === 0 ? 'ישראל ישראלי' : '', groups: i %% 7 === 0 ? 'מנהלים' : 'רגיל',
+    reputation: String(i * 3), phone: i %% 2 ? '05012345' + String(i %% 100).padStart(2, '0') : '',
+    email: i %% 4 === 0 ? 'u' + i + '@example.com' : '',
+    address: i %% 5 === 0 ? 'בני ברק, רחוב עקיבא ' + i : '',
+    status: i %% 11 === 0 ? 'מורחק' : 'פעיל',
+    last_seen: '2026-08-' + String(i %% 28 + 1).padStart(2, '0'),
+    join_date: '2019-0' + (i %% 9 + 1) + '-01', post_count: String(i * 17),
+    trust_level: (i %% 10) + 1, updated_at: '2026-09-01 10:00:00',
+    extra_info: 'פרטים נוספים ארוכים לבדיקת חיתוך '.repeat(i %% 3),
+    notes: i %% 6 === 0 ? 'הערה כלשהי' : '', private_notes: '', nick_color: '',
+    has_avatar: 0, has_identity: i %% 9 === 0 ? 1 : 0, extra_contacts: i %% 8 === 0 ? 1 : 0,
+    conflict_count: 0, conflict_fields: null, has_info: (i %% 2 || i %% 6 === 0) ? 1 : 0,
+  };
+}
+window.__rowCalls = 0; window.__rowsServed = 0; window.__idCalls = 0;
 const API = {
   get_forums: async () => FORUMS,
+  get_nick_ids: async (view) => {
+    window.__idCalls++;
+    window.__lastView = view;
+    let ids = Array.from({ length: N_ROWS }, (_, k) => k + 1);
+    const q = ((view && view.search) || '').trim();
+    if (q) ids = ids.filter(id => rowFor(id).username.includes(q));
+    if (view && view.sort_col === 'username' && view.sort_dir < 0) ids.reverse();
+    let wi = 0; for (const id of ids) if (rowFor(id).has_info) wi++;
+    return { ids, total: ids.length, with_info: wi, fuzzy: false };
+  },
+  get_nick_rows: async (ids) => {
+    window.__rowCalls++;
+    window.__rowsServed += ids.length;
+    return ids.map(rowFor);
+  },
   get_nicks: async () => ({ rows: ROWS, total: ROWS.length }),
   get_display_settings: async () => SETTINGS,
   set_display_setting: async (k, v) => { SETTINGS[k] = v; window.__saved = { ...SETTINGS }; return { ok: true }; },
@@ -113,7 +154,8 @@ def build(dest, rows):
     io.open(os.path.join(dest, "stub.js"), "w", encoding="utf-8").write(STUB % {
         "forums": json.dumps([{"id": i + 1, "name": n, "color": c, "url": ""}
                               for i, (n, c) in enumerate(FORUMS)], ensure_ascii=False),
-        "rows": json.dumps(make_rows(rows), ensure_ascii=False),
+        "rows": json.dumps(make_rows(min(rows, 300)), ensure_ascii=False),
+        "n": rows,
         "settings": json.dumps({"theme": "dark", "accent": "amber", "view": "table",
                                 "density": "normal", "hidden_cols": "", "col_layout": ""}),
         "version": version,
