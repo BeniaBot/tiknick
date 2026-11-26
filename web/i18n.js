@@ -1,5 +1,5 @@
 // ═══ נוצר אוטומטית ע"י tools/build_i18n.py — אין לערוך ביד ═══
-// 958 מחרוזות קבועות, 239 תבניות.
+// 960 מחרוזות קבועות, 239 תבניות.
 const I18N_EN = {
   "כל מידע משויך למקור (\"אב\"). בכל שדה — הערך מהמקור בעל האמינות הגבוהה מוצג. שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד. \"אבסולוטי\" (רק ל\"אני\") = תמיד מנצח. את התנהגות הסריקה מנהלים בלשונית \"התנגשויות\".": "Every piece of information belongs to a source (a \"parent\"). For each field, the value from the highest-trust source is shown. Changing trust or deleting a source affects the data immediately. \"Absolute\" (for \"Me\" only) = always wins. Scrape behavior is managed on the \"Conflicts\" tab.",
   "Stinknik סורק את כל הפוסטים של משתמש ומציג את כל הפוסטים שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק \"שנוי במחלוקת\", כלומר רק פוסטים עם יותר דיסים מלייקים).": "Stinknik scans all of a user's posts and shows every post that received downvotes — including the ones the forum hides (the forum only shows \"controversial\" posts, meaning posts with more downvotes than upvotes).",
@@ -232,6 +232,7 @@ const I18N_EN = {
   "לא ניתן לבדוק עדכונים כרגע": "Can't check for updates right now",
   "לא ניתן לבחור ערך לשדה הזה": "Can't choose a value for this field",
   "לא נמצאה שורת כותרות בקובץ": "No header row found in the file",
+  "נקה חיפוש וחזור לכל הרשימה": "Clear the search and return to the full list",
   "• שניהם פעילים במיוחד ביום": "• Both are especially active on",
   "📥 ייבוא CSV — התאמת עמודות": "📥 CSV import — column mapping",
   "🔒 סודי (לא יסונכרן בייצוא)": "🔒 Private (excluded from export)",
@@ -723,6 +724,7 @@ const I18N_EN = {
   "מצב תצוגה": "View mode",
   "משתמש שני": "Second user",
   "נקה בחירה": "Clear selection",
+  "נקה חיפוש": "Clear search",
   "קבל מיובא": "Accept imported",
   "ראה הדרכה": "See instructions",
   "שם לסינון": "Filter name",

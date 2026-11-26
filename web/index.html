@@ -119,9 +119,11 @@
     <!-- topbar -->
     <div id="topbar">
       <div class="search-wrap">
-        <span class="search-icon">🔍</span>
+        <span class="search-icon"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.4 10.4L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
         <input type="text" id="search-input" placeholder="חיפוש בכל השדות..."
                oninput="onSearch(this.value)">
+        <button type="button" id="search-clear" class="search-clear" onclick="clearSearch()"
+                title="נקה חיפוש וחזור לכל הרשימה" aria-label="נקה חיפוש" hidden><svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></button>
       </div>
       <button id="advanced-filter-btn" class="btn btn-ghost btn-sm" onclick="toggleFilterBar()"
               title="חיפוש וסינון מתקדם לפי שדה" style="display:flex;align-items:center;gap:5px">

@@ -1090,5 +1090,19 @@
   "kind": "static",
   "where": "manual",
   "context": "cookie nudge after a scrape (0.9.4)"
+ },
+ {
+  "he": "נקה חיפוש",
+  "en": "Clear search",
+  "kind": "static",
+  "where": "web/index.html",
+  "context": "aria-label of the ✕ button inside the top search box"
+ },
+ {
+  "he": "נקה חיפוש וחזור לכל הרשימה",
+  "en": "Clear the search and return to the full list",
+  "kind": "static",
+  "where": "web/index.html",
+  "context": "tooltip of the ✕ button inside the top search box"
  }
 ]

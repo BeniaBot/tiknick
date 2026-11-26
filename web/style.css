@@ -277,20 +277,36 @@ body::before{
   border-bottom:1px solid var(--border-soft);z-index:5;
 }
 .search-wrap{
-  flex:1 1 160px;min-width:0;max-width:440px;display:flex;align-items:center;gap:9px;
-  background:var(--card);border:1.5px solid var(--border-soft);
-  border-radius:var(--r);padding:0 15px;
-  transition:all .25s var(--ease);box-shadow:var(--shadow-sm);
+  flex:1 1 160px;min-width:0;max-width:440px;display:flex;align-items:center;gap:8px;
+  background:var(--card);border:1px solid var(--border);
+  border-radius:var(--r);padding:0;padding-inline:12px 8px;
+  transition:border-color .15s var(--ease),box-shadow .15s var(--ease);
 }
+.search-wrap:hover{border-color:color-mix(in srgb, var(--text) 22%, var(--border))}
+/* מיקוד: המסגרת נצבעת ומתעבה בפיקסל (inset — בלי לזוז ובלי זוהר) */
 .search-wrap:focus-within{
-  border-color:var(--accent);box-shadow:0 0 0 4px var(--accent-glow),var(--shadow-sm);
+  border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent);
 }
 .search-wrap input{
   flex:1;background:transparent;border:none;outline:none;color:var(--text);
   font-family:var(--font);font-size:14px;font-weight:500;padding:11px 2px;direction:rtl;
 }
 .search-wrap input::placeholder{color:var(--subtext)}
-.search-icon{color:var(--subtext);font-size:15px}
+/* בלי min-width:0 השדה שומר על רוחבו הטבעי, ובחלון צר ה-✕ נדחק אל מחוץ לתיבה.
+   והמיקוד כבר מסומן ע"י הזוהר של התיבה כולה — מסגרת שנייה על השדה היא כפולה. */
+.search-wrap input{min-width:0}
+.search-wrap input:focus-visible{outline:none}
+.search-icon{display:flex;flex-shrink:0;color:var(--subtext);transition:color .15s}
+.search-wrap:focus-within .search-icon{color:var(--text-dim)}
+.search-clear{
+  flex-shrink:0;width:26px;height:26px;padding:0;border:none;border-radius:6px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  background:transparent;color:var(--subtext);transition:background .12s,color .12s;
+}
+.search-clear:hover{background:color-mix(in srgb, var(--text) 9%, transparent);color:var(--text)}
+.search-clear:active{background:color-mix(in srgb, var(--text) 14%, transparent)}
+.search-clear:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.search-clear[hidden]{display:none!important}
 .topbar-stats{margin-right:auto;display:flex;gap:9px;flex-shrink:0;cursor:pointer}
 .stat-pill{
   white-space:nowrap;flex-shrink:0;
@@ -576,7 +592,14 @@ body[data-view="cards"] #cards-wrap{display:block}
 
 /* ══ TOAST ══ */
 #toast-container{position:fixed;bottom:26px;left:26px;z-index:999;display:flex;flex-direction:column;gap:10px;pointer-events:none}
-.toast{padding:14px 19px;border-radius:var(--r-sm);font-size:13.5px;font-weight:700;color:#fff;box-shadow:var(--shadow-lg);animation:slide-toast .34s var(--spring);pointer-events:none;backdrop-filter:blur(12px);display:flex;align-items:center;gap:9px}
+.toast{padding:14px 19px;border-radius:var(--r-sm);font-size:13.5px;font-weight:700;color:#fff;box-shadow:var(--shadow-lg);animation:slide-toast .34s var(--spring);pointer-events:auto;backdrop-filter:blur(12px);display:flex;align-items:center;gap:9px;max-width:min(520px,calc(100vw - 52px))}
+.toast .toast-text{flex:1;min-width:0;overflow-wrap:anywhere}
+.toast .toast-close{
+  flex-shrink:0;width:24px;height:24px;padding:0;border:none;border-radius:6px;
+  display:flex;align-items:center;justify-content:center;cursor:pointer;
+  background:transparent;color:rgba(255,255,255,.85);transition:background .12s,color .12s;
+}
+.toast .toast-close:hover{background:rgba(255,255,255,.2);color:#fff}
 .toast-success{background:linear-gradient(135deg,rgba(52,211,153,.95),rgba(16,150,110,.95))}
 .toast-error{background:linear-gradient(135deg,rgba(244,84,76,.95),rgba(200,50,42,.95))}
 .toast-info{background:linear-gradient(135deg,rgba(255,107,74,.95),rgba(229,80,47,.95))}
@@ -814,7 +837,7 @@ tbody tr:hover td:last-child::after {
   animation: pop-in .4s var(--spring);
 }
 .toast-success::before { content: '✓'; }
-.toast-error::before   { content: '✕'; }
+.toast-error::before   { content: '!'; }
 .toast-info::before    { content: 'ℹ'; }
 @keyframes pop-in { from { transform: scale(0) rotate(-180deg); } to { transform: scale(1) rotate(0); } }
 

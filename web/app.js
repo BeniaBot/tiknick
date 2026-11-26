@@ -304,19 +304,20 @@ async function _origInit() {
     if (el && v?.version) el.textContent = `v${v.version} | Tik-Nick`;
   });
   await applyDisplaySettings();
-  // זיכרון סשן: מיון וחיפוש אחרונים
+  // זיכרון בין הפעלות: המיון בלבד. החיפוש **אינו** נזכר — בנימין: "בכל הפעלה
+  // של התוכנה מופיע אותו חיפוש מקודם ולא מרועננת התוכנה". מי שפותח את התוכנה
+  // מצפה לראות את כל הרשימה; חיפוש שנשאר מאתמול נראה כמו רשימה שחסרים בה ניקים.
   const savedSort = String(DISPLAY.sort || '');
   if (savedSort.includes(':')) {
     const [c, d] = savedSort.split(':');
     if (COLS.some(x => x.key === c) || c === 'has_info') { S.sortCol = c; S.sortDir = d === '-1' ? -1 : 1; }
   }
-  const lastSearch = String(DISPLAY.last_search || '');
   const si = document.getElementById('search-input');
-  if (si && lastSearch) si.value = lastSearch;
+  if (si) si.value = '';
   buildTableHeader();
   updateSortIcons();
   await loadForums();
-  await loadNicks(lastSearch);
+  await loadNicks('');
   const tableWrap = document.getElementById('table-wrap');
   if (tableWrap) tableWrap.addEventListener('scroll', onTableScroll);
   const cardsWrap = document.getElementById('cards-wrap');
@@ -780,6 +781,7 @@ function buildTableHeader() {
 }
 
 async function loadNicks(search = '', opts = {}) {
+  syncSearchClear();
   // טוקן ייחודי לבקשה הזו — אם עד שהיא חוזרת כבר יצאה בקשה חדשה יותר
   // (חיפוש נוסף, מחיקה, וכו'), מתעלמים מהתוצאה המיושנת. זה מונע מצב
   // שבו ניק שכבר נמחק "קופץ בחזרה" רגע לפני שנעלם, בעיקר בתצוגת כרטיסים.
@@ -1760,11 +1762,25 @@ async function deleteBulkSelected() {
 
 // ══ SEARCH ════════════════════════════════════════════════════════════
 function onSearch(val) {
+  syncSearchClear();
   clearTimeout(S.searchTimer);
-  S.searchTimer = setTimeout(() => {
-    loadNicks(val);
-    api('set_display_setting', 'last_search', val);   // זיכרון בין הפעלות
-  }, 200);
+  S.searchTimer = setTimeout(() => loadNicks(val), 200);
+}
+
+// ✕ בתיבת החיפוש: מופיע רק כשיש מה לנקות, ומחזיר לכל הרשימה בלחיצה אחת.
+// נקרא גם מ-loadNicks, כך שכל מסלול שמציב או מנקה את השדה בקוד מעדכן אותו.
+function syncSearchClear() {
+  const inp = document.getElementById('search-input');
+  const btn = document.getElementById('search-clear');
+  if (btn) btn.hidden = !(inp && inp.value);
+}
+
+function clearSearch() {
+  const inp = document.getElementById('search-input');
+  clearTimeout(S.searchTimer);
+  if (inp) { inp.value = ''; inp.focus(); }
+  syncSearchClear();
+  loadNicks('');
 }
 
 // ── מקלדת ─────────────────────────────────────────────────────────────
@@ -1780,6 +1796,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (modalOpen) return;
   if (e.target === search) {
+    if (e.key === 'Escape' && search.value) { e.preventDefault(); clearSearch(); return; }
     if (e.key === 'Enter' && S.ids.length) { e.preventDefault(); openNickDialog(S.ids[0]); }
     if (e.key === 'ArrowDown' && S.ids.length) { e.preventDefault(); search.blur(); selectRow(S.ids[0]); }
     return;
@@ -2626,7 +2643,7 @@ function openUserLookup(tab) {
         הקלד שם משתמש או שם אמיתי — התצוגה תרכז את כל המידע על אותו אדם, כולל מכל הזהויות המקושרות אליו בפורומים השונים.
       </p>
       <div class="search-wrap" style="max-width:none;margin-bottom:10px">
-        <span class="search-icon">🔍</span>
+        <span class="search-icon">${ICON_SEARCH}</span>
         <input type="text" id="lookup-input" placeholder="שם משתמש / שם אמיתי..." autocomplete="off"
                oninput="onLookupInput(this.value)">
       </div>
@@ -4889,21 +4906,48 @@ document.addEventListener('keydown', (e) => {
   if (ov && ov.dataset.dismissable !== '0') closeModal();
 });
 
+// ══ ICONS ═════════════════════════════════════════════════════════════
+const ICON_SEARCH = '<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="7" cy="7" r="4.6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10.4 10.4L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
+const ICON_CLOSE = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>';
+
 // ══ TOAST ═════════════════════════════════════════════════════════════
 function toast(msg, type = 'info', opts = {}) {
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
-  el.textContent = msg;
+  el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+  const text = document.createElement('span');
+  text.className = 'toast-text';
+  text.textContent = msg;
+  el.appendChild(text);
+  let timer = 0;
+  const close = () => { clearTimeout(timer); el.remove(); };
   // כפתור פעולה (למשל "↩ בטל" אחרי מחיקה)
   if (opts.actionLabel && typeof opts.onAction === 'function') {
     const btn = document.createElement('button');
+    btn.type = 'button';
     btn.className = 'toast-action';
     btn.textContent = opts.actionLabel;
-    btn.onclick = (e) => { e.stopPropagation(); el.remove(); opts.onAction(); };
+    btn.onclick = (e) => { e.stopPropagation(); close(); opts.onAction(); };
     el.appendChild(btn);
   }
+  // ✕ — בנימין: "את ההודעות הצפות אי אפשר לסגור באיקס". הודעה ארוכה (למשל
+  // "נסרקו רק X מתוך Y") נשארה 9 שניות מעל הממשק בלי דרך להזיז אותה.
+  const x = document.createElement('button');
+  x.type = 'button';
+  x.className = 'toast-close';
+  x.innerHTML = ICON_CLOSE;
+  x.title = 'סגור';
+  x.setAttribute('aria-label', 'סגור');
+  x.onclick = (e) => { e.stopPropagation(); close(); };
+  el.appendChild(x);
+  // זמן קריאה לפי האורך (משפט ארוך לא נעלם באמצע), ועכבר מעל ההודעה עוצר אותה
+  const ms = opts.ms || Math.min(12000, Math.max(opts.actionLabel ? 7000 : 3500,
+                                                  String(msg).length * 70));
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => el.remove(), ms); };
+  el.addEventListener('mouseenter', () => clearTimeout(timer));
+  el.addEventListener('mouseleave', arm);
   document.getElementById('toast-container').appendChild(el);
-  setTimeout(() => el.remove(), opts.ms || (opts.actionLabel ? 7000 : 3500));
+  arm();
 }
 
 // ══ STATUS ════════════════════════════════════════════════════════════

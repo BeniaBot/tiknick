@@ -157,7 +157,10 @@ def build(dest, rows):
         "rows": json.dumps(make_rows(min(rows, 300)), ensure_ascii=False),
         "n": rows,
         "settings": json.dumps({"theme": "dark", "accent": "amber", "view": "table",
-                                "density": "normal", "hidden_cols": "", "col_layout": ""}),
+                                "density": "normal", "hidden_cols": "", "col_layout": "",
+                                # מאגר שעבר מגרסה קודמת: חיפוש שנשמר. מ-0.9.6 ההפעלה
+                                # מתעלמת ממנו ונפתחת עם כל הרשימה.
+                                "last_search": "משתמש_12"}, ensure_ascii=False),
         "version": version,
     })
     idx_path = os.path.join(dest, "index.html")
