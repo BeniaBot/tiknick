@@ -469,6 +469,7 @@ def init_db():
     _decode_entities_once()
     _repair_status_enum_once()
     _clean_last_seen_noise_once()
+    _repair_known_platforms_once()
     # סל המחזור נשמר 30 יום; היסטוריה ויומן סריקות — שנה (אחרת גדלים בלי גבול)
     try:
         empty_trash(30)
@@ -2629,6 +2630,41 @@ def _canon_status(value):
     if not v or v in ("פעיל", "מורחק", "מושעה", "לא ידוע"):
         return v
     return _STATUS_CANON.get(v.lower(), v)
+
+
+def _repair_known_platforms_once():
+    """
+    פורום מוכר שנוסף לפני שהרשימה המוכרת ידעה מה הפלטפורמה שלו נשאר עם
+    ברירת המחדל 'nodebb'. נמצא במאגר של בנימין: "פורום לתורה" רשום כ-NodeBB
+    עם 0 ניקים — כל סריקה שלו נפלה על "ודא שזה פורום NodeBB", כלומר הסריקה
+    שנבנתה בשבילו ב-0.9.3 מעולם לא רצה אצלו.
+
+    מתקן רק כשגם השם וגם הכתובת תואמים את הרשומה המוכרת, ורק מ-'nodebb' —
+    פורום שמישהו שינה את שמו או את כתובתו אינו "הפורום המוכר" יותר, ופלטפורמה
+    שנקבעה ב"בדוק פורום" אינה נדרסת. חד-פעמי, מסומן בדגל.
+    """
+    with get_connection() as conn:
+        if conn.execute("SELECT value FROM settings "
+                        "WHERE key='known_platforms_repaired'").fetchone():
+            return
+    fixed = 0
+    try:
+        with get_connection() as conn:
+            for kf in KNOWN_FORUMS:
+                plat = kf.get("platform") or "nodebb"
+                if plat == "nodebb" or not kf.get("url"):
+                    continue
+                for r in conn.execute("SELECT id, url FROM forums WHERE name=? AND "
+                                      "COALESCE(platform,'nodebb')='nodebb'", (kf["name"],)):
+                    if _origin(r["url"] or "") == _origin(kf["url"]):
+                        conn.execute("UPDATE forums SET platform=? WHERE id=?", (plat, r["id"]))
+                        fixed += 1
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) "
+                         "VALUES ('known_platforms_repaired', '1')")
+        if fixed:
+            logging.info("Repaired platform on %d known forum(s)", fixed)
+    except Exception:
+        logging.exception("known platform repair failed")
 
 
 def _repair_status_enum_once():

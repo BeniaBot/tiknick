@@ -198,6 +198,32 @@ ok("🚨 כרטיס בלי סטטוס אינו מוצג 'פעיל'",
 ok("ותגית הסטטוס בכרטיס מצוירת רק כשיש סטטוס",
    "${st ? `<span class=\"card-badge ${stCls}\">" in app)
 
+# ══ 12. 🚨 פורום מוכר שנרשם בפלטפורמה ישנה ═══════════════════════════════
+# נמצא במאגר של בנימין: "פורום לתורה" רשום כ-NodeBB עם 0 ניקים. הוא נוסף
+# לפני שהרשימה המוכרת ידעה שהוא XenForo, ולכן כל סריקה שלו נפלה.
+db.close_pool()
+db.DB_PATH = os.path.join(tempfile.mkdtemp(), "kp.db")
+db.init_db()
+with db.get_connection() as c:
+    c.execute("DELETE FROM settings WHERE key='known_platforms_repaired'")
+    for name, url, plat in (("פורום לתורה", "https://tora-forum.co.il/", "nodebb"),
+                            ("פורום פרוג", "https://www.example-other.com/", "nodebb"),
+                            ("פורום אוצר התורה", "https://forum-otzar-hatorah.co.il/",
+                             "discourse")):
+        c.execute("INSERT INTO forums (name, color, url, platform) VALUES (?,?,?,?)",
+                  (name, "#888", url, plat))
+db._repair_known_platforms_once()
+pl = {f["name"]: f["platform"] for f in db.get_forums()}
+ok("🚨 פורום מוכר שנשאר NodeBB מתוקן לפלטפורמה הנכונה",
+   pl["פורום לתורה"] == "xenforo", pl["פורום לתורה"])
+ok("כתובת שונה מהמוכרת — לא נוגעים (זה כבר לא אותו פורום)",
+   pl["פורום פרוג"] == "nodebb", pl["פורום פרוג"])
+ok("פלטפורמה שאינה ברירת המחדל לא נדרסת", pl["פורום אוצר התורה"] == "discourse")
+with db.get_connection() as c:
+    c.execute("UPDATE forums SET platform='nodebb' WHERE name='פורום לתורה'")
+db._repair_known_platforms_once()
+ok("חד-פעמי — לא רץ שוב", db.get_forum_platform("פורום לתורה") == "nodebb")
+
 print()
 if fails:
     print("FAILED (%d): %s" % (len(fails), ", ".join(fails)))
