@@ -101,10 +101,33 @@ def _fetch_user(base, username, cookie):
     raise last_err or Exception("לא נמצא משתמש")
 
 
+
+# ── עמוד ריק באמצע ההיסטוריה אינו סוף ההיסטוריה ─────────────────────────────
+# NodeBB חותך את עמוד "הפוסטים של המשתמש" מתוך **כל** הפוסטים שלו, ורק אחר
+# כך מסנן לפי הרשאות. פוסטים בקטגוריה חסומה לאורח משאירים עמוד חלקי — או
+# ריק לגמרי — **באמצע**, וההיסטוריה ממשיכה אחריו. נמדד במתמחים (15.11.2026).
+# עד 0.9.6 הלולאה עצרה בעמוד הריק הראשון, ומי שכתב פעם בקטגוריה חסומה
+# קיבל דוח שנקטע שם — ונראה שלם.
+# מכאן: ממשיכים עד מספר העמודים שנגזר מהמונה הרשמי, ורק אחריו עמוד ריק
+# הוא הסוף. בלי מונה (פרופיל שלא חושף אותו) — כמו קודם, עצירה בריק הראשון.
+USER_POSTS_PER_PAGE = 20
+
+
+def _expected_pages(expected_posts, per_page):
+    try:
+        n = int(expected_posts or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return 0
+    return -(-n // max(1, int(per_page or USER_POSTS_PER_PAGE)))
+
+
 def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=None,
-                stats=None):
+                stats=None, expected_posts=0):
     all_posts = []
     page = 1
+    per_page = USER_POSTS_PER_PAGE
     while page <= MAX_PAGES:
         if cancel_flag is not None and cancel_flag.is_set():
             break
@@ -129,7 +152,16 @@ def _scan_posts(base, slug, cookie, progress=None, cancel_flag=None, max_posts=N
             break
         posts = data.get("posts", []) if isinstance(data, dict) else []
         if not posts:
+            if page < _expected_pages(expected_posts, per_page):
+                # פוסטים בקטגוריה חסומה — לא הסוף. ממשיכים, בנימוס.
+                if stats is not None:
+                    stats["empty_pages"] = stats.get("empty_pages", 0) + 1
+                page += 1
+                time.sleep(PAGE_DELAY)
+                continue
             break
+        # עמוד מלא מגלה את גודל העמוד בפורום הזה; עמוד חלקי אינו מלמד כלום
+        per_page = max(per_page, len(posts))
         all_posts.extend(posts)
         if progress:
             progress({"phase": "scan", "page": page, "count": len(all_posts)})
@@ -890,7 +922,8 @@ def _collect(username, cookie, base, progress=None, cancel_flag=None,
 
     _reset_vote_stats()
     raw = _scan_posts(base, slug, cookie, progress=progress,
-                      cancel_flag=cancel_flag, max_posts=max_posts, stats=scan_stats)
+                      cancel_flag=cancel_flag, max_posts=max_posts, stats=scan_stats,
+                      expected_posts=postcount)
     if cancel_flag is not None and cancel_flag.is_set():
         return None, None, None, {"cancelled": True, "error": "בוטל"}
     if not raw:
@@ -1047,7 +1080,8 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
 
     _reset_vote_stats()
     raw_posts = _scan_posts(base, slug, cookie, progress=progress,
-                            cancel_flag=cancel_flag, max_posts=max_posts, stats=scan_stats)
+                            cancel_flag=cancel_flag, max_posts=max_posts, stats=scan_stats,
+                            expected_posts=postcount)
     if cancel_flag is not None and cancel_flag.is_set():
         return {"ok": False, "cancelled": True, "error": "בוטל"}
     if not raw_posts:

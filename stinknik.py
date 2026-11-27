@@ -110,6 +110,28 @@ def _resolve_user(base, user_input, cookie=None):
     return (candidates[1] if len(candidates) > 1 else raw), 0
 
 
+
+# ── עמוד ריק באמצע ההיסטוריה אינו סוף ההיסטוריה ─────────────────────────────
+# (אותה לוגיקה בדיוק כמו ב-chazonishnik._scan_posts.)
+# NodeBB חותך את עמוד "הפוסטים של המשתמש" מתוך **כל** הפוסטים שלו, ורק אחר
+# כך מסנן לפי הרשאות. פוסטים בקטגוריה חסומה לאורח משאירים עמוד חלקי — או
+# ריק לגמרי — **באמצע**, וההיסטוריה ממשיכה אחריו. נמדד במתמחים (15.11.2026).
+# עד 0.9.6 הלולאה עצרה בעמוד הריק הראשון, ומי שכתב פעם בקטגוריה חסומה
+# קיבל דוח שנקטע שם — ונראה שלם.
+# מכאן: ממשיכים עד מספר העמודים שנגזר מהמונה הרשמי, ורק אחריו עמוד ריק
+# הוא הסוף. בלי מונה (פרופיל שלא חושף אותו) — כמו קודם, עצירה בריק הראשון.
+USER_POSTS_PER_PAGE = 20
+
+
+def _expected_pages(expected_posts, per_page):
+    try:
+        n = int(expected_posts or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return 0
+    return -(-n // max(1, int(per_page or USER_POSTS_PER_PAGE)))
+
 def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
                      progress=None, cancel_flag=None, max_posts=None):
     """
@@ -122,6 +144,7 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
     api = f"{base}/api/user/{urllib.parse.quote(slug)}/posts"
 
     page = 1
+    per_page = USER_POSTS_PER_PAGE
     checked = 0
     total_up = total_down = total_rep = 0
     disliked = []
@@ -151,7 +174,12 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
 
         posts = data.get("posts", []) if isinstance(data, dict) else []
         if not posts:
+            if page < _expected_pages(postcount, per_page):
+                page += 1
+                time.sleep(PAGE_DELAY)
+                continue
             break
+        per_page = max(per_page, len(posts))
 
         for post in posts:
             checked += 1

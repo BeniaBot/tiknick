@@ -287,6 +287,55 @@ try:
 finally:
     i18n.set_lang("he")
 
+# ══ 10. 🚨 עמוד ריק באמצע ההיסטוריה אינו סוף ההיסטוריה ═════════════════════════
+# NodeBB חותך את העמוד מכל הפוסטים ורק אחר כך מסנן לפי הרשאות — פוסטים
+# בקטגוריה חסומה משאירים עמוד ריק באמצע (נמדד במתמחים, 15.11.2026).
+import stinknik as SK   # noqa: E402
+
+
+def fake_pages(pages, postcount):
+    seen = []
+
+    def get(url, *a, **k):
+        if "/posts?page=" in url:
+            p = int(url.rsplit("=", 1)[1])
+            seen.append(p)
+            n = pages[p - 1] if p <= len(pages) else 0
+            base = sum(pages[:p - 1])
+            return {"posts": [{"pid": base + i + 1, "upvotes": 0, "downvotes": 1, "votes": -1,
+                               "topic": {"title": "t"}, "timestamp": BASE} for i in range(n)]}
+        return {"uid": 1, "userslug": "u", "username": "u", "postcount": postcount}
+    return get, seen
+
+
+real_cz_get, real_sk_get = CZ._get_json, SK._get_json
+CZ.time.sleep = lambda s: None
+SK.time.sleep = lambda s: None
+try:
+    # 20, ריק, 20, 7 — ו-postcount 67 (+20 חסומים)
+    CZ._get_json, seen = fake_pages([20, 0, 20, 7], 67)
+    st = {}
+    got = CZ._scan_posts("https://f.org", "u", None, stats=st, expected_posts=67)
+    ok("🚨 חזונישניק: ממשיך אחרי עמוד ריק באמצע", len(got) == 47, (len(got), seen))
+    ok("   ועוצר בסוף — לא סורק לנצח", max(seen) <= 5, seen)
+    ok("   וסופר את העמודים הריקים", st.get("empty_pages") == 1, st)
+    CZ._get_json, seen = fake_pages([20, 0, 20], 0)
+    got = CZ._scan_posts("https://f.org", "u", None, stats={}, expected_posts=0)
+    ok("   בלי מונה רשמי — כמו קודם, עוצר בריק הראשון", len(got) == 20 and seen == [1, 2], seen)
+    CZ._get_json, seen = fake_pages([50, 50, 0, 0, 0, 0], 100)
+    got = CZ._scan_posts("https://f.org", "u", None, stats={}, expected_posts=100)
+    ok("   פורום עם 50 בעמוד — לא מבזבז בקשות על עמודים ריקים בסוף", len(got) == 100 and max(seen) == 3,
+       seen)
+
+    SK._get_json, seen = fake_pages([20, 0, 0, 20, 3], 83)
+    r = SK.analyze_dislikes("u", base_url="https://f.org")
+    ok("🚨 שטינקניק: ממשיך אחרי עמודים ריקים באמצע", r["ok"] and r["checked"] == 43, (r.get("checked"), seen))
+    ok("   ועוצר בסוף", max(seen) <= 6, seen)
+finally:
+    CZ._get_json, SK._get_json = real_cz_get, real_sk_get
+    CZ.time.sleep = real_sleep
+    SK.time.sleep = real_sleep
+
 print()
 if fails:
     print("FAILED (%d): %s" % (len(fails), ", ".join(fails)))
