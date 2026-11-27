@@ -1580,5 +1580,19 @@
   "kind": "pattern",
   "where": "web/app.js",
   "context": "badge tooltip (0.9.8)"
+ },
+ {
+  "he": "➕ הוסף תנאי",
+  "en": "➕ Add a condition",
+  "kind": "static",
+  "where": "web/index.html",
+  "context": "filter bar (0.9.8)"
+ },
+ {
+  "he": "עוד תנאי — למשל גם פורום מסוים וגם טלפון",
+  "en": "Another condition - for example a certain forum and also a phone",
+  "kind": "static",
+  "where": "web/index.html",
+  "context": "tooltip (0.9.8)"
  }
 ]

@@ -1,5 +1,5 @@
 // ═══ נוצר אוטומטית ע"י tools/build_i18n.py — אין לערוך ביד ═══
-// 1021 מחרוזות קבועות, 246 תבניות.
+// 1023 מחרוזות קבועות, 246 תבניות.
 const I18N_EN = {
   "כל מידע משויך למקור (\"אב\"). בכל שדה — הערך מהמקור בעל האמינות הגבוהה מוצג. שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד. \"אבסולוטי\" (רק ל\"אני\") = תמיד מנצח. את התנהגות הסריקה מנהלים בלשונית \"התנגשויות\".": "Every piece of information belongs to a source (a \"parent\"). For each field, the value from the highest-trust source is shown. Changing trust or deleting a source affects the data immediately. \"Absolute\" (for \"Me\" only) = always wins. Scrape behavior is managed on the \"Conflicts\" tab.",
   "Stinknik סורק את כל הפוסטים של משתמש ומציג את כל הפוסטים שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק \"שנוי במחלוקת\", כלומר רק פוסטים עם יותר דיסים מלייקים).": "Stinknik scans all of a user's posts and shows every post that received downvotes — including the ones the forum hides (the forum only shows \"controversial\" posts, meaning posts with more downvotes than upvotes).",
@@ -150,6 +150,7 @@ const I18N_EN = {
   "הרשימה המלאה לכל גרסה נמצאת בדף הגרסאות.": "The full list for each version is on the releases page.",
   "חלון ההתחברות נסגר לפני שההתחברות הושלמה": "The login window was closed before the login finished",
   "לא מיובא — האמינות נקבעת לפי מקור הייבוא": "Not imported — the trust level is set by the import source",
+  "עוד תנאי — למשל גם פורום מסוים וגם טלפון": "Another condition - for example a certain forum and also a phone",
   "✗ אין להפיץ מחדש למטרות מסחריות ללא רשות": "✗ Do not redistribute for commercial purposes without permission",
   "✓ מותר להשתמש, להעתיק ולגבות לצורך אישי": "✓ You may use, copy, and back it up for personal purposes",
   "🔒 הערות אישיות (לא מיוצאות בברירת מחדל)": "🔒 Private notes (not exported by default)",
@@ -698,6 +699,7 @@ const I18N_EN = {
   "▶ הרץ עכשיו": "▶ Run now",
   "✏️ ערוך שדה": "✏️ Edit field",
   "✕ נקה סינון": "✕ Clear filters",
+  "➕ הוסף תנאי": "➕ Add a condition",
   "🎨 מראה הניק": "🎨 Nick appearance",
   "🏠 המשך ברקע": "🏠 Continue in background",
   "👎 דיסלייקים": "👎 Dislikes",
