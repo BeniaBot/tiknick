@@ -1914,10 +1914,6 @@ async function openNickDialog(nickId = null) {
         <input class="form-input" id="f-username" value="${esc(nick?.username||'')}">
       </div>
       <div class="form-group">
-        <label class="form-label">שם מלא <span style="font-size:10px;opacity:.6">(מהפורום)</span></label>
-        <input class="form-input" id="f-full_name" value="${esc(nick?.full_name||'')}">
-      </div>
-      <div class="form-group">
         <label class="form-label">שם אמיתי</label>
         <input class="form-input" id="f-real_name" value="${esc(nick?.real_name||'')}">
       </div>
@@ -1930,9 +1926,39 @@ async function openNickDialog(nickId = null) {
         <input class="form-input" id="f-email" dir="ltr"
                value="${esc(nick?.email||'')}">
       </div>
-      <div class="form-group full">
+      <div class="form-group">
         <label class="form-label">כתובת</label>
         <input class="form-input tag-field" id="f-address" value="${esc(nick?.address||'')}">
+      </div>
+
+    </div>
+
+    <div class="section-hdr">📝 הערות ופרטים</div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label class="form-label accent">פרטים נוספים <span style="font-size:10px;opacity:.6">(@ לתיוג ניק)</span></label>
+      <textarea class="form-textarea tag-field" id="f-extra_info">${esc(nick?.extra_info||'')}</textarea>
+    </div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label class="form-label">הערות (מסונכרנות) <span style="font-size:10px;opacity:.6">(@ לתיוג ניק)</span></label>
+      <textarea class="form-textarea tag-field" id="f-notes">${esc(nick?.notes||'')}</textarea>
+    </div>
+    <div class="form-group" style="margin-bottom:12px">
+      <label class="form-label warn">🔒 הערות אישיות (לא מיוצאות בברירת מחדל) <span style="font-size:10px;opacity:.6">(@ לתיוג)</span></label>
+      <textarea class="form-textarea private tag-field" id="f-private_notes">${esc(nick?.private_notes||'')}</textarea>
+    </div>
+
+    ${contactsHtml}
+    ${identitiesHtml}
+
+    <!-- נתונים מהפורום: הסריקה ממלאת אותם לבד. בניק חדש הם מקופלים — מי
+         שמוסיף ניק ביד צריך פורום, שם ומה שהוא יודע, לא "מוניטין" ו"רמת
+         אמינות". בניק קיים הם פתוחים, כי שם הם מידע. -->
+    <details class="adv-box nick-forum-box"${nick ? ' open' : ''} style="margin:14px 0">
+      <summary>📊 נתונים מהפורום <span style="font-size:11px;opacity:.7;font-weight:500">(מתמלאים לבד כשסורקים את הפורום)</span></summary>
+      <div class="form-grid" style="padding-top:12px">
+      <div class="form-group">
+        <label class="form-label">שם מלא <span style="font-size:10px;opacity:.6">(מהפורום)</span></label>
+        <input class="form-input" id="f-full_name" value="${esc(nick?.full_name||'')}">
       </div>
       <div class="form-group">
         <label class="form-label">קבוצות</label>
@@ -1941,13 +1967,13 @@ async function openNickDialog(nickId = null) {
       <div class="form-group">
         <label class="form-label">מוניטין</label>
         <input class="form-input" id="f-reputation" type="number" dir="ltr"
-               value="${esc(nick?.reputation ?? 0)}">
+               value="${esc(nick?.reputation ?? '')}">
       </div>
       <div class="form-group">
         <label class="form-label">סטטוס</label>
         <select class="form-select" id="f-status">
           ${['פעיל','מורחק','מושעה','לא ידוע'].map(s =>
-            `<option value="${s}" ${nick?.status===s?'selected':''}>${s}</option>`).join('')}
+            `<option value="${s}" ${(nick ? nick.status === s : s === 'לא ידוע') ? 'selected' : ''}>${s}</option>`).join('')}
         </select>
       </div>
       <div class="form-group">
@@ -1978,7 +2004,8 @@ async function openNickDialog(nickId = null) {
                     border:1px solid var(--border)">🌐</a>
         </div>
       </div>
-    </div>
+      </div>
+    </details>
 
     <div class="section-hdr">🎨 מראה הניק</div>
     <div class="appearance-row">
@@ -2010,22 +2037,7 @@ async function openNickDialog(nickId = null) {
     </div>
 
 
-    ${contactsHtml}
-    ${identitiesHtml}
 
-    <div class="section-hdr">📝 תוכן</div>
-    <div class="form-group" style="margin-bottom:12px">
-      <label class="form-label accent">פרטים נוספים <span style="font-size:10px;opacity:.6">(@ לתיוג ניק)</span></label>
-      <textarea class="form-textarea tag-field" id="f-extra_info">${esc(nick?.extra_info||'')}</textarea>
-    </div>
-    <div class="form-group" style="margin-bottom:12px">
-      <label class="form-label">הערות (מסונכרנות) <span style="font-size:10px;opacity:.6">(@ לתיוג ניק)</span></label>
-      <textarea class="form-textarea tag-field" id="f-notes">${esc(nick?.notes||'')}</textarea>
-    </div>
-    <div class="form-group" style="margin-bottom:12px">
-      <label class="form-label warn">🔒 הערות אישיות (לא מיוצאות בברירת מחדל) <span style="font-size:10px;opacity:.6">(@ לתיוג)</span></label>
-      <textarea class="form-textarea private tag-field" id="f-private_notes">${esc(nick?.private_notes||'')}</textarea>
-    </div>
     <div id="tag-autocomplete" style="display:none;position:absolute;z-index:1000;background:var(--card);
          border:1px solid var(--border-soft);border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,.3);
          max-height:180px;overflow-y:auto;min-width:180px"></div>
@@ -2039,7 +2051,10 @@ async function openNickDialog(nickId = null) {
     { label: '💾 שמור', cls: 'btn-primary', action: () => saveNick(nickId) },
     // openModal סוגר את החלון הנוכחי כשלב ראשון ואין לו מחסנית — כפתור שפותח
     // חלון נוסף מכאן היה מוחק טופס עריכה פתוח. לכן מדפיסים ישירות.
-    ...(nickId ? [{ label: '🖨️ הדפס (ברירות מחדל)', cls: 'btn-ghost', action: () => printProfileNow(nickId) }] : []),
+    // "(ברירות מחדל)" בתווית לא אמר למשתמש כלום. מה שהוא צריך לדעת — שההערות
+    // האישיות לא מודפסות — יושב בהסבר שמופיע בריחוף.
+    ...(nickId ? [{ label: '🖨️ הדפס', cls: 'btn-ghost', action: () => printProfileNow(nickId),
+                    title: 'דף פרופיל להדפסה, בלי ההערות האישיות' }] : []),
     { label: 'ביטול',   cls: 'btn-ghost',   action: closeModal },
   ], 'modal-lg', { id: 'nick-dialog', dismissable: false });
   if (nickId) api('touch_recent', nickId);
@@ -2817,27 +2832,46 @@ async function openForumMgr() {
   await loadForums();
   let selectedForum = null;
 
+  // כל פורום: שם, כתובת, סוג, ושני כפתורים עם מילים. עד 0.9.8 המחיקה הייתה
+  // ✕ אדום בלי מילה — ומי שלא מתמצא קורא ✕ כ"סגור". ועריכה דרשה "לבחור"
+  // פורום בלחיצה על השורה, דבר שאף מילה על המסך לא אמרה.
+  const PLATFORM_LABEL = { nodebb: 'NodeBB', discourse: 'Discourse', xenforo: 'XenForo',
+                           phpbb: 'phpBB', custom: 'אחר' };
   const renderList = () => {
     if (!S.forums.length) return '<p style="color:var(--subtext);padding:8px 0">אין פורומים. הוסף מהרשימה למטה.</p>';
-    return S.forums.map(f => `
-      <div class="forum-item ${selectedForum?.id===f.id?'selected':''}"
-           onclick="fmSelect(${f.id})" data-fid="${f.id}">
-        <span class="forum-dot" style="background:${f.color};color:${f.color}"></span>
-        <span class="forum-name">${esc(f.name)}</span>
-        <span style="flex:1"></span>
-        ${f.url
-          ? `<a href="${esc(f.url)}" target="_blank" title="פתח: ${esc(f.url)}"
-                style="color:var(--accent);font-size:14px;text-decoration:none;padding:2px 6px"
-                onclick="event.stopPropagation()">🔗</a>`
-          : `<span style="font-size:11px;color:var(--subtext);padding:2px 6px"
-                   title="אין קישור — בחר פורום ועדכן">🔗</span>`}
-        <input type="color" value="${f.color}" title="שנה צבע"
-               style="width:26px;height:26px;border:none;background:none;cursor:pointer;padding:0"
-               onclick="event.stopPropagation()"
-               onchange="fmColor(${f.id}, this.value)">
-        <button class="btn btn-sm btn-danger btn-icon" title="מחק פורום"
-                onclick="event.stopPropagation();fmDeleteById(${f.id})">✕</button>
-      </div>`).join('');
+    return S.forums.map(f => {
+      const plat = f.platform || 'nodebb';
+      const editing = selectedForum?.id === f.id;
+      const host = (f.url || '').replace(/^https?:\/\//, '').replace(/\/+$/, '');
+      return `
+      <div class="forum-item fm-row ${editing ? 'selected' : ''}" data-fid="${f.id}">
+        <span class="forum-dot" style="background:${esc(safeColor(f.color))};color:${esc(safeColor(f.color))}"></span>
+        <div class="fm-main">
+          <span class="forum-name">${esc(f.name)}</span>
+          <span class="fm-meta">${host ? `<bdi dir="ltr">${esc(host)}</bdi> · ` : 'בלי כתובת · '}${esc(PLATFORM_LABEL[plat] || plat)}</span>
+        </div>
+        ${f.url ? `<a class="btn btn-ghost btn-sm" href="${esc(safeUrl(f.url) || '#')}" target="_blank"
+                      title="פתח את הפורום בדפדפן">🔗 פתח</a>` : ''}
+        <button class="btn btn-ghost btn-sm" onclick="fmEdit(${f.id})">✏️ ערוך</button>
+        <button class="btn btn-ghost btn-sm fm-del" onclick="fmDeleteById(${f.id})">🗑️ מחק</button>
+      </div>
+      ${editing ? `
+      <div class="fm-editor">
+        <label>שם<input class="form-input" id="fm-e-name" value="${esc(f.name)}"></label>
+        <label>כתובת<input class="form-input" id="fm-e-url" dir="ltr" value="${esc(f.url || '')}" placeholder="https://..."></label>
+        <label>סוג
+          <select class="form-select" id="fm-e-plat">
+            ${Object.entries(PLATFORM_LABEL).map(([v, l]) =>
+              `<option value="${v}" ${v === plat ? 'selected' : ''}>${esc(l)}</option>`).join('')}
+          </select></label>
+        <label>צבע<input type="color" id="fm-e-color" value="${esc(safeColor(f.color) || '#888888')}"></label>
+        <div class="fm-editor-acts">
+          <button class="btn btn-primary btn-sm" onclick="fmSaveEdit()">💾 שמור</button>
+          <button class="btn btn-ghost btn-sm" onclick="fmEdit(null)">ביטול</button>
+        </div>
+        <div class="fm-editor-hint">לא בטוח מה הסוג? "בדוק פורום" בחלון הסנכרון מזהה אותו לבד.</div>
+      </div>` : ''}`;
+    }).join('');
   };
 
   const renderKnown = (known) => {
@@ -2869,12 +2903,6 @@ async function openForumMgr() {
   const buildHtml = () => `
     <div style="font-size:12px;font-weight:700;color:var(--subtext);margin-bottom:6px">פורומים פעילים</div>
     <div class="forum-list" id="forum-list">${renderList()}</div>
-
-    <div style="margin-top:12px;display:flex;gap:6px;align-items:center">
-      <input class="form-input" id="rename-val" placeholder="שם חדש לפורום שנבחר" style="flex:1">
-      <input class="form-input" id="rename-url" placeholder="קישור (URL)" dir="ltr" style="flex:1">
-      <button class="btn btn-ghost btn-sm" onclick="fmRename()">✏️ שמור</button>
-    </div>
 
     <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:14px">
       <div style="font-size:12px;font-weight:700;color:var(--subtext);margin-bottom:8px">
@@ -2908,17 +2936,27 @@ async function openForumMgr() {
     if (kl) kl.innerHTML = renderKnown(knownForums);
   };
 
-  window.fmSelect = (id) => {
-    selectedForum = S.forums.find(f => f.id === id);
-    document.querySelectorAll('#forum-list .forum-item').forEach(el => {
-      el.classList.toggle('selected', parseInt(el.dataset.fid) === id);
-    });
-    if (selectedForum) {
-      const rv = document.getElementById('rename-val');
-      const ru = document.getElementById('rename-url');
-      if (rv) rv.value = selectedForum.name;
-      if (ru) ru.value = selectedForum.url || '';
-    }
+  // עורך בתוך השורה: "✏️ ערוך" פותח אותו מתחת לפורום, "ביטול" סוגר
+  window.fmEdit = (id) => {
+    selectedForum = id == null ? null : (S.forums.find(f => f.id === id) || null);
+    const fl = document.getElementById('forum-list');
+    if (fl) fl.innerHTML = renderList();
+    document.getElementById('fm-e-name')?.focus();
+  };
+
+  window.fmSaveEdit = async () => {
+    if (!selectedForum) return;
+    const name  = document.getElementById('fm-e-name')?.value.trim();
+    const url   = document.getElementById('fm-e-url')?.value.trim() || '';
+    const plat  = document.getElementById('fm-e-plat')?.value || null;
+    const color = document.getElementById('fm-e-color')?.value || selectedForum.color;
+    if (!name) { toast('נדרש שם', 'error'); return; }
+    const r = await api('update_forum', selectedForum.id, name, color, url, plat);
+    if (!r?.ok) { toast(r?.error || 'השמירה נכשלה', 'error'); return; }
+    selectedForum = null;
+    await refreshLists();
+    await loadNicks(document.getElementById('search-input').value);
+    toast('הפורום עודכן', 'success');
   };
 
   window.fmColor = async (id, color) => {
@@ -2975,17 +3013,7 @@ async function openForumMgr() {
     toast(`"${name}" נוסף ✓`, 'success');
   };
 
-  window.fmRename = async () => {
-    if (!selectedForum) { toast('בחר פורום מהרשימה', 'error'); return; }
-    const name = document.getElementById('rename-val')?.value.trim();
-    const url  = document.getElementById('rename-url')?.value.trim() || selectedForum.url || '';
-    if (!name) { toast('נדרש שם', 'error'); return; }
-    await api('update_forum', selectedForum.id, name, selectedForum.color, url);
-    selectedForum = null;
-    await refreshLists();
-    await loadNicks(document.getElementById('search-input').value);
-    toast('פורום עודכן ✓', 'success');
-  };
+  window.fmRename = () => window.fmSaveEdit();
 
   window.fmDeleteById = async (id) => {
     const f = S.forums.find(f => f.id === id);
@@ -4863,7 +4891,7 @@ function openModal(title, bodyHtml, buttons = [], extraClass = '', opts = {}) {
   }
 
   const btnsHtml = buttons.map((b, i) =>
-    `<button class="btn ${b.cls}" id="mb-idx-${i}">${b.label}</button>`
+    `<button class="btn ${b.cls}" id="mb-idx-${i}"${b.title ? ` title="${esc(b.title)}"` : ''}>${b.label}</button>`
   ).join('');
 
   overlay.innerHTML = `

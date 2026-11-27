@@ -1426,5 +1426,110 @@
   "kind": "static",
   "where": "web/app.js",
   "context": "error (0.9.7)"
+ },
+ {
+  "he": "📝 הערות ופרטים",
+  "en": "📝 Notes and details",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "section heading in the nick window (0.9.8)"
+ },
+ {
+  "he": "📊 נתונים מהפורום",
+  "en": "📊 Data from the forum",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "folded section in the nick window (0.9.8)"
+ },
+ {
+  "he": "(מתמלאים לבד כשסורקים את הפורום)",
+  "en": "(filled in by itself when the forum is scanned)",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "hint next to the section (0.9.8)"
+ },
+ {
+  "he": "✏️ ערוך",
+  "en": "✏️ Edit",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "🔗 פתח",
+  "en": "🔗 Open",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "בלי כתובת · ",
+  "en": "no address · ",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "סוג",
+  "en": "Type",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "צבע",
+  "en": "Colour",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "אחר",
+  "en": "Other",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "לא בטוח מה הסוג? \"בדוק פורום\" בחלון הסנכרון מזהה אותו לבד.",
+  "en": "Not sure of the type? \"Check forum\" in the sync window detects it.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "הפורום עודכן",
+  "en": "The forum was updated",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "סוג פורום לא מוכר",
+  "en": "Unknown forum type",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "לא ניתן לשמור: {1}",
+  "en": "Could not save: {1}",
+  "kind": "pattern",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "פתח את הפורום בדפדפן",
+  "en": "Open the forum in the browser",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "דף פרופיל להדפסה, בלי ההערות האישיות",
+  "en": "A profile sheet to print, without the personal notes",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "forum manager / nick window (0.9.8)"
  }
 ]

@@ -2077,8 +2077,23 @@ del "%~f0"
         db.add_forum(name, color, url)
         return {"ok": True}
 
-    def update_forum(self, forum_id, name, color, url=""):
-        db.update_forum(int(forum_id), name, color, url)
+    FORUM_PLATFORMS = ("nodebb", "discourse", "xenforo", "phpbb", "custom")
+
+    def update_forum(self, forum_id, name, color, url="", platform=None):
+        """
+        `platform` — סוג הפורום, מתוך רשימה סגורה. עד 0.9.8 לא הייתה בממשק שום
+        דרך לראות או לשנות אותו, ופורום שנוסף ידנית נשאר 'nodebb' לתמיד (פתוח
+        מ-0.9.5) — ומשם נגזרים מנוע הסריקה, שם העוגייה וצורת קישור הפרופיל.
+        """
+        name = (name or "").strip()
+        if not name:
+            return {"ok": False, "error": "נדרש שם"}
+        if platform is not None and platform not in self.FORUM_PLATFORMS:
+            return {"ok": False, "error": "סוג פורום לא מוכר"}
+        try:
+            db.update_forum(int(forum_id), name, color, (url or "").strip(), platform)
+        except Exception as e:          # noqa: BLE001 — למשל שם שכבר קיים
+            return {"ok": False, "error": "לא ניתן לשמור: %s" % e}
         return {"ok": True}
 
     def get_known_forums(self):

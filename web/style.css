@@ -1352,3 +1352,17 @@ tbody td, .card-row .cv, #lookup-profile, .tooltip,
 .login-easy b{font-size:13.5px}
 .login-easy-text{font-size:12.5px;line-height:1.8;margin:6px 0 10px}
 .login-easy-note{font-size:11.5px;color:var(--text-dim);margin-top:10px;line-height:1.6}
+
+/* ══ ניהול פורומים ══ */
+.fm-row{cursor:default;gap:8px}
+.fm-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.fm-meta{font-size:11.5px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-row .btn{flex-shrink:0}
+.fm-row .fm-del:hover{color:var(--danger);border-color:var(--danger)}
+.fm-editor{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin:2px 0 8px;padding:12px;
+  border:1.5px solid var(--accent);border-radius:var(--r-sm);background:var(--card)}
+.fm-editor label{display:flex;flex-direction:column;gap:4px;font-size:11.5px;color:var(--text-dim);flex:1 1 150px}
+.fm-editor label:has(input[type=color]){flex:0 0 auto}
+.fm-editor input[type=color]{width:40px;height:34px;border:none;background:none;cursor:pointer;padding:0}
+.fm-editor-acts{display:flex;gap:6px}
+.fm-editor-hint{flex-basis:100%;font-size:11px;color:var(--text-dim)}

@@ -76,6 +76,21 @@ ok("חד-פעמי — לא רץ שוב", {f["name"]: f["url"] for f in db.get_fo
    == "https://hamitbach.me/")
 ok("הדגל נכתב", db.get_setting("known_urls_repaired_v1", "") == "1")
 
+# ══ סוג הפורום ניתן לשינוי מהממשק (פתוח מ-0.9.5) ═══════════════════════════════
+import main   # noqa: E402
+main.db = db
+api = main.API()
+fid = [f for f in db.get_forums() if f["name"] == "פורום בנקל"][0]["id"]
+ok("שינוי סוג", api.update_forum(fid, "פורום בנקל", "#333", "https://forum.benakel.org/", "discourse")["ok"]
+   and db.get_forum_platform("פורום בנקל") == "discourse")
+ok("🚨 סוג שאינו ברשימה — מסורב", not api.update_forum(fid, "פורום בנקל", "#333", "", "<script>")["ok"]
+   and db.get_forum_platform("פורום בנקל") == "discourse")
+ok("בלי סוג — הסוג לא משתנה", api.update_forum(fid, "פורום בנקל", "#333", "https://forum.benakel.org/")["ok"]
+   and db.get_forum_platform("פורום בנקל") == "discourse")
+ok("שם ריק — מסורב", not api.update_forum(fid, "  ", "#333", "")["ok"])
+r = api.update_forum(fid, "פורום המטבח", "#333", "")
+ok("🚨 שם שכבר קיים — הודעה, לא חריגה", r["ok"] is False and r.get("error"), r)
+
 print()
 if fails:
     print("FAILED (%d): %s" % (len(fails), ", ".join(fails)))
