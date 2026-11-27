@@ -305,6 +305,38 @@ _TPL_EN = {
     "אין נתונים": "No data",
     "דק'": "min",
     "קצר": "Short", "בינוני": "Medium", "ארוך": "Long",
+    # 0.9.7 — ראש הדוח, קצב ורצפים, שנויים במחלוקת. מפתחות קצרים עם
+    # המרכאות של הליטרל — כך הם תואמים רק את המחרוזת שלהם ("ותק " יושב
+    # גם בתוך "שותק", ו-" דיסלייקים" גם בתוך משפט המוניטין).
+    "'נסרק ב-'": "'scanned on '",
+    "'מורחק מהפורום'": "'Banned from the forum'",
+    "'עד '": "'until '",
+    "'מושתק'": "'Muted'",
+    "'הצטרף ב-'": "'Joined on '",
+    "'ותק '": "'Member for '",
+    "' שנים'": "' years'",
+    "' חודשים'": "' months'",
+    "'נראה לאחרונה ב-'": "'Last seen on '",
+    "' צפיות בפרופיל'": "' profile views'",
+    "' עוקבים'": "' followers'",
+    "'עוקב אחרי '": "'following '",
+    "' פוסטים מחוקים או מוסתרים'": "' deleted or hidden posts'",
+    "' דיסלייקים'": "' downvotes'",
+    "' פוסטים שקיבלו לפחות אחד'": "' posts received at least one'",
+    "📆 קצב ורצפים": "📆 Pace and streaks",
+    "🧨 שנויים במחלוקת": "🧨 Controversial",
+    "אין פוסטים לניתוח": "No posts to analyse",
+    "ימים שבהם כתב": "Days with posts",
+    "ממוצע ביום שבו כתב": "Average on a day with posts",
+    "הרצף הארוך ביותר": "Longest streak",
+    "היום העמוס ביותר": "Busiest day",
+    "כותב בלילה (00:00–05:00)": "Writes at night (00:00-05:00)",
+    "מחושב מהפוסטים שנסרקו בלבד": "Calculated from the scanned posts only",
+    "הדיסלייקים כבויים בפורום הזה": "Downvotes are turned off in this forum",
+    "אף פוסט שנסרק לא קיבל דיסלייק": "No scanned post received a downvote",
+    "מנהל הפורום": "Forum admin",
+    "מפקח כללי": "Global moderator",
+    "מפקח": "Moderator",
     'const dayOrder=["ראשון","שני","שלישי","רביעי","חמישי","שישי","שבת"];':
         'const dayOrder=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];',
 }
@@ -546,6 +578,67 @@ def _norm_key(s):
     return re.sub(r"[\s_\-]+", "", _unesc(str(s or ""))).strip().lower()
 
 
+def _profile_meta(udata):
+    """
+    מה שדף הפרופיל אומר על האדם — מתוך הבקשה ש-`_fetch_user` **כבר עשה**.
+    עד 0.9.6 נקראו ממנה רק uid, slug ומונה הפוסטים, וכל השאר נזרק: מתי
+    הצטרף, מתי נראה לאחרונה, צפיות בפרופיל, עוקבים, קבוצות, תפקיד, והרחקה
+    או השתקה. אפס בקשות נוספות.
+
+    **בכוונה לא**: מיקום, אתר, יום הולדת, "אודות" וחתימה. אלה פרטים אישיים
+    שהאדם כתב על עצמו, לא נתוני פעילות — והדוח נשמר ונשלח הלאה.
+    """
+    u = udata or {}
+
+    def num(k):
+        try:
+            return int(u.get(k) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    groups = []
+    for g in (u.get("groupTitleArray") or []):
+        if isinstance(g, str) and g.strip():
+            groups.append(_unesc(g.strip()))
+    for g in (u.get("groups") or []):
+        if isinstance(g, dict) and not g.get("hidden"):
+            nm = _unesc(str(g.get("displayName") or g.get("name") or "").strip())
+            if nm:
+                groups.append(nm)
+    seen, uniq = set(), []
+    for g in groups:
+        if g.lower() not in seen and g.lower() not in ("registered-users", "verified-users"):
+            seen.add(g.lower())
+            uniq.append(g[:40])
+    # קוד ולא טקסט: הטקסט מתורגם בתוך התבנית, בשפה שבה הדוח נבנה
+    role = ("admin" if u.get("isAdmin") else "gmod" if u.get("isGlobalModerator")
+            else "mod" if u.get("isModerator") else "")
+    counts = u.get("counts") if isinstance(u.get("counts"), dict) else {}
+    try:
+        visible = int(counts.get("posts") or 0)
+    except (TypeError, ValueError):
+        visible = 0
+    postcount = num("postcount")
+    return {
+        "display": _unesc(str(u.get("displayname") or u.get("username") or "")),
+        "joindate": num("joindate"),
+        "lastonline": num("lastonline"),
+        "profileviews": num("profileviews"),
+        "followers": num("followerCount"),
+        "following": num("followingCount"),
+        "groups": uniq[:6],
+        "role": role,
+        "banned": bool(u.get("banned")),
+        "banned_until": num("banned:expire"),
+        "muted": bool(u.get("muted")),
+        "muted_until": num("mutedUntil"),
+        # הפורום סופר כל פוסט שנכתב; `counts.posts` רק את הגלויים לנו.
+        # ההפרש הוא מה שנמחק או מוסתר — ולכן גם מה שהסריקה לא תראה.
+        "hidden_posts": max(0, postcount - visible) if visible else 0,
+        "downvote_disabled": bool(u.get("downvote:disabled")),
+    }
+
+
 def _official_counts(udata):
     """
     המונים כפי שהפורום עצמו מציג אותם בדף האודות.
@@ -567,7 +660,6 @@ def _official_counts(udata):
 
 def _fetch_detail(base, cookie, post, me=""):
     try:
-        time.sleep(DETAIL_DELAY)   # נימוס: 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
         pid = post["pid"]
         raw = post.get("content", "") or ""
         # ציטוט הוא טקסט שאדם אחר כתב. עד כאן הוא נספר כמילים **שלו**,
@@ -595,6 +687,11 @@ def _fetch_detail(base, cookie, post, me=""):
             give_up = True          # בלי עוגייה אין שמות, ואין טעם לשאול
         if not give_up and likes:
             try:
+                # ההשהיה היא נימוס כלפי השרת, ולכן היא שייכת **לבקשה** — לא לפוסט.
+                # עד 0.9.6 היא רצה בראש הפונקציה על כל פוסט, גם כשלא נשלחה שום
+                # בקשה (בלי עוגייה, או פוסט בלי לייקים — 52% מהפוסטים). בדוח
+                # של 1,800 פוסטים בלי עוגייה זו יותר מדקה של המתנה לשום דבר.
+                time.sleep(DETAIL_DELAY)   # 4 עובדים × 0.15s ≈ 27 בקשות לשנייה לכל היותר
                 v = _get_json(f"{base}/api/v3/posts/{pid}/voters", cookie=cookie, timeout=10)
                 upvoters = (v.get("response", {}) or {}).get("upvoters", []) or []
                 votes_ok = True
@@ -940,6 +1037,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
         my_uid, slug, _udata = _fetch_user(base, username, cookie)
         postcount = int((_udata or {}).get("postcount") or 0)
         official = _official_counts(_udata)
+        profile = _profile_meta(_udata)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return {"ok": False, "error": "נדרשת עוגייה תקינה (שגיאת הרשאה)"}
@@ -993,6 +1091,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     }
     meta.update(official)
     meta.update(extra)
+    meta["profile"] = profile
     html = _build_html(slug, base, my_uid, processed, meta)
 
     path = None
@@ -1008,6 +1107,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
     partial = scan_stats["stopped_early"] or (
         bool(postcount) and len(raw_posts) < postcount * 0.95 and not limited)
     return {"ok": True, "html": html, "path": path, "posts": len(processed),
+            "user": profile.get("display") or slug,
             "postcount": postcount, "partial": partial, "limited": limited,
             "likes_incomplete": _vote_failures(),
             "stopped_early": scan_stats["stopped_early"]}
@@ -1095,6 +1195,7 @@ def _build_html(user_slug, base_url, my_uid, posts_data, meta=None):
             "reply_total": int(m.get("reply_total") or 0),
             "reputation": int(m.get("reputation") or 0),
             "topiccount": int(m.get("topiccount") or 0),
+            "profile": dict(m.get("profile") or {}),
         }),
     })
 
@@ -1129,6 +1230,11 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 .note-sm{color:var(--text-dim,#94a3b8);font-size:.74rem;margin-top:10px;line-height:1.5}
 .empty{color:var(--text-dim,#94a3b8);font-size:.85rem;padding:10px 2px}
 .chart-box{position:relative;height:300px;width:100%}
+.hdr-sub{color:var(--text-dim);margin-top:8px;font-size:.95rem}
+.chips{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:18px}
+.chip{background:#0f172a;border:1px solid #334155;border-radius:999px;padding:5px 12px;font-size:.82rem}
+.chip.warn{border-color:#b91c1c;color:#fca5a5}
+.chip.role{border-color:#0369a1;color:#7dd3fc}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#475569;border-radius:3px}
 @media(max-width:900px){.col-3,.col-4,.col-6,.col-8{grid-column:span 12}}
 </style>
@@ -1136,8 +1242,9 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 <body>
 <div class="container">
 <div class="header">
-<h1 style="margin:0;font-size:2rem">📊 ניתוח פעילות: __USER__</h1>
-<p style="color:var(--text-dim);margin-top:10px">ניתוח נתונים מעמיק של פעילות המשתמש</p>
+<h1 style="margin:0;font-size:2rem">📊 <span id="hdr-name">__USER__</span></h1>
+<div class="hdr-sub" id="hdr-sub"></div>
+<div class="chips" id="hdr-chips"></div>
 </div>
 <div class="grid">
 <div class="card col-3"><div class="kpi-title">סה"כ פוסטים</div><div class="kpi-value" id="stat-posts">0</div><div class="kpi-sub" id="stat-posts-sub"></div></div>
@@ -1157,6 +1264,8 @@ h3{margin-top:0;font-size:1.1rem;color:var(--accent);margin-bottom:20px}
 <div class="card col-6"><h3>🏠 בשרשורים של מי הוא חי</h3><div class="list-container" id="list-hosts"></div></div>
 <div class="card col-6"><h3>🎭 יוזם או מגיב</h3><div class="list-container" id="list-role"></div></div>
 <div class="card col-6"><h3>📍 איפה בפורום הוא חי</h3><div class="list-container" id="list-cats"></div></div>
+<div class="card col-6"><h3>📆 קצב ורצפים</h3><div class="list-container" id="list-pace"></div></div>
+<div class="card col-6"><h3>🧨 שנויים במחלוקת</h3><div class="list-container" id="list-contro"></div></div>
 <div class="card col-12"><h3>💥 מה הצית שיחה</h3><div class="list-container" id="list-spark"></div></div>
 <div class="card col-12"><h3>👥 עם מי הוא מדבר</h3><div class="list-container" id="list-social"></div></div>
 <div class="card col-12"><h3>💬 כמה הוא נשאר בשרשור</h3><div class="list-container" id="list-threads"></div></div>
@@ -1532,6 +1641,79 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   if (!namesSolid) h += '<div class="note-sm">⚠️ שמות המצביעים ידועים רק לחלק מהלייקים, ולכן לא מוצגת הקבוצה של מי שלא החזיר לייק</div>';
   h += '<div class="note-sm">נספר רק @אזכור או ציטוט — כפי שהפורום עצמו מסמן אותם. תגובה בשרשור בלי תיוג אינה נספרת, וזו הדרך הנפוצה לדבר כאן: אפשר לשוחח עם מישהו מאות פעמים ולהופיע כאן עם מספר חד-ספרתי.</div>';
   box.innerHTML = h;
+})();
+// ── ראש הדוח: מי, איפה, מתי — מדף הפרופיל, בלי בקשה נוספת ────────────────
+(()=>{
+  const P=meta.profile||{};
+  const nm=document.getElementById('hdr-name');
+  if(nm&&P.display) nm.textContent=_U(P.display);
+  const host=String(baseUrl||'').replace(/^[a-z]+:\/\//i,'').split('/')[0];
+  const scan=Date.parse(scannedAt)||Date.now();
+  const sub=document.getElementById('hdr-sub');
+  if(sub) sub.textContent='\u200f'+host+' · '+'נסרק ב-'+new Date(scan).toLocaleString([], {dateStyle:'short',timeStyle:'short'});
+  const dt=t=>esc(new Date(t).toLocaleDateString());
+  const n=v=>Number(v||0).toLocaleString();
+  const out=[];
+  const c=(t,cls)=>out.push('<span class="chip'+(cls?' '+cls:'')+'">'+t+'</span>');
+  if(P.banned) c('⛔ '+'מורחק מהפורום'+(P.banned_until>0?(' · '+'עד '+dt(P.banned_until)):''),'warn');
+  if(P.muted) c('🔇 '+'מושתק'+(P.muted_until>0?(' · '+'עד '+dt(P.muted_until)):''),'warn');
+  const ROLE={admin:'מנהל הפורום',gmod:'מפקח כללי',mod:'מפקח'};
+  if(ROLE[P.role]) c('🛡️ '+ROLE[P.role],'role');
+  (P.groups||[]).forEach(g=>c('🏷️ '+esc(g)));
+  if(P.joindate>0){
+    const yrs=(scan-P.joindate)/(365.25*86400000);
+    c('📅 '+'הצטרף ב-'+dt(P.joindate)+' · '+'ותק '+(yrs>=1?yrs.toFixed(1)+' שנים':Math.max(1,Math.round(yrs*12))+' חודשים'));
+  }
+  if(P.lastonline>0) c('🕓 '+'נראה לאחרונה ב-'+dt(P.lastonline));
+  if(P.profileviews>0) c('👁️ '+n(P.profileviews)+' צפיות בפרופיל');
+  if(P.followers>0||P.following>0) c('👥 '+n(P.followers)+' עוקבים'+' · '+'עוקב אחרי '+n(P.following));
+  if(P.hidden_posts>0) c('🙈 '+n(P.hidden_posts)+' פוסטים מחוקים או מוסתרים');
+  const box=document.getElementById('hdr-chips');
+  if(box) box.innerHTML=out.join('');
+})();
+
+// 📆 קצב ורצפים — מהתאריכים שכבר כאן
+(()=>{
+  const box=document.getElementById('list-pace');
+  if(!box) return;
+  const ts=data.map(d=>d.ts).filter(Boolean).sort((a,b)=>a-b);
+  if(!ts.length){box.innerHTML=note('אין פוסטים לניתוח');return;}
+  const DAY=86400000;
+  const mid=t=>{const x=new Date(t);x.setHours(0,0,0,0);return x.getTime();};
+  const per={};ts.forEach(t=>{const k=mid(t);per[k]=(per[k]||0)+1;});
+  const days=Object.keys(per).map(Number).sort((a,b)=>a-b);
+  // רצף = ימים קלנדריים צמודים. Math.round ולא חלוקה מדויקת: ביום של מעבר
+  // שעון יש 23 או 25 שעות, וחלוקה מדויקת הייתה שוברת שם את הרצף.
+  let best=1,cur=1,bestEnd=days[0];
+  for(let i=1;i<days.length;i++){
+    cur=(Math.round((days[i]-days[i-1])/DAY)===1)?cur+1:1;
+    if(cur>best){best=cur;bestEnd=days[i];}
+  }
+  const bestStart=bestEnd-(best-1)*DAY;
+  let busy=days[0];days.forEach(d=>{if(per[d]>per[busy])busy=d;});
+  const night=ts.filter(t=>new Date(t).getHours()<5).length;
+  const fmt=t=>esc(new Date(t).toLocaleDateString());
+  let h='';
+  h+=li('ימים שבהם כתב',days.length.toLocaleString());
+  h+=li('ממוצע ביום שבו כתב',(ts.length/days.length).toFixed(1));
+  h+=li('הרצף הארוך ביותר'+(best>1?' · '+fmt(bestStart)+' ← '+fmt(bestEnd):''),best+' ימים');
+  h+=li('היום העמוס ביותר'+' · '+fmt(busy),per[busy]+' פוסטים');
+  h+=li('כותב בלילה (00:00–05:00)',Math.round(100*night/ts.length)+'%');
+  const basisP=(meta.limited||meta.partial)?'<div class="note-sm">'+'מחושב מהפוסטים שנסרקו בלבד'+'</div>':'';
+  box.innerHTML=h+basisP;
+})();
+
+// 🧨 שנויים במחלוקת — הדיסלייקים הגיעו עם כל פוסט (`downvotes`), ועד 0.9.6
+// הם נספרו רק לטולטיפ של המוניטין
+(()=>{
+  const box=document.getElementById('list-contro');
+  if(!box) return;
+  if((meta.profile||{}).downvote_disabled){box.innerHTML=note('הדיסלייקים כבויים בפורום הזה');return;}
+  const hit=data.filter(d=>(d.down||0)>0);
+  if(!hit.length){box.innerHTML=note('אף פוסט שנסרק לא קיבל דיסלייק');return;}
+  const top=[...hit].sort((a,b)=>(b.down-a.down)||(a.likes-b.likes)).slice(0,8);
+  box.innerHTML=top.map(p=>'<div class="list-item"><div style="max-width:70%"><a href="'+esc(baseUrl)+'/post/'+encodeURIComponent(p.pid)+'" target="_blank" style="display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(p.title)+'</a><div class="sub">'+esc(p.date)+'</div></div><span class="badge">👎 '+esc(p.down)+' · 👍 '+esc(p.likes)+'</span></div>').join('')
+    +'<div class="note-sm">'+totalDowns.toLocaleString()+' דיסלייקים'+' · '+hit.length.toLocaleString()+' פוסטים שקיבלו לפחות אחד'+'</div>';
 })();
 </script>
 </body>
