@@ -24,6 +24,7 @@ import threading
 import database as db
 import scraper
 import report_store
+import forum_login
 import csv_import
 import profile_sheet
 import i18n
@@ -70,6 +71,11 @@ _stink_state = {"running": False, "done": False, "error": None,
                 "checked": 0, "page": 0, "disliked": 0, "html": None,
                 "cancelled": False}
 _stink_cancel = threading.Event()
+
+# התחברות לפורום מתוך התוכנה (forum_login.py)
+_login_state = {"running": False, "done": False, "ok": False, "error": None,
+                "cancelled": False, "forum": ""}
+_login_cancel = threading.Event()
 
 class _ChzCancelled(Exception):
     """נזרק כדי לבטל ניתוח Chazonishnik שרץ."""
@@ -2696,6 +2702,97 @@ del "%~f0"
         return db.get_merged_profile(int(nick_id))
 
     # ── עוגיות התחברות שמורות (לפי דומיין) ─────────────────────────
+    # ── התחברות לפורום מתוך התוכנה ──────────────────────────────────
+    def start_forum_login(self, forum_url):
+        """
+        פותח חלון של הפורום בתוך התוכנה. המשתמש מתחבר בו כרגיל; כשהדף
+        מראה שהוא מחובר, עוגיית ההתחברות נשמרת לפורום והחלון נסגר.
+        בנימין: "שיהיה יותר קל (מונחה אוטומטי) להביא עוגיות".
+
+        החלון **בלי js_api** — דף של פורום אינו יכול לקרוא ל-API של התוכנה.
+        שום שדה סיסמה אינו נקרא; רק עוגיית ההתחברות של הפורום עצמו.
+        """
+        import time as _time
+        url = (forum_url or "").strip()
+        if not url:
+            return {"ok": False, "error": "לא נבחר פורום"}
+        if _login_state.get("running"):
+            return {"ok": False, "error": "חלון התחברות כבר פתוח — התחבר בו, או סגור אותו"}
+        platform = db.get_forum_platform_by_url(url) or "nodebb"
+        if not forum_login.supported(platform):
+            return {"ok": False, "error": "לפורום מהסוג הזה אין עדיין התחברות מתוך התוכנה. "
+                                           "אפשר להדביק עוגייה ידנית."}
+        lu = forum_login.login_url(url, platform)
+        if not lu:
+            return {"ok": False, "error": "כתובת הפורום אינה תקינה"}
+        from urllib.parse import urlsplit
+        host = (urlsplit(lu).hostname or "").lower()
+        _login_cancel.clear()
+        _login_state.update({"running": True, "done": False, "ok": False, "error": None,
+                             "cancelled": False, "forum": host})
+        try:
+            import webview
+            win = webview.create_window("התחברות ל-%s — Tik-Nick" % host, lu,
+                                        width=1000, height=780)
+        except Exception as e:                 # noqa: BLE001
+            logging.exception("forum login window failed")
+            _login_state.update({"running": False, "done": True,
+                                 "error": "לא ניתן לפתוח את חלון ההתחברות: %s" % e})
+            return {"ok": False, "error": _login_state["error"]}
+        closed = threading.Event()
+        try:
+            win.events.closed += lambda *a: closed.set()
+        except Exception:                      # noqa: BLE001
+            pass
+
+        def _watch():
+            try:
+                deadline = _time.time() + forum_login.TIMEOUT_SEC
+                while _time.time() < deadline:
+                    if closed.is_set() or _login_cancel.is_set():
+                        _login_state["cancelled"] = True
+                        return
+                    _time.sleep(forum_login.POLL_SEC)
+                    if closed.is_set():
+                        _login_state["cancelled"] = True
+                        return
+                    try:
+                        js = forum_login.CHECK_JS.get(platform)
+                        res = win.evaluate_js(js) if js else None
+                        ck = forum_login.pick_cookie(win.get_cookies() or [], platform, host)
+                    except Exception:          # noqa: BLE001 — הדף עדיין נטען
+                        continue
+                    if forum_login.logged_in(platform, res, ck):
+                        db.save_cookie_for_url(url, ck)
+                        _login_state["ok"] = True
+                        logging.info("forum login: cookie saved for %s", host)
+                        try:
+                            win.destroy()
+                        except Exception:      # noqa: BLE001
+                            pass
+                        return
+                _login_state["error"] = "עבר זמן רב בלי התחברות — החלון נסגר. אפשר לנסות שוב."
+                try:
+                    win.destroy()
+                except Exception:              # noqa: BLE001
+                    pass
+            except Exception as e:             # noqa: BLE001
+                logging.exception("forum login watch failed")
+                _login_state["error"] = str(e)
+            finally:
+                _login_state["running"] = False
+                _login_state["done"] = True
+
+        threading.Thread(target=_watch, daemon=True).start()
+        return {"ok": True, "platform": platform, "forum": host}
+
+    def get_forum_login_progress(self):
+        return dict(_login_state)
+
+    def cancel_forum_login(self):
+        _login_cancel.set()
+        return {"ok": True}
+
     def get_saved_cookie(self, url):
         return db.get_cookie_for_url(url or "")
 

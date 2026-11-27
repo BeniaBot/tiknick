@@ -5383,8 +5383,12 @@ async function openInternetSync(openWith) {
       <button class="btn btn-ghost btn-sm" style="white-space:nowrap;flex-shrink:0"
               onclick="toggleCookieHelp('sync-cookie-help', syncCookieCtx())" title="איך משיגים עוגיות?">🍪 איך משיגים?</button>
     </div>
-    <input id="sync-cookie" class="form-input" style="width:100%;margin-bottom:12px" dir="ltr"
-           placeholder="הדבק כאן את ערך העוגייה (השאר ריק אם הפורום ציבורי)">
+    <div class="cookie-row" style="margin-bottom:12px">
+      <input id="sync-cookie" class="form-input" dir="ltr"
+             placeholder="הדבק כאן את ערך העוגייה (השאר ריק אם הפורום ציבורי)">
+      <button class="btn btn-ghost btn-sm" onclick="forumLogin(syncActive()?.dataset.url)"
+              title="פותח את הפורום בחלון — מתחברים כרגיל, והעוגייה נשמרת לבד">🔑 התחבר לפורום</button>
+    </div>
     <div id="sync-cookie-help" style="display:none"></div>
 
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
@@ -5721,10 +5725,24 @@ function cookieHelpHtml(ctx) {
   const sample = ck === 'express.sid' ? 's%3A' : '';
   const startsWith = sample
     ? ` (המחרוזת הארוכה שמתחילה ב-<code>${esc(sample)}</code>)` : '';
-  return `
-      <div style="margin-bottom:14px;padding:14px;border:1px solid var(--accent-2);border-radius:10px">
-        <b style="font-size:13px">✅ דרך מומלצת: תוסף Get cookies.txt</b>
-        <ol style="margin:8px 0 0;padding-inline-start:20px;font-size:12px;line-height:1.9">
+  // הדרך הקלה ראשונה: התחברות בחלון של הפורום בתוך התוכנה. הכתובת עוברת
+  // ב-data-* ונקראת מ-this.dataset — לא בתוך מחרוזת JS במאפיין.
+  const easy = c.url ? `
+      <div class="login-easy">
+        <b>✅ הכי קל: להתחבר מתוך התוכנה</b>
+        <div class="login-easy-text">ייפתח חלון של <b dir="ltr">${esc(host)}</b>. מתחברים בו כרגיל,
+          עם שם המשתמש והסיסמה. ברגע שההתחברות מצליחה החלון נסגר לבד והעוגייה נשמרת —
+          בלי להעתיק כלום.</div>
+        <button class="btn btn-primary btn-sm" data-login-url="${esc(c.url)}"
+                onclick="forumLogin(this.dataset.loginUrl)">🔑 התחבר ל-<span dir="ltr">${esc(host)}</span></button>
+        <div class="login-easy-note">🔒 הסיסמה מוקלדת באתר של הפורום עצמו — התוכנה לא קוראת ולא שומרת אותה.
+          נשמרת רק עוגיית ההתחברות, במחשב הזה בלבד.</div>
+      </div>` : '';
+  return easy + `
+      <details style="margin-bottom:14px"${c.url ? '' : ' open'}>
+      <summary style="cursor:pointer;font-size:12.5px;font-weight:600">🧩 דרך נוספת: תוסף Get cookies.txt לכרום</summary>
+      <div style="margin:8px 0 0;padding:14px;border:1px solid var(--border);border-radius:10px">
+        <ol style="margin:0;padding-inline-start:20px;font-size:12px;line-height:1.9">
           <li>לחץ כאן להתקנת התוסף:
             <b style="color:var(--accent-2);cursor:pointer;text-decoration:underline"
                onclick="openExt('https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc')">Get cookies.txt LOCALLY</b>
@@ -5736,6 +5754,7 @@ function cookieHelpHtml(ctx) {
           <li>הדבק אותו בשדה "עוגיית <span dir="ltr">${esc(ck)}</span>" למטה.</li>
         </ol>
       </div>
+      </details>
 
       <details style="margin-bottom:14px">
         <summary style="cursor:pointer;font-size:12.5px;font-weight:600">🔧 דרך חלופית: ידנית דרך כלי מפתחים (למתקדמים)</summary>
@@ -5752,6 +5771,41 @@ function cookieHelpHtml(ctx) {
       <div style="font-size:11.5px;color:var(--subtext);margin-bottom:14px;padding:8px 10px;background:var(--card2);border-radius:6px">
         🔒 העוגייה היא אישית ומאפשרת גישה לחשבון שלך — אל תשתף אותה עם אחרים.
       </div>`;
+}
+
+
+// ══ התחברות לפורום מתוך התוכנה ════════════════════════════════════════
+// בנימין: "שיהיה יותר קל (מונחה אוטומטי) להביא עוגיות". במקום תוסף לכרום
+// ושורה בקובץ — חלון של הפורום בתוך התוכנה, והעוגייה נשמרת לבד
+// (forum_login.py). החלון עצמו אינו מקבל את ה-API של התוכנה.
+let _loginPoll = null;
+async function forumLogin(url) {
+  url = (url || '').trim();
+  if (!url) { toast('בחר קודם פורום', 'error'); return; }
+  const r = await api('start_forum_login', url);
+  if (!r?.ok) { toast(r?.error || 'לא ניתן לפתוח את חלון ההתחברות', 'error', { ms: 9000 }); return; }
+  toast('נפתח חלון של הפורום — התחבר בו כרגיל. כשההתחברות תצליח הוא ייסגר לבד.', 'info', { ms: 10000 });
+  clearInterval(_loginPoll);
+  _loginPoll = setInterval(async () => {
+    const p = await api('get_forum_login_progress');
+    if (!p || p.running) return;
+    clearInterval(_loginPoll); _loginPoll = null;
+    if (p.ok) {
+      toast(`מחובר ל-${p.forum} ✓ העוגייה נשמרה, והתוכנה תשתמש בה מעכשיו`, 'success', { ms: 8000 });
+      refreshCookieFields();
+    } else if (p.cancelled) {
+      toast('חלון ההתחברות נסגר לפני שההתחברות הושלמה', 'info');
+    } else {
+      toast(p.error || 'ההתחברות לא הושלמה', 'error', { ms: 9000 });
+    }
+  }, 1000);
+}
+
+// כל שדה עוגייה פתוח מתמלא מחדש מהעוגייה השמורה
+function refreshCookieFields() {
+  if (document.getElementById('chz-cookie')) chzPrefillCookie();
+  if (document.getElementById('stink-cookie')) stinkPrefillCookie();
+  if (document.getElementById('sync-cookie')) syncPrefillCookie();
 }
 
 // מציג/מסתיר את ההסבר בתוך החלון הפתוח, בלי לסגור אותו
@@ -6010,8 +6064,12 @@ async function openChazonishnik() {
             <label class="form-label">עוגיית <span dir="ltr">express.sid</span>
               <span style="font-size:10px;opacity:.6">(נשמרת לפעם הבאה)</span>
               — <b style="color:var(--accent-text);cursor:pointer;text-decoration:underline"
-                   onclick="toggleCookieHelp('chz-cookie-help')">🍪 איך משיגים?</b></label>
-            <input id="chz-cookie" class="form-input" dir="ltr" placeholder="s%3A...  (השאר ריק אם הפורום ציבורי)">
+                   onclick="toggleCookieHelp('chz-cookie-help', {url: document.getElementById('chz-forum')?.value || ''})">🍪 איך משיגים?</b></label>
+            <div class="cookie-row">
+              <input id="chz-cookie" class="form-input" dir="ltr" placeholder="s%3A...  (השאר ריק אם הפורום ציבורי)">
+              <button class="btn btn-ghost btn-sm" onclick="forumLogin(document.getElementById('chz-forum')?.value)"
+                      title="פותח את הפורום בחלון — מתחברים כרגיל, והעוגייה נשמרת לבד">🔑 התחבר לפורום</button>
+            </div>
           </div>
           <div id="chz-cookie-help" style="display:none;margin-bottom:10px"></div>
           <div class="form-group" style="margin-bottom:6px">
@@ -6255,8 +6313,12 @@ async function openStinknik() {
             <label class="form-label">עוגיית התחברות
               <span style="font-size:10px;opacity:.6">(נשמרת לפעם הבאה)</span>
               — <b style="color:var(--accent-text);cursor:pointer;text-decoration:underline"
-                   onclick="toggleCookieHelp('stink-cookie-help')">🍪 איך משיגים?</b></label>
-            <input id="stink-cookie" class="form-input" dir="ltr" placeholder="השאר ריק ברוב המקרים">
+                   onclick="toggleCookieHelp('stink-cookie-help', {url: document.getElementById('stink-forum')?.value || ''})">🍪 איך משיגים?</b></label>
+            <div class="cookie-row">
+              <input id="stink-cookie" class="form-input" dir="ltr" placeholder="השאר ריק ברוב המקרים">
+              <button class="btn btn-ghost btn-sm" onclick="forumLogin(document.getElementById('stink-forum')?.value)"
+                      title="פותח את הפורום בחלון — מתחברים כרגיל, והעוגייה נשמרת לבד">🔑 התחבר לפורום</button>
+            </div>
             <div style="font-size:11px;color:var(--subtext);margin-top:4px">
               ברוב הפורומים המידע ציבורי ואין צורך בעוגייה. הוסף אותה רק אם התקבלה
               שגיאת הרשאה.

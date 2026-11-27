@@ -1343,3 +1343,12 @@ tbody td, .card-row .cv, #lookup-profile, .tooltip,
 .report-meta{color:var(--text-dim);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .report-flag{font-size:11px;font-weight:700;color:var(--warn);border:1px solid currentColor;border-radius:6px;padding:0 5px}
 .report-acts{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}
+
+/* ══ התחברות לפורום מתוך התוכנה ══ */
+.cookie-row{display:flex;gap:8px;align-items:center}
+.cookie-row .form-input{flex:1;min-width:0}
+.cookie-row .btn{flex-shrink:0;white-space:nowrap}
+.login-easy{margin-bottom:14px;padding:14px;border:1.5px solid var(--accent);border-radius:10px;background:var(--card)}
+.login-easy b{font-size:13.5px}
+.login-easy-text{font-size:12.5px;line-height:1.8;margin:6px 0 10px}
+.login-easy-note{font-size:11.5px;color:var(--text-dim);margin-top:10px;line-height:1.6}

@@ -131,6 +131,10 @@ const API = {
   get_db_health: async () => ({ ok: true, quick_check: 'ok', version: '%(version)s',
     install_type: 'portable', size: 1024, wal: 0, counts: {}, fts: true, path: 'C:/tmp/x.db' }),
   get_import_log: async () => [],
+  start_forum_login: async (u) => { window.__loginUrl = u; window.__loginAt = Date.now();
+    return { ok: true, platform: 'nodebb', forum: String(u).replace(/^https?:\/\//, '') }; },
+  get_forum_login_progress: async () => (Date.now() - (window.__loginAt || 0) < 2000)
+    ? { running: true } : { running: false, done: true, ok: true, forum: 'מתמחים.example' },
   list_reports: async () => (window.__reports || (window.__reports = [
     { name: 'חזונישניק - צול גאה - mitmachim.top - 2026-11-27 10.05.html', tool: 'chz',
       nick: 'צול גאה', forum: 'mitmachim.top', created: '2026-11-27T10:05:00', posts: 1791, partial: true },
