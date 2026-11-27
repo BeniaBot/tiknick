@@ -24,8 +24,15 @@ KNOWN_FORUMS = [
     {"name": "פורום בני ברק",    "color": "#9b59b6", "url": "https://bnebrak.com"},
     {"name": "פורום נודביבי",    "color": "#3498db", "url": "https://community.nodebb.org/"},
     {"name": "פורום אוצריא",     "color": "#e74c3c", "url": "https://otzaria.org/forum"},
-    {"name": "פורום המוזיקאי",   "color": "#e67e22", "url": "https://hamusicay.com/"},
-    {"name": "פורום המטבח",      "color": "#e91e8c", "url": "https://hamitbach.me/", "needs_login": True},
+    # 27.11.2026 — שני פורומים שיושבים בתת-תיקייה, ונרשמו בשורש הדומיין.
+    # בשורש של hamitbach.me יש היום אתר מתכונים (404 על ‎/api/config‎), והשרת
+    # של hamusicay.com מפנה ל-‎/forum‎ — כך שקישורי פרופיל נבנו בלי התיקייה.
+    # המטבח גם אינו דורש יותר התחברות: ‎/forum/api/users‎ מחזיר 116 חברים
+    # לאורח. `old_urls` — ראו _repair_known_urls_once.
+    {"name": "פורום המוזיקאי",   "color": "#e67e22", "url": "https://hamusicay.com/forum",
+     "old_urls": ["https://hamusicay.com"]},
+    {"name": "פורום המטבח",      "color": "#e91e8c", "url": "https://hamitbach.me/forum",
+     "old_urls": ["https://hamitbach.me"]},
     {"name": "פורום מקצב",       "color": "#00bcd4", "url": "https://miktzav.com/"},
     {"name": "פורום בנקל",       "color": "#8bc34a", "url": "https://forum.benakel.org/"},
     {"name": "פורום סייפר",      "color": "#ff5722", "url": "https://forum.safera.co.il/"},
@@ -38,6 +45,12 @@ KNOWN_FORUMS = [
     {"name": "פורום ימות המשיח", "color": "#16a085", "url": "https://f2.freeivr.co.il/"},
     {"name": "פורום נטפרי",      "color": "#2980b9", "url": "https://forum.netfree.link/"},
     {"name": "חרדים נעייס",      "color": "#455a64", "url": "https://charedim-neyes.onrender.com/"},
+    # ── נוספו ב-0.9.7 (נבדקו חי ב-27.11.2026: ‎/api/users‎ ציבורי בשלושתם) ──
+    # בנימין: "לבדוק אם כל הפורומים החרדיים וכדו' נמצאים בתוכנה (כולל ...
+    # טכנוקליק שהכתובת שלו החדשה היא https://tochnot-css.duckdns.org/techoclick)"
+    {"name": "פורום טכנוקליק",   "color": "#0097a7", "url": "https://tochnot-css.duckdns.org/techoclick"},
+    {"name": "פורום מרחבים",     "color": "#5d4037", "url": "https://merchavim.space/"},
+    {"name": "פורום רכבים זה לזה", "color": "#546e7a", "url": "https://rechavimzelaze.ovh/"},
     # פלטפורמות ללא API ציבורי לרשימת משתמשים — לארגון ולפתיחת פרופילים בלבד
     {"name": "פורום לתורה",      "color": "#2ecc71", "url": "https://tora-forum.co.il/",
      "platform": "xenforo"},
@@ -45,9 +58,13 @@ KNOWN_FORUMS = [
      "platform": "xenforo"},
     {"name": "פורום אוצר התורה", "color": "#7f8c8d", "url": "https://forum-otzar-hatorah.co.il/",
      "platform": "xenforo"},
+    {"name": "פורום מורשת מרן",  "color": "#8d6e63", "url": "https://forum.moreshet-maran.com/",
+     "platform": "xenforo"},
     {"name": "פורום אוצר החכמה", "color": "#a04000", "url": "https://forum.otzar.org/",
      "platform": "phpbb", "profile_pattern": "/memberlist.php?mode=viewprofile&un={user}"},
     {"name": "פורום אייוועלט",   "color": "#1f618d", "url": "https://www.ivelt.com/forum/",
+     "platform": "phpbb", "profile_pattern": "/memberlist.php?mode=viewprofile&un={user}"},
+    {"name": "פורום אידטיש",     "color": "#1a5276", "url": "https://forum.yidtish.com/",
      "platform": "phpbb", "profile_pattern": "/memberlist.php?mode=viewprofile&un={user}"},
     {"name": "פורום בחדרי חרדים", "color": "#616a6b", "url": "https://forums.bhol.co.il/forums/",
      "platform": "custom"},
@@ -470,6 +487,7 @@ def init_db():
     _repair_status_enum_once()
     _clean_last_seen_noise_once()
     _repair_known_platforms_once()
+    _repair_known_urls_once()
     # סל המחזור נשמר 30 יום; היסטוריה ויומן סריקות — שנה (אחרת גדלים בלי גבול)
     try:
         empty_trash(30)
@@ -2630,6 +2648,47 @@ def _canon_status(value):
     if not v or v in ("פעיל", "מורחק", "מושעה", "לא ידוע"):
         return v
     return _STATUS_CANON.get(v.lower(), v)
+
+
+def _norm_forum_url(u):
+    u = (u or "").strip().lower()
+    if u and not u.startswith(("http://", "https://")):
+        u = "https://" + u
+    return u.rstrip("/")
+
+
+def _repair_known_urls_once():
+    """
+    פורום מוכר שעבר כתובת. 27.11.2026: המטבח והמוזיקאי יושבים בתת-תיקייה
+    (‎/forum‎) ונרשמו בשורש הדומיין — המטבח לא נסרק בכלל (בשורש יש היום אתר
+    מתכונים), ובמוזיקאי קישורי הפרופיל נבנו בלי התיקייה.
+
+    ההתאמה היא **לפי הכתובת הישנה בלבד**, בלי תלות בשם: מי שהוסיף את
+    hamitbach.me ידנית בשם אחר מקבל את אותו תיקון, כי הכתובת הזו אינה פורום
+    יותר. כתובת אחרת לא נוגעים בה. העוגייה השמורה נשמרת לפי origin — והוא לא
+    השתנה. חד-פעמי, מסומן בדגל.
+    """
+    flag = "known_urls_repaired_v1"
+    with get_connection() as conn:
+        if conn.execute("SELECT value FROM settings WHERE key=?", (flag,)).fetchone():
+            return
+    fixed = 0
+    try:
+        moves = {}
+        for kf in KNOWN_FORUMS:
+            for old in kf.get("old_urls") or ():
+                moves[_norm_forum_url(old)] = kf["url"]
+        with get_connection() as conn:
+            for r in conn.execute("SELECT id, url FROM forums WHERE COALESCE(url,'') != ''").fetchall():
+                new = moves.get(_norm_forum_url(r["url"]))
+                if new:
+                    conn.execute("UPDATE forums SET url=? WHERE id=?", (new, r["id"]))
+                    fixed += 1
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, '1')", (flag,))
+        if fixed:
+            logging.info("Repaired url on %d known forum(s)", fixed)
+    except Exception:
+        logging.exception("known url repair failed")
 
 
 def _repair_known_platforms_once():
