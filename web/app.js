@@ -4917,7 +4917,9 @@ function toast(msg, type = 'info', opts = {}) {
   el.setAttribute('role', type === 'error' ? 'alert' : 'status');
   const text = document.createElement('span');
   text.className = 'toast-text';
-  text.textContent = msg;
+  // להודעת הצלחה כבר יש ✓ כסמל (CSS), ועשרות הודעות מסתיימות גם ב-"✓" —
+  // יצא "✓ המאגר שוחזר ✓". ה-✓ שבסוף הטקסט יורד; ✓ באמצע משפט נשאר.
+  text.textContent = type === 'success' ? String(msg).replace(/\s*✓\s*$/, '') : msg;
   el.appendChild(text);
   let timer = 0;
   const close = () => { clearTimeout(timer); el.remove(); };

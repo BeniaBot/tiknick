@@ -1104,5 +1104,327 @@
   "kind": "static",
   "where": "web/index.html",
   "context": "tooltip of the ✕ button inside the top search box"
+ },
+ {
+  "he": "📂 דוחות קודמים",
+  "en": "📂 Previous reports",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "button: list of saved Chazonishnik/Stinknik reports (0.9.7)"
+ },
+ {
+  "he": "פתח",
+  "en": "Open",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "button in a report row (0.9.7)"
+ },
+ {
+  "he": "💾 שמור עותק",
+  "en": "💾 Save a copy",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "button: save a copy of a report (0.9.7)"
+ },
+ {
+  "he": "🗑️ מחק",
+  "en": "🗑️ Delete",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "button in a report row (0.9.7)"
+ },
+ {
+  "he": "שמירת עותק של הדוח במקום אחר",
+  "en": "Save a copy of the report somewhere else",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "tooltip (0.9.7)"
+ },
+ {
+  "he": "מחיקת הדוח (אפשר לבטל)",
+  "en": "Delete the report (can be undone)",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "tooltip (0.9.7)"
+ },
+ {
+  "he": "כל דוח שמפיקים נשמר כאן — החדש למעלה.",
+  "en": "Every report you produce is kept here, newest first.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "hint above the reports list (0.9.7)"
+ },
+ {
+  "he": "עדיין אין דוחות.",
+  "en": "No reports yet.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "empty reports list (0.9.7)"
+ },
+ {
+  "he": "כל דוח שתפיק מעכשיו יישמר כאן, ותוכל לפתוח אותו שוב בכל זמן.",
+  "en": "Every report you produce from now on is kept here, and you can open it again any time.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "empty reports list (0.9.7)"
+ },
+ {
+  "he": "📁 פתח את התיקייה",
+  "en": "📁 Open the folder",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "button: open the reports folder (0.9.7)"
+ },
+ {
+  "he": "חלקי",
+  "en": "partial",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "badge on a report that did not read every post (0.9.7)"
+ },
+ {
+  "he": "חזונישניק",
+  "en": "Chazonishnik",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "tool name in the reports list (0.9.7)"
+ },
+ {
+  "he": "שטינקניק",
+  "en": "Stinknik",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "tool name in the reports list (0.9.7)"
+ },
+ {
+  "he": "השוואה",
+  "en": "Comparison",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "tool name in the reports list (0.9.7)"
+ },
+ {
+  "he": "דוח",
+  "en": "Report",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "generic tool name in the reports list (0.9.7)"
+ },
+ {
+  "he": "{1} פוסטים",
+  "en": "{1} posts",
+  "kind": "pattern",
+  "where": "web/app.js",
+  "context": "post count in a report row (0.9.7)"
+ },
+ {
+  "he": "נשמר עותק ✓",
+  "en": "Copy saved ✓",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "הדוח הוחזר ✓",
+  "en": "The report is back ✓",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast after undo (0.9.7)"
+ },
+ {
+  "he": "הדוח על {1} נמחק",
+  "en": "The report on {1} was deleted",
+  "kind": "pattern",
+  "where": "web/app.js",
+  "context": "toast with undo (0.9.7)"
+ },
+ {
+  "he": "לא ניתן לפתוח את הדוח",
+  "en": "Could not open the report",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "לא ניתן למחוק",
+  "en": "Could not delete",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "לא ניתן לשחזר",
+  "en": "Could not restore",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "הדוח לא נמצא — אולי נמחק",
+  "en": "The report was not found - perhaps it was deleted",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "error (0.9.7)"
+ },
+ {
+  "he": "הדוח לא נמצא",
+  "en": "The report was not found",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "error (0.9.7)"
+ },
+ {
+  "he": "לא ניתן לשחזר את הדוח",
+  "en": "Could not restore the report",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "error (0.9.7)"
+ },
+ {
+  "he": "פתח את הדוח",
+  "en": "Open the report",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "button inside a toast (0.9.7)"
+ },
+ {
+  "he": "📊 הדוח מוכן · {1}",
+  "en": "📊 The report is ready · {1}",
+  "kind": "pattern",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "🦨 הדוח מוכן · {1}",
+  "en": "🦨 The report is ready · {1}",
+  "kind": "pattern",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "✅ הכי קל: להתחבר מתוך התוכנה",
+  "en": "✅ Easiest: log in from inside the app",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "cookie help heading (0.9.7)"
+ },
+ {
+  "he": "ייפתח חלון של",
+  "en": "A window of",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "cookie help text fragment (0.9.7)"
+ },
+ {
+  "he": ". מתחברים בו כרגיל, עם שם המשתמש והסיסמה. ברגע שההתחברות מצליחה החלון נסגר לבד והעוגייה נשמרת — בלי להעתיק כלום.",
+  "en": " will open. Log in there as usual, with your username and password. Once the login succeeds the window closes by itself and the cookie is saved - nothing to copy.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "cookie help text fragment (0.9.7)"
+ },
+ {
+  "he": "🔑 התחבר ל-",
+  "en": "🔑 Log in to ",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "button prefix before a forum host (0.9.7)"
+ },
+ {
+  "he": "🔒 הסיסמה מוקלדת באתר של הפורום עצמו — התוכנה לא קוראת ולא שומרת אותה. נשמרת רק עוגיית ההתחברות, במחשב הזה בלבד.",
+  "en": "🔒 You type the password on the forum's own site - the app does not read or keep it. Only the login cookie is kept, on this computer only.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "cookie help note (0.9.7)"
+ },
+ {
+  "he": "🧩 דרך נוספת: תוסף Get cookies.txt לכרום",
+  "en": "🧩 Another way: the Get cookies.txt extension for Chrome",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "cookie help section (0.9.7)"
+ },
+ {
+  "he": "🔑 התחבר לפורום",
+  "en": "🔑 Log in to the forum",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "button next to a cookie field (0.9.7)"
+ },
+ {
+  "he": "פותח את הפורום בחלון — מתחברים כרגיל, והעוגייה נשמרת לבד",
+  "en": "Opens the forum in a window - log in as usual and the cookie saves itself",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "tooltip (0.9.7)"
+ },
+ {
+  "he": "נפתח חלון של הפורום — התחבר בו כרגיל. כשההתחברות תצליח הוא ייסגר לבד.",
+  "en": "A window of the forum is open - log in there as usual. When the login succeeds it closes by itself.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "מחובר ל-{1} ✓ העוגייה נשמרה, והתוכנה תשתמש בה מעכשיו",
+  "en": "Logged in to {1} ✓ The cookie is saved and the app will use it from now on",
+  "kind": "pattern",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "חלון ההתחברות נסגר לפני שההתחברות הושלמה",
+  "en": "The login window was closed before the login finished",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "ההתחברות לא הושלמה",
+  "en": "The login did not finish",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "בחר קודם פורום",
+  "en": "Pick a forum first",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "לא ניתן לפתוח את חלון ההתחברות",
+  "en": "Could not open the login window",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "toast (0.9.7)"
+ },
+ {
+  "he": "חלון התחברות כבר פתוח — התחבר בו, או סגור אותו",
+  "en": "A login window is already open - log in there, or close it",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "error (0.9.7)"
+ },
+ {
+  "he": "לפורום מהסוג הזה אין עדיין התחברות מתוך התוכנה. אפשר להדביק עוגייה ידנית.",
+  "en": "This kind of forum has no login from inside the app yet. You can paste a cookie by hand.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "error (0.9.7)"
+ },
+ {
+  "he": "כתובת הפורום אינה תקינה",
+  "en": "The forum address is not valid",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "error (0.9.7)"
+ },
+ {
+  "he": "עבר זמן רב בלי התחברות — החלון נסגר. אפשר לנסות שוב.",
+  "en": "A long time passed with no login - the window was closed. You can try again.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "error (0.9.7)"
  }
 ]

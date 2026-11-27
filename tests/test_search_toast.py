@@ -169,6 +169,13 @@ toast('<img src=x onerror=1>', 'info');
 out.textOnly = container.children[0].children[0].textContent === '<img src=x onerror=1>';
 container.children[0].children.find(c => c.className === 'toast-close').onclick(stop);
 
+// -- ✓ כפול: לסמל ההצלחה יש כבר ✓
+const last = () => container.children[container.children.length - 1].children[0].textContent;
+toast('המאגר שוחזר ✓', 'success'); out.noDoubleCheck = last() === 'המאגר שוחזר';
+toast('מחובר ✓ העוגייה נשמרה', 'success'); out.midCheckKept = last() === 'מחובר ✓ העוגייה נשמרה';
+toast('משהו ✓', 'info'); out.infoUntouched = last() === 'משהו ✓';
+container.children = [];
+
 // -- ✕ בחיפוש
 input.value = 'כהן'; onSearch('כהן');
 out.showsWhenTyped = clearBtn.hidden === false;
@@ -219,6 +226,9 @@ console.log(JSON.stringify(out));
             ("clearLoadsAll", "   וטוענת את כל הרשימה"),
             ("pendingTypingCancelled", "   הקלדה שעוד ממתינה לא דורסת את הניקוי"),
             ("hiddenWhenEmpty", "ה-✕ מוסתר כשהשדה ריק"),
+            ("noDoubleCheck", "🚨 הודעת הצלחה בלי ✓ כפול"),
+            ("midCheckKept", "   ✓ באמצע משפט נשאר"),
+            ("infoUntouched", "   הודעה שאינה הצלחה — לא נוגעים"),
         ):
             ok(label, o.get(key) is True, o.get(key))
         ok("הודעת שגיאה מוכרזת לקוראי מסך (role=alert)", o.get("role") == "alert", o.get("role"))
