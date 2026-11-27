@@ -362,7 +362,7 @@ _TPL_EN = {
     "ממוצע ביום שבו כתב": "Average on a day with posts",
     "הרצף הארוך ביותר": "Longest streak",
     "היום העמוס ביותר": "Busiest day",
-    "כותב בלילה (00:00–05:00)": "Writes at night (00:00-05:00)",
+    "'כותב בלילה'": "'Writes at night'",
     "מחושב מהפוסטים שנסרקו בלבד": "Calculated from the scanned posts only",
     "הדיסלייקים כבויים בפורום הזה": "Downvotes are turned off in this forum",
     "אף פוסט שנסרק לא קיבל דיסלייק": "No scanned post received a downvote",
@@ -608,6 +608,32 @@ def _norm_key(s):
     יצאו שתי הקבוצות השליליות השקריות שבנימין דיווח עליהן.
     """
     return re.sub(r"[\s_\-]+", "", _unesc(str(s or ""))).strip().lower()
+
+
+def _full_profile(base, slug, cookie, udata):
+    """
+    `_fetch_user` מוצא את המשתמש קודם דרך `/api/user/username/<שם>` — וזו
+    תשובה **רזה**: אין בה `counts` (הגלויים מתוך הרשמיים), אין תפקיד (מנהל או
+    מפקח), אין רשימת קבוצות ואין "דיסלייקים כבויים". נמדד על cfopuser: ראש
+    הדוח יצא בלי "פוסטים מחוקים או מוסתרים" ובלי תפקיד, בזמן שבדף הפרופיל יש
+    את שניהם. בקשה אחת לדף הפרופיל המלא, ורק כשהרזה הגיעה. כישלון — נשארים
+    עם מה שיש.
+    """
+    u = dict(udata or {})
+    if "counts" in u or not slug:
+        return u
+    try:
+        full = _get_json(f"{base}/api/user/{urllib.parse.quote(slug)}", cookie=cookie,
+                         timeout=15, retries=1)
+        if isinstance(full, dict) and full.get("uid") == u.get("uid", full.get("uid")):
+            for k in ("counts", "isAdmin", "isGlobalModerator", "isModerator", "groups",
+                      "groupTitleArray", "downvote:disabled", "profileviews",
+                      "followerCount", "followingCount"):
+                if k in full:
+                    u[k] = full[k]
+    except Exception as e:                      # noqa: BLE001
+        logging.info("Chazonishnik: full profile unavailable for %s: %s", slug, e)
+    return u
 
 
 def _profile_meta(udata):
@@ -1070,7 +1096,7 @@ def analyze_user(username, cookie, base_url=DEFAULT_BASE, progress=None, save_pa
         my_uid, slug, _udata = _fetch_user(base, username, cookie)
         postcount = int((_udata or {}).get("postcount") or 0)
         official = _official_counts(_udata)
-        profile = _profile_meta(_udata)
+        profile = _profile_meta(_full_profile(base, slug, cookie, _udata))
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return {"ok": False, "error": "נדרשת עוגייה תקינה (שגיאת הרשאה)"}
@@ -1732,7 +1758,8 @@ const dayFmt=ts=>new Date(ts).toLocaleDateString();
   h+=li('ממוצע ביום שבו כתב',(ts.length/days.length).toFixed(1));
   h+=li('הרצף הארוך ביותר'+(best>1?' · '+fmt(bestStart)+' ← '+fmt(bestEnd):''),best+' ימים');
   h+=li('היום העמוס ביותר'+' · '+fmt(busy),per[busy]+' פוסטים');
-  h+=li('כותב בלילה (00:00–05:00)',Math.round(100*night/ts.length)+'%');
+  // טווח שעות בתוך שורה עברית מתהפך ל-(05:00–00:00) — בידוד LTR
+  h+=li('כותב בלילה'+' <span dir="ltr">(00:00–05:00)</span>',Math.round(100*night/ts.length)+'%');
   const basisP=(meta.limited||meta.partial)?'<div class="note-sm">'+'מחושב מהפוסטים שנסרקו בלבד'+'</div>':'';
   box.innerHTML=h+basisP;
 })();

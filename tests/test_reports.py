@@ -178,6 +178,26 @@ ok("🚨 פרטים אישיים אינם נכנסים לדוח", not set(P) & {
 ok("פרופיל ריק לא מפיל", CZ._profile_meta(None)["display"] == "" and CZ._profile_meta({})["hidden_posts"] == 0)
 ok("ערך זבל במונה לא מפיל", CZ._profile_meta({"joindate": "x", "counts": {"posts": "y"}})["joindate"] == 0)
 
+# 🚨 נמדד על cfopuser: החיפוש לפי שם מחזיר פרופיל רזה (בלי counts ובלי תפקיד)
+thin = {k: v for k, v in U.items() if k not in ("counts", "isGlobalModerator", "groups")}
+asked = []
+real_g = CZ._get_json
+CZ._get_json = lambda url, *a, **k: asked.append(url) or dict(U)
+try:
+    full = CZ._full_profile("https://mitmachim.top", "cfopuser", None, thin)
+    ok("🚨 פרופיל רזה — בקשה אחת לדף הפרופיל המלא", asked == ["https://mitmachim.top/api/user/cfopuser"], asked)
+    ok("   ומשם מגיעים הנסתרים והתפקיד", CZ._profile_meta(full)["hidden_posts"] == 266
+       and CZ._profile_meta(full)["role"] == "gmod")
+    asked.clear()
+    CZ._full_profile("https://mitmachim.top", "cfopuser", None, U)
+    ok("   פרופיל מלא — בלי בקשה נוספת", asked == [])
+    CZ._get_json = lambda *a, **k: (_ for _ in ()).throw(OSError("down"))
+    ok("   כישלון — נשארים עם מה שיש", CZ._full_profile("https://x", "u", None, thin) == thin)
+    CZ._get_json = lambda *a, **k: dict(U, uid=999)
+    ok("   🚨 תשובה של משתמש אחר אינה נמזגת", "counts" not in CZ._full_profile("https://x", "u", None, thin))
+finally:
+    CZ._get_json = real_g
+
 # ══ 8. המתנה רק לפני בקשה ═══════════════════════════════════════════════════
 slept = []
 real_sleep = CZ.time.sleep
