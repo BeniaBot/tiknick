@@ -1329,3 +1329,17 @@ tbody td, .card-row .cv, #lookup-profile, .tooltip,
 .adv-box > summary::after{content:"▾";margin-inline-start:auto;font-size:11px}
 .adv-box[open] > summary::after{content:"▴"}
 .adv-box[open] > summary{color:var(--accent-text)}
+
+/* ══ דוחות קודמים ══ */
+.reports-hint{color:var(--text-dim);font-size:12.5px;margin:0 0 10px}
+.reports-empty{text-align:center;color:var(--text-dim);font-size:14px;line-height:1.9;padding:34px 10px}
+#reports-rows{display:flex;flex-direction:column;gap:6px;max-height:58vh;overflow-y:auto}
+.report-row{display:flex;align-items:center;gap:12px;padding:10px 12px;border:1px solid var(--border);
+  border-radius:var(--r-sm);background:var(--card)}
+.report-row:hover{border-color:color-mix(in srgb, var(--text) 22%, var(--border))}
+.report-ic{font-size:22px;flex-shrink:0}
+.report-main{flex:1;min-width:0}
+.report-nick{font-weight:800;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;user-select:text}
+.report-meta{color:var(--text-dim);font-size:12px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.report-flag{font-size:11px;font-weight:700;color:var(--warn);border:1px solid currentColor;border-radius:6px;padding:0 5px}
+.report-acts{display:flex;gap:6px;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}

@@ -23,6 +23,7 @@ import webbrowser
 import threading
 import database as db
 import scraper
+import report_store
 import csv_import
 import profile_sheet
 import i18n
@@ -1153,12 +1154,9 @@ class API:
         def _run():
             try:
                 import chazonishnik
-                out_dir = os.path.dirname(db.DB_PATH)
-                safe = "".join(c for c in (a + "-" + b) if c.isalnum() or c in "-_") or "pair"
-                save_path = os.path.join(out_dir, f"chazonishnik_compare_{safe}.html")
                 result = chazonishnik.analyze_pair(
                     a, b, cookie, base_url=base_url, progress=_progress,
-                    save_path=save_path, cancel_flag=_chz_cancel, max_posts=max_posts)
+                    save_path=None, cancel_flag=_chz_cancel, max_posts=max_posts)
                 if result.get("cancelled"):
                     _chz_state["cancelled"] = True
                 elif result.get("ok"):
@@ -1166,6 +1164,9 @@ class API:
                     _chz_state["path"] = result.get("path")
                     _chz_state["count"] = result.get("posts", 0)
                     _chz_state["pair"] = {"a": result.get("a"), "b": result.get("b")}
+                    _chz_state["report"] = report_store.save(
+                        os.path.dirname(db.DB_PATH), "cmp", "%s מול %s" % (a, b),
+                        base_url, result.get("html"), {"nick_b": b})
                 else:
                     _chz_state["error"] = result.get("error")
             except Exception as e:
@@ -1206,7 +1207,8 @@ class API:
         _chz_cancel.clear()
         _chz_state.update({"running": True, "done": False, "error": None,
                            "phase": "scan", "count": 0, "total": 0, "compare": False,
-                           "html": None, "path": None, "cancelled": False})
+                           "html": None, "path": None, "cancelled": False,
+                           "report": ""})
 
         def _progress(p):
             _chz_state["phase"] = p.get("phase", "")
@@ -1219,12 +1221,11 @@ class API:
         def _run():
             try:
                 import chazonishnik
-                out_dir = os.path.dirname(db.DB_PATH)
-                safe = "".join(c for c in username if c.isalnum() or c in "-_") or "user"
-                save_path = os.path.join(out_dir, f"chazonishnik_{safe}.html")
+                # הדוח נשמר במאגר הדוחות (report_store) ולא ליד המאגר:
+                # הקובץ הישן נדרס בכל ניתוח של אותו משתמש ואיש לא ראה אותו.
                 result = chazonishnik.analyze_user(
                     username, cookie, base_url=base_url,
-                    progress=_progress, save_path=save_path, cancel_flag=_chz_cancel,
+                    progress=_progress, save_path=None, cancel_flag=_chz_cancel,
                     max_posts=max_posts)
                 if result.get("cancelled"):
                     _chz_state["cancelled"] = True
@@ -1239,6 +1240,11 @@ class API:
                     # כמה בקשות "מי עשה לייק" נכשלו. בלי זה הדוח מציג 0
                     # לייקים כאילו כך באמת קרה — ראו chazonishnik._fetch_detail.
                     _chz_state["likes_incomplete"] = result.get("likes_incomplete", 0)
+                    _chz_state["report"] = report_store.save(
+                        os.path.dirname(db.DB_PATH), "chz",
+                        result.get("user") or username, base_url, result.get("html"),
+                        {"posts": result.get("posts", 0),
+                         "partial": bool(result.get("partial"))})
                 else:
                     _chz_state["error"] = result.get("error")
             except Exception as e:
@@ -1253,6 +1259,46 @@ class API:
 
     def get_chazonishnik_progress(self):
         return dict(_chz_state)
+
+    # ── מאגר הדוחות ─────────────────────────────────────────────────
+    # בנימין: "שיוכלו לפתוח את הדוחות האחרונים — גם יותר מאשר הדוח האחרון".
+    # כל פעולה מקבלת **שם קובץ בלבד**; report_store מסרב לכל נתיב, סיומת
+    # אחרת או קובץ שאינו בתיקיית הדוחות.
+    def list_reports(self):
+        d = os.path.dirname(db.DB_PATH)
+        try:
+            report_store.adopt_legacy(d)    # chazonishnik_*.html מגרסאות קודמות
+        except Exception:
+            logging.exception("adopt_legacy failed")
+        try:
+            return report_store.list_reports(d)
+        except Exception:
+            logging.exception("list_reports failed")
+            return []
+
+    def open_report(self, name):
+        html = report_store.read(os.path.dirname(db.DB_PATH), name)
+        if not html:
+            return {"ok": False, "error": "הדוח לא נמצא — אולי נמחק"}
+        return {"ok": True, "html": html, "name": name}
+
+    def delete_report(self, name):
+        try:
+            ok = report_store.delete(os.path.dirname(db.DB_PATH), name)
+        except OSError as e:
+            return {"ok": False, "error": str(e)}
+        return {"ok": ok} if ok else {"ok": False, "error": "הדוח לא נמצא"}
+
+    def restore_report(self, name):
+        ok = report_store.undelete(os.path.dirname(db.DB_PATH), name)
+        return {"ok": ok} if ok else {"ok": False, "error": "לא ניתן לשחזר את הדוח"}
+
+    def open_reports_folder(self):
+        try:
+            os.startfile(report_store.reports_dir(os.path.dirname(db.DB_PATH)))
+            return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     # ── דוח הפורום — "מי היה כאן ראשון" ────────────────────────────
     def run_forum_stats_many(self, targets=None):
@@ -1349,7 +1395,7 @@ class API:
         _stink_cancel.clear()
         _stink_state.update({"running": True, "done": False, "error": None,
                              "checked": 0, "page": 0, "disliked": 0,
-                             "html": None, "cancelled": False})
+                             "html": None, "cancelled": False, "report": ""})
 
         def _progress(p):
             _stink_state["checked"] = p.get("checked", 0)
@@ -1373,6 +1419,11 @@ class API:
                     _stink_state["partial"] = result.get("partial", False)
                     _stink_state["stopped_early"] = result.get("stopped_early", False)
                     _stink_state["limited"] = result.get("limited", False)
+                    _stink_state["report"] = report_store.save(
+                        os.path.dirname(db.DB_PATH), "stink",
+                        result.get("user") or user_input, base_url, result.get("html"),
+                        {"posts": result.get("checked", 0),
+                         "partial": bool(result.get("partial"))})
                 else:
                     _stink_state["error"] = result.get("error")
             except Exception as e:
@@ -1392,23 +1443,40 @@ class API:
         _stink_cancel.set()
         return {"ok": True}
 
-    def save_stinknik_report(self, html=None):
-        content = html or _stink_state.get("html")
+    def _save_report_dialog(self, content, default_name):
+        import webview
+        result = webview.windows[0].create_file_dialog(
+            webview.SAVE_DIALOG, save_filename=default_name,
+            file_types=("HTML Files (*.html)",))
+        if not result:
+            return {"ok": False, "error": "בוטל"}
+        path = result if isinstance(result, str) else result[0]
+        if not path.lower().endswith(".html"):
+            path += ".html"
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {"ok": True, "path": path}
+
+    def _report_content(self, html, name, state):
+        """
+        מה לשמור ובאיזה שם. דוח שנשמר במאגר הדוחות מגיע **משם** ובשם שלו —
+        שם הכלי, הניק, הפורום והתאריך. בנימין: "שבשם הקובץ (גם בשטינקניק)
+        יהיה שם הניק". עד עכשיו כל שמירה הציעה chazonishnik_report.html.
+        """
+        if name:
+            content = report_store.read(os.path.dirname(db.DB_PATH), name)
+            if content:
+                return content, name
+        content = html or state.get("html")
+        stored = state.get("report") or ""
+        return content, (stored or "")
+
+    def save_stinknik_report(self, html=None, name=None):
+        content, fname = self._report_content(html, name, _stink_state)
         if not content:
             return {"ok": False, "error": "אין דוח לשמירה"}
         try:
-            import webview
-            result = webview.windows[0].create_file_dialog(
-                webview.SAVE_DIALOG, save_filename="stinknik_report.html",
-                file_types=("HTML Files (*.html)",))
-            if not result:
-                return {"ok": False, "error": "בוטל"}
-            path = result if isinstance(result, str) else result[0]
-            if not path.lower().endswith(".html"):
-                path += ".html"
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-            return {"ok": True, "path": path}
+            return self._save_report_dialog(content, fname or "שטינקניק.html")
         except Exception as e:
             logging.exception("save_stinknik_report failed")
             return {"ok": False, "error": str(e)}
@@ -1437,25 +1505,13 @@ class API:
         _chz_cancel.set()
         return {"ok": True}
 
-    def save_chazonishnik_report(self, html=None):
+    def save_chazonishnik_report(self, html=None, name=None):
         """שמירת הדוח כקובץ HTML במיקום לבחירת המשתמש (דיאלוג שמירה)."""
-        content = html or _chz_state.get("html")
+        content, fname = self._report_content(html, name, _chz_state)
         if not content:
             return {"ok": False, "error": "אין דוח לשמירה"}
         try:
-            import webview
-            windows = webview.windows
-            result = windows[0].create_file_dialog(
-                webview.SAVE_DIALOG, save_filename="chazonishnik_report.html",
-                file_types=("HTML Files (*.html)",))
-            if not result:
-                return {"ok": False, "error": "בוטל"}
-            path = result if isinstance(result, str) else result[0]
-            if not path.lower().endswith(".html"):
-                path += ".html"
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(content)
-            return {"ok": True, "path": path}
+            return self._save_report_dialog(content, fname or "חזונישניק.html")
         except Exception as e:
             logging.exception("save_chazonishnik_report failed")
             return {"ok": False, "error": str(e)}

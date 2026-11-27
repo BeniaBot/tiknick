@@ -186,7 +186,7 @@ def analyze_dislikes(user_input, base_url=DEFAULT_BASE, cookie=None,
     partial = stopped_early or (bool(postcount) and checked < postcount * 0.95 and not limited)
     disliked.sort(key=lambda p: p["downvotes"], reverse=True)
     html = _build_html(slug, disliked, checked, total_up, total_down, total_rep, postcount)
-    return {"ok": True, "html": html, "disliked": len(disliked),
+    return {"ok": True, "html": html, "disliked": len(disliked), "user": slug,
             "checked": checked, "up": total_up, "down": total_down, "rep": total_rep,
             "postcount": postcount, "partial": partial, "stopped_early": stopped_early,
             "limited": limited}

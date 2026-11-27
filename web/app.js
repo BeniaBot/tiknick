@@ -6024,8 +6024,7 @@ async function openChazonishnik() {
     </div>
   `, [
     { label: '📊 נתח פעילות', cls: 'btn-primary', action: runChazonishnik },
-    ...(_lastReport.chz ? [{ label: '📄 הדוח האחרון', cls: 'btn-ghost',
-        action: () => showChazonishnikReport(_lastReport.chz.html, _lastReport.chz.count) }] : []),
+    { label: '📂 דוחות קודמים', cls: 'btn-ghost', action: () => openReportsList(openChazonishnik) },
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
   chzPrefillCookie();
@@ -6131,16 +6130,19 @@ function startChazonishnikMonitor() {
       if (p.cancelled) { toast('הניתוח בוטל', 'info'); if (mine) closeModal(); return; }
       if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (mine) closeModal(); return; }
       if (p.html) {
-        _lastReport.chz = { html: p.html, count: p.count };
+        _lastReport.chz = { html: p.html, count: p.count, name: p.report || '' };
         const msg = scanSummary('נותחו', p.count, p.postcount, p.partial, p.stopped_early,
                                 p.limited, p.likes_incomplete);
         if (mine || !isModalOpen()) {
-          showChazonishnikReport(p.html, p.count);
+          showChazonishnikReport(p.html, p.count, p.report);
           toast(msg, p.partial ? 'error' : 'success',
                 { ms: p.partial ? 9000 : 4000 });
         } else {
-          // אל תגנוב את המסך מעבודה פתוחה — הדוח נשמר וזמין לפתיחה
-          toast('📊 הדוח מוכן — פתח דרך Chazonishnik · ' + msg, p.partial ? 'error' : 'success');
+          // אל תגנוב את המסך מעבודה פתוחה. "פתח דרך Chazonishnik" הבטיח כפתור
+          // שלא היה על המסך — עכשיו הכפתור בתוך ההודעה עצמה.
+          const h = p.html, c = p.count, r = p.report;
+          toast('📊 הדוח מוכן · ' + msg, p.partial ? 'error' : 'success',
+                { actionLabel: 'פתח את הדוח', onAction: () => showChazonishnikReport(h, c, r), ms: 12000 });
         }
       } else if (mine) closeModal();
     }
@@ -6201,14 +6203,15 @@ function fillModalBody(frameId) {
   fr.style.minHeight = '240px';
 }
 
-function showChazonishnikReport(html, postCount) {
+function showChazonishnikReport(html, postCount, reportName) {
   // sandbox ללא allow-same-origin: לדוח יש origin נפרד, ולכן סקריפט בתוכו
   // (למשל מכותרת נושא עוינת) לא יכול להגיע ל-window.parent.pywebview.api.
   openModal(`📊 דוח פעילות${postCount ? ` · ${postCount} פוסטים` : ''}`, `
     <iframe id="chz-frame" sandbox="allow-scripts allow-popups"
             style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
   `, [
-    { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveChazonishnikReport(html) },
+    { label: '💾 שמור עותק', cls: 'btn-primary', action: () => saveChazonishnikReport(html, reportName) },
+    { label: '📂 דוחות קודמים', cls: 'btn-ghost', action: () => openReportsList(openChazonishnik) },
     { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openChazonishnik },
     { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
   ], 'modal-xl');
@@ -6219,8 +6222,8 @@ function showChazonishnikReport(html, postCount) {
   }, 100);
 }
 
-async function saveChazonishnikReport(html) {
-  const r = await api('save_chazonishnik_report', html);
+async function saveChazonishnikReport(html, reportName) {
+  const r = await api('save_chazonishnik_report', html, reportName || null);
   if (r?.ok) toast('הדוח נשמר ✓', 'success');
   else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
 }
@@ -6270,8 +6273,7 @@ async function openStinknik() {
     </div>
   `, [
     { label: '🦨 מצא דיסלייקים', cls: 'btn-primary', action: runStinknik },
-    ...(_lastReport.stink ? [{ label: '📄 הדוח האחרון', cls: 'btn-ghost',
-        action: () => showStinknikReport(_lastReport.stink.html, _lastReport.stink.count) }] : []),
+    { label: '📂 דוחות קודמים', cls: 'btn-ghost', action: () => openReportsList(openStinknik) },
     { label: 'סגור', cls: 'btn-ghost', action: closeModal },
   ], 'modal-lg');
   stinkPrefillCookie();
@@ -6363,13 +6365,15 @@ function startStinknikMonitor() {
       if (p.cancelled) { toast('הסריקה בוטלה', 'info'); if (mine) closeModal(); return; }
       if (p.error) { toast('שגיאה: ' + p.error, 'error'); if (mine) closeModal(); return; }
       if (p.html) {
-        _lastReport.stink = { html: p.html, count: p.disliked };
+        _lastReport.stink = { html: p.html, count: p.disliked, name: p.report || '' };
         const msg = scanSummary('נסרקו', p.checked, p.postcount, p.partial, p.stopped_early, p.limited);
         if (mine || !isModalOpen()) {
-          showStinknikReport(p.html, p.disliked);
+          showStinknikReport(p.html, p.disliked, p.report);
           toast(msg, p.partial ? 'error' : 'success', { ms: p.partial ? 9000 : 4000 });
         } else {
-          toast('🦨 הדוח מוכן — פתח דרך Stinknik · ' + msg, p.partial ? 'error' : 'success');
+          const h = p.html, c = p.disliked, r = p.report;
+          toast('🦨 הדוח מוכן · ' + msg, p.partial ? 'error' : 'success',
+                { actionLabel: 'פתח את הדוח', onAction: () => showStinknikReport(h, c, r), ms: 12000 });
         }
       } else if (mine) closeModal();
     }
@@ -6386,12 +6390,13 @@ async function cancelStinknik() {
   if (_currentModalId === 'stink-progress') closeModal();
 }
 
-function showStinknikReport(html, disCount) {
+function showStinknikReport(html, disCount, reportName) {
   openModal(`🦨 דוח דיסלייקים${disCount != null ? ` · ${disCount} פוסטים` : ''}`, `
     <iframe id="stink-frame" sandbox="allow-scripts allow-popups"
             style="width:100%;height:68vh;border:none;border-radius:8px;background:#0f172a"></iframe>
   `, [
-    { label: '💾 שמור כ-HTML', cls: 'btn-primary', action: () => saveStinknikReport(html) },
+    { label: '💾 שמור עותק', cls: 'btn-primary', action: () => saveStinknikReport(html, reportName) },
+    { label: '📂 דוחות קודמים', cls: 'btn-ghost', action: () => openReportsList(openStinknik) },
     { label: '🔄 ניתוח נוסף', cls: 'btn-ghost', action: openStinknik },
     { label: '🏠 תפריט ראשי', cls: 'btn-ghost', action: closeModal },
   ], 'modal-xl');
@@ -6400,6 +6405,83 @@ function showStinknikReport(html, disCount) {
     const frame = document.getElementById('stink-frame');
     if (frame) frame.srcdoc = html;
   }, 100);
+}
+
+
+// ══ דוחות קודמים ══════════════════════════════════════════════════════
+// בנימין: "שיוכלו לפתוח את הדוחות האחרונים — גם יותר מאשר הדוח האחרון.
+// ושבשם הקובץ (גם בשטינקניק) יהיה שם הניק". כל דוח נשמר בתיקיית הדוחות
+// (report_store.py) עם הכלי, הניק, הפורום והתאריך בשם הקובץ.
+// שם הקובץ מכיל ניק מהפורום, ולכן הוא עובר ב-data-* ונקרא בהאצלה — לעולם
+// לא בתוך onclick (בריחת HTML אינה מגינה על מחרוזת JS בתוך מאפיין).
+const REPORT_TOOLS = { chz: ['📊', 'חזונישניק'], cmp: ['👥', 'השוואה'], stink: ['🦨', 'שטינקניק'] };
+let _reportsBack = null;
+let _reportsIndex = {};
+
+async function openReportsList(back) {
+  if (typeof back === 'function') _reportsBack = back;
+  const list = await api('list_reports') || [];
+  _reportsIndex = {};
+  list.forEach(r => { _reportsIndex[r.name] = r; });
+  const rows = list.map(r => {
+    const [ic, tool] = REPORT_TOOLS[r.tool] || ['📄', 'דוח'];
+    const when = r.created ? new Date(r.created) : null;
+    const bits = [tool, r.forum,
+                  when && !isNaN(when) ? when.toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : '',
+                  r.posts ? `${Number(r.posts).toLocaleString()} פוסטים` : ''].filter(Boolean);
+    return `<div class="report-row" data-name="${esc(r.name)}">
+      <div class="report-ic">${ic}</div>
+      <div class="report-main">
+        <div class="report-nick">${esc(r.nick || r.name)}${r.partial ? ' <span class="report-flag">חלקי</span>' : ''}</div>
+        <div class="report-meta">${bits.map(b => `<bdi>${esc(b)}</bdi>`).join(' · ')}</div>
+      </div>
+      <div class="report-acts">
+        <button class="btn btn-primary btn-sm" data-act="open">פתח</button>
+        <button class="btn btn-ghost btn-sm" data-act="save" title="שמירת עותק של הדוח במקום אחר">💾 שמור עותק</button>
+        <button class="btn btn-ghost btn-sm" data-act="del" title="מחיקת הדוח (אפשר לבטל)">🗑️ מחק</button>
+      </div>
+    </div>`;
+  }).join('');
+  const body = list.length
+    ? `<p class="reports-hint">כל דוח שמפיקים נשמר כאן — החדש למעלה.</p><div id="reports-rows">${rows}</div>`
+    : `<div class="reports-empty">📂<br>עדיין אין דוחות.<br>כל דוח שתפיק מעכשיו יישמר כאן, ותוכל לפתוח אותו שוב בכל זמן.</div>`;
+  openModal('📂 דוחות קודמים', body, [
+    ...(_reportsBack ? [{ label: '↩ חזרה', cls: 'btn-ghost', action: _reportsBack }] : []),
+    { label: '📁 פתח את התיקייה', cls: 'btn-ghost', action: () => api('open_reports_folder') },
+    { label: 'סגור', cls: 'btn-ghost', action: closeModal },
+  ], 'modal-lg', { id: 'reports' });
+  document.getElementById('reports-rows')?.addEventListener('click', onReportRowClick);
+}
+
+async function onReportRowClick(e) {
+  const btn = e.target.closest('button[data-act]');
+  const row = btn && btn.closest('.report-row');
+  if (!row) return;
+  const name = row.dataset.name;
+  const item = _reportsIndex[name] || {};
+  const act = btn.dataset.act;
+  if (act === 'open') {
+    const r = await api('open_report', name);
+    if (!r?.ok) { toast(r?.error || 'לא ניתן לפתוח את הדוח', 'error'); return; }
+    if (item.tool === 'stink') showStinknikReport(r.html, null, name);
+    else showChazonishnikReport(r.html, item.posts || 0, name);
+  } else if (act === 'save') {
+    const r = await api('save_chazonishnik_report', null, name);
+    if (r?.ok) toast('נשמר עותק ✓', 'success');
+    else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
+  } else if (act === 'del') {
+    const r = await api('delete_report', name);
+    if (!r?.ok) { toast(r?.error || 'לא ניתן למחוק', 'error'); return; }
+    row.remove();
+    toast(`הדוח על ${item.nick || 'הניק'} נמחק`, 'info', {
+      actionLabel: '↩ בטל',
+      onAction: async () => {
+        const u = await api('restore_report', name);
+        if (u?.ok) { toast('הדוח הוחזר ✓', 'success'); if (_currentModalId === 'reports') openReportsList(); }
+        else toast(u?.error || 'לא ניתן לשחזר', 'error');
+      },
+    });
+  }
 }
 
 // ══ דוח הפורום — "מי היה כאן ראשון" ═══════════════════════════════════
@@ -6468,8 +6550,8 @@ function showForumStatsReport(html, stats) {
   }, 100);
 }
 
-async function saveStinknikReport(html) {
-  const r = await api('save_stinknik_report', html);
+async function saveStinknikReport(html, reportName) {
+  const r = await api('save_stinknik_report', html, reportName || null);
   if (r?.ok) toast('הדוח נשמר ✓', 'success');
   else if (r?.error !== 'בוטל') toast('שגיאה בשמירה: ' + (r?.error || ''), 'error');
 }
