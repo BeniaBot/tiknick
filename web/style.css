@@ -384,7 +384,8 @@ tbody td{
   cursor:pointer;transition:all .18s var(--spring);
 }
 .cell-identity:hover{transform:scale(1.06) rotate(-1deg)}
-.cell-extra{color:var(--warn);cursor:pointer;margin-right:5px;font-size:12px}
+.cell-extra{display:inline-block;margin-inline-start:6px;padding:0 6px;border-radius:999px;font-size:11px;font-weight:700;line-height:1.5;color:var(--text-dim);background:var(--row-hover);border:1px solid var(--border);cursor:pointer}
+.cell-extra:hover{color:var(--text);border-color:var(--accent)}
 .cell-private{color:var(--warn);font-style:italic}
 #statusbar{
   padding:8px 22px;background:var(--glass);backdrop-filter:blur(16px);

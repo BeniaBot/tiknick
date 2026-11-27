@@ -1323,26 +1323,30 @@ function contactSpan(type, value) {
 
 function renderPhone(td, n) {
   if (n.phone) td.appendChild(contactSpan('phone', n.phone));
-  if (n.extra_contacts > 0) {
-    const ex = document.createElement('span');
-    ex.className = 'cell-extra';
-    ex.textContent = '❕';
-    ex.title = 'יש פרטי קשר נוספים';
+  // הסימון מופיע פעם אחת: ליד הטלפון, או ליד המייל כשאין טלפון
+  if (n.extra_contacts > 0 && (n.phone || !n.email)) td.appendChild(extraContactsBadge(n, true));
+}
+
+// "יש עוד פרטי קשר": עד 0.9.8 זה היה ❕ — סימן קריאה נקרא כאזהרה, וההסבר
+// הופיע רק בריחוף. עכשיו "+2" (כמה עוד), ולחיצה פותחת את הניק.
+function extraContactsBadge(n, withTooltip) {
+  const ex = document.createElement('span');
+  ex.className = 'cell-extra';
+  ex.dir = 'ltr';
+  const k = Number(n.extra_contacts) || 0;
+  ex.textContent = '+' + k;
+  ex.title = k === 1 ? 'עוד פרט קשר אחד — לחץ לפתיחת הניק' : `עוד ${k} פרטי קשר — לחץ לפתיחת הניק`;
+  ex.onclick = e => { e.stopPropagation(); openNickDialog(n.id); };
+  if (withTooltip) {
     ex.onmouseenter = e => showContactsTooltip(e, n.id);
     ex.onmouseleave = hideTooltip;
-    td.appendChild(ex);
   }
+  return ex;
 }
 
 function renderEmail(td, n) {
   if (n.email) td.appendChild(contactSpan('email', n.email));
-  if (n.extra_contacts > 0 && !n.phone) {
-    const ex = document.createElement('span');
-    ex.className = 'cell-extra';
-    ex.textContent = '❕';
-    ex.title = 'יש פרטי קשר נוספים';
-    td.appendChild(ex);
-  }
+  if (n.extra_contacts > 0 && !n.phone && n.email) td.appendChild(extraContactsBadge(n, true));
 }
 
 function renderStatus(td, n) {
@@ -1584,11 +1588,11 @@ async function openDbHealth() {
     <div class="section-hdr">📊 מצב</div>
     ${row('גרסה', esc(h.version) + ' · ' + (h.install_type === 'installer' ? 'מותקנת' : 'ניידת'))}
     ${row('גודל הקובץ', mb(h.size))}
-    ${row('יומן WAL', mb(h.wal))}
+    ${row('קובץ עבודה זמני', mb(h.wal))}
     ${row('ניקים', (c.nicks || 0).toLocaleString())}
-    ${row('ערכי מקורות', (c.field_values || 0).toLocaleString())}
+    ${row('ערכים שנאספו מכל המקורות', (c.field_values || 0).toLocaleString())}
     ${row('אנשי קשר / זהויות', `${(c.nick_contacts || 0).toLocaleString()} / ${(c.nick_identities || 0).toLocaleString()}`)}
-    ${row('חיפוש מהיר (FTS5)', h.fts ? 'פעיל' : 'לא זמין — LIKE')}
+    ${row('חיפוש מהיר', h.fts ? 'פעיל' : 'לא זמין — החיפוש איטי יותר')}
     <div style="font-size:11.5px;color:var(--subtext);margin-top:10px;word-break:break-all" dir="ltr">${esc(h.path)}</div>
 
     <div class="section-hdr">💾 גיבוי ושחזור</div>
@@ -5395,9 +5399,8 @@ async function openInternetSync(openWith) {
 
   openModal('🌐 סנכרון לאינטרנט', `
     <p style="color:var(--subtext);font-size:13px;line-height:1.6;margin-bottom:16px">
-      סורק את רשימת המשתמשים של הפורום ומוסיף/מעדכן ניקים אוטומטית — NodeBB ו-Discourse
-      דרך ה-API שלהם, XenForo דרך עמוד החברים הציבורי. שדות ריקים מתמלאים; ערך סרוק סותר
-      נשמר לצד הקיים ומוכרע לפי אמינות.
+      מביא מהפורום את רשימת המשתמשים, ומוסיף ומעדכן את הניקים אצלך.
+      מה שכתבת בעצמך לא נמחק — אם הפורום אומר משהו אחר, שני הערכים נשמרים.
     </p>
 
     <div class="section-hdr">בחירת פורומים</div>
@@ -6774,7 +6777,7 @@ function buildCardElement(n) {
     const rows = [];
     if (n.real_name)  rows.push(cardRow('👤', n.real_name, false, has('real_name'), 'real_name'));
     if (n.full_name)  rows.push(cardRow('📛', n.full_name, false, has('full_name'), 'full_name'));
-    if (n.phone)      rows.push(cardRow('📞', n.phone + (n.extra_contacts ? ' ❕' : ''), false, has('phone'), 'phone'));
+    if (n.phone)      rows.push(cardRow('📞', n.phone + (n.extra_contacts ? ` (+${Number(n.extra_contacts) || 0})` : ''), false, has('phone'), 'phone'));
     if (n.email)      rows.push(cardRow('📧', n.email, false, has('email'), 'email'));
     if (n.address)    rows.push(cardRow('📍', n.address, false, has('address'), 'address'));
     if (n.groups)     rows.push(cardRow('🏷️', n.groups, false, has('groups'), 'groups'));

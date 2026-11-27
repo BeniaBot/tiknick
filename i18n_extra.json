@@ -1531,5 +1531,54 @@
   "kind": "static",
   "where": "web/app.js",
   "context": "forum manager / nick window (0.9.8)"
+ },
+ {
+  "he": "מביא מהפורום את רשימת המשתמשים, ומוסיף ומעדכן את הניקים אצלך. מה שכתבת בעצמך לא נמחק — אם הפורום אומר משהו אחר, שני הערכים נשמרים.",
+  "en": "Brings the member list from the forum and adds and updates your nicks. What you wrote yourself is never deleted - if the forum says something else, both values are kept.",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "intro of the internet sync window (0.9.8)"
+ },
+ {
+  "he": "קובץ עבודה זמני",
+  "en": "Temporary work file",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "database health window (0.9.8)"
+ },
+ {
+  "he": "ערכים שנאספו מכל המקורות",
+  "en": "Values collected from all sources",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "database health window (0.9.8)"
+ },
+ {
+  "he": "חיפוש מהיר",
+  "en": "Fast search",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "database health window (0.9.8)"
+ },
+ {
+  "he": "לא זמין — החיפוש איטי יותר",
+  "en": "Unavailable - search is slower",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "database health window (0.9.8)"
+ },
+ {
+  "he": "עוד פרט קשר אחד — לחץ לפתיחת הניק",
+  "en": "One more contact detail - click to open the nick",
+  "kind": "static",
+  "where": "web/app.js",
+  "context": "badge tooltip (0.9.8)"
+ },
+ {
+  "he": "עוד {1} פרטי קשר — לחץ לפתיחת הניק",
+  "en": "{1} more contact details - click to open the nick",
+  "kind": "pattern",
+  "where": "web/app.js",
+  "context": "badge tooltip (0.9.8)"
  }
 ]

@@ -1,5 +1,5 @@
 // ═══ נוצר אוטומטית ע"י tools/build_i18n.py — אין לערוך ביד ═══
-// 1015 מחרוזות קבועות, 245 תבניות.
+// 1021 מחרוזות קבועות, 246 תבניות.
 const I18N_EN = {
   "כל מידע משויך למקור (\"אב\"). בכל שדה — הערך מהמקור בעל האמינות הגבוהה מוצג. שינוי אמינות או מחיקת מקור משפיעים על הנתונים מיד. \"אבסולוטי\" (רק ל\"אני\") = תמיד מנצח. את התנהגות הסריקה מנהלים בלשונית \"התנגשויות\".": "Every piece of information belongs to a source (a \"parent\"). For each field, the value from the highest-trust source is shown. Changing trust or deleting a source affects the data immediately. \"Absolute\" (for \"Me\" only) = always wins. Scrape behavior is managed on the \"Conflicts\" tab.",
   "Stinknik סורק את כל הפוסטים של משתמש ומציג את כל הפוסטים שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק \"שנוי במחלוקת\", כלומר רק פוסטים עם יותר דיסים מלייקים).": "Stinknik scans all of a user's posts and shows every post that received downvotes — including the ones the forum hides (the forum only shows \"controversial\" posts, meaning posts with more downvotes than upvotes).",
@@ -11,6 +11,7 @@ const I18N_EN = {
   "לסרוק את כל הפורומים ברצף?\n\nפורום שלא ניתן לסרוק יידלג אוטומטית.\nלכל פורום תשמש רק העוגייה השמורה שלו — עוגייה של פורום אחד לא תישלח לאחרים.": "Scrape all forums one after another?\n\nAny forum that cannot be scraped is skipped automatically.\nEach forum uses only its own saved cookie — one forum's cookie is never sent to another.",
   "לשחזר מגיבוי?\n\nהמאגר הנוכחי כולו יוחלף בתוכן הגיבוי — ניקים, פורומים, הגדרות ועוגיות.\nעותק בטיחות של המאגר הנוכחי יישמר לצדו לפני ההחלפה.": "Restore from a backup?\n\nThe entire current database will be replaced by the backup's contents — nicks, forums, settings and cookies.\nA safety copy of the current database will be saved alongside it before the replacement.",
   "פורומים אלה לא נסרקו. סיבות נפוצות: הפורום דורש התחברות (הוסף עוגייה), הפורום במצב תחזוקה, או שהפלטפורמה אינה נתמכת לסריקה אוטומטית.": "These forums were not scraped. Common reasons: the forum requires a login (add a cookie), the forum is in maintenance mode, or the platform does not support automatic scraping.",
+  "מביא מהפורום את רשימת המשתמשים, ומוסיף ומעדכן את הניקים אצלך. מה שכתבת בעצמך לא נמחק — אם הפורום אומר משהו אחר, שני הערכים נשמרים.": "Brings the member list from the forum and adds and updates your nicks. What you wrote yourself is never deleted - if the forum says something else, both values are kept.",
   "תן שם למקור הייבוא ודרגת אמינות. בהתנגשות עם מידע קיים — הערך מהמקור בעל האמינות הגבוהה יותר ינצח, והאחר יישמר בצד (יסומן ב-⚠️).": "Name the import source and give it a trust level. When a value conflicts with existing data, the value from the more trusted source wins and the other is kept aside (marked with ⚠️).",
   "הפוסטים שקיבלו דיסלייקים — כולל אלה שהפורום לא מציג (בפורום רואים רק \"שנוי במחלוקת\", כלומר רק פוסטים עם יותר דיסים מלייקים).": "the posts that received downvotes — including the ones the forum hides (the forum only shows \"controversial\" posts, meaning posts with more downvotes than upvotes).",
   "כמה משקל יש לערך שאתה מזין בעצמך, מול ערך שהגיע מסריקה או מקובץ. 10 = תמיד גובר. דיאלוג הייבוא מציג את המספר הזה לשם השוואה.": "How much weight a value you enter yourself carries against one that came from a scrape or a file. 10 = always wins. The import dialog shows this number for comparison.",
@@ -192,6 +193,7 @@ const I18N_EN = {
   "✅ דרך מומלצת: תוסף Get cookies.txt": "✅ Recommended: the Get cookies.txt extension",
   "החיבור עובד (הפורום דורש התחברות)": "The connection works (the forum requires signing in)",
   "הקובץ אינו גיבוי תקין של Tik-Nick": "This file is not a valid Tik-Nick backup",
+  "עוד פרט קשר אחד — לחץ לפתיחת הניק": "One more contact detail - click to open the nick",
   "פתרון ידני — שאל אותי לכל התנגשות": "Manual resolution — ask me on every conflict",
   "🦨 Stinknik — כל הדיסלייקים של ניק": "🦨 Stinknik — every downvote a nick received",
   "(מתמלאים לבד כשסורקים את הפורום)": "(filled in by itself when the forum is scanned)",
@@ -246,6 +248,7 @@ const I18N_EN = {
   "הניק לא נמצא — ייתכן שנמחק": "Nick not found — it may have been deleted",
   "העתקה כטבלה — להדבקה באקסל": "Copy as a table — for pasting into Excel",
   "חיפוש וסינון מתקדם לפי שדה": "Advanced per-field search and filtering",
+  "לא זמין — החיפוש איטי יותר": "Unavailable - search is slower",
   "לא ניתן לבדוק עדכונים כרגע": "Can't check for updates right now",
   "לא ניתן לבחור ערך לשדה הזה": "Can't choose a value for this field",
   "לא נמצאה שורת כותרות בקובץ": "No header row found in the file",
@@ -278,6 +281,7 @@ const I18N_EN = {
   "לא ניתן לפתוח את הגיליון": "Could not open the sheet",
   "לחץ \"ניק חדש\" כדי להתחיל": "Click \"New nick\" to get started",
   "עדיין אין פורומים לסריקה": "No forums to scrape yet",
+  "ערכים שנאספו מכל המקורות": "Values collected from all sources",
   "קובץ Tik-Nick (.tiknick)": "Tik-Nick file (.tiknick)",
   "ראה הדרכה ב-Chazonishnik": "see the guide in Chazonishnik",
   "רק השורות המסומנות בטבלה": "Only the rows checked in the table",
@@ -469,6 +473,7 @@ const I18N_EN = {
   "סנכרון לאינטרנט": "Sync to internet",
   "פוסטים עם דיסים": "Posts with dislikes",
   "פורום ארבע אמות": "Arba Amot Forum",
+  "קובץ עבודה זמני": "Temporary work file",
   "שם משתמש לניתוח": "Username to analyze",
   "— פורום לא מוכר": "— unknown forum",
   "⏰ סריקה מתוזמנת": "⏰ Scheduled scrape",
@@ -712,6 +717,7 @@ const I18N_EN = {
   "הערך הקיים": "Existing value",
   "התחל סריקה": "Start scrape",
   "זהות כפולה": "Linked identity",
+  "חיפוש מהיר": "Fast search",
   "טלפון ראשי": "Primary phone",
   "ייובא לשדה": "Import to field",
   "ימים בשבוע": "Days of the week",
@@ -1092,6 +1098,7 @@ const I18N_EN_PAT = [
   ["^([\\s\\S]*?)נדרשת\\ עוגייה\\ תקינה\\ \\(שגיאת\\ הרשאה\\)$", "$1a valid cookie is required (authorization error)"],
   ["^•\\ נושאים\\ משותפים\\ בין\\ הבולטים:\\ ([\\s\\S]*?)\\.$", "• Topics in both their top lists: $1."],
   ["^החיבור\\ נקטע\\ באמצע\\ קבלת\\ התשובה:\\ ([\\s\\S]*?)$", "The connection was cut while receiving the response: $1"],
+  ["^עוד\\ ([\\s\\S]*?)\\ פרטי\\ קשר\\ —\\ לחץ\\ לפתיחת\\ הניק$", "$1 more contact details - click to open the nick"],
   ["^מוצגים\\ ([\\s\\S]*?)\\ השינויים\\ הראשונים\\ בלבד$", "Showing only the first $1 changes"],
   ["^•\\ שניהם\\ פעילים\\ בעיקר\\ סביב\\ ([\\s\\S]*?):00\\.$", "• Both are mainly active around $1:00."],
   ["^מוצגות\\ ([\\s\\S]*?)\\ הקבוצות\\ הגדולות\\ בלבד\\.$", "Showing only the $1 largest groups."],
